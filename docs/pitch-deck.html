@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NovaClass · 학교설명회</title>
+<style>
+  :root{
+    --primary:#3B37CC;
+    --primary-dark:#2a26a0;
+    --primary-light:#6c67e0;
+    --purple:#7C3AED;
+    --success:#10b981;
+    --warning:#b45309;
+    --warning-bg:#fef3c7;
+    --danger:#ef4444;
+    --text:#1a1a2e;
+    --text-muted:#6b7280;
+    --bg:#f9fafb;
+    --card:#ffffff;
+    --border:#e5e7eb;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0;padding:0;height:100%;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans KR",sans-serif;
+    color:var(--text);
+    background:var(--text);
+    overflow:hidden;
+  }
+  .sr-only{
+    position:absolute;width:1px;height:1px;padding:0;margin:-1px;
+    overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+  }
+  #deck{
+    height:100vh;width:100vw;
+    display:flex;
+    transition:transform .5s cubic-bezier(.65,0,.35,1);
+  }
+  @media (prefers-reduced-motion: reduce){
+    #deck{transition:none;}
+  }
+  .slide{
+    flex:0 0 100vw;
+    height:100vh;
+    display:flex;
+    flex-direction:column;
+    justify-content:center;
+    align-items:flex-start;
+    text-align:left;
+    padding:6vh 9vw;
+    background:var(--bg);
+    position:relative;
+    overflow:auto;
+  }
+  .slide.cover{
+    background:linear-gradient(135deg,var(--primary) 0%,var(--purple) 100%);
+    color:#fff;
+  }
+  .eyebrow{
+    font-size:clamp(.9rem,1.4vw,1.1rem);
+    font-weight:600;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    opacity:.85;
+    margin-bottom:1rem;
+  }
+  h1{
+    font-size:clamp(2.4rem,6vw,4.5rem);
+    line-height:1.15;
+    margin:0 0 1rem 0;
+    font-weight:800;
+    text-wrap:balance;
+  }
+  h2{
+    font-size:clamp(1.6rem,3.6vw,2.7rem);
+    margin:0 0 2.2rem 0;
+    font-weight:800;
+    color:var(--text);
+    text-wrap:balance;
+  }
+  h2 .sub{
+    display:block;
+    font-size:.55em;
+    font-weight:600;
+    color:var(--text-muted);
+    margin-top:.5rem;
+  }
+  .tagline{
+    font-size:clamp(1.1rem,2.2vw,1.6rem);
+    max-width:46rem;
+    line-height:1.5;
+    opacity:.95;
+    margin:0 0 2.5rem 0;
+    text-wrap:pretty;
+  }
+  .meta{
+    position:absolute;
+    bottom:6vh;
+    font-size:1rem;
+    opacity:.8;
+  }
+
+  /* 문제 — 리스트, 큰 아이콘 리딩 */
+  .reasons{width:100%;max-width:52rem;}
+  .reason{
+    display:flex;align-items:flex-start;gap:1.3rem;
+    padding:1.2rem 0;
+    border-bottom:1px solid var(--border);
+  }
+  .reason:last-child{border-bottom:none;}
+  .reason .icon{font-size:2rem;line-height:1;flex:none;}
+  .reason h3{margin:0 0 .3rem 0;font-size:1.15rem;color:var(--primary-dark);}
+  .reason p{margin:0;color:var(--text-muted);font-size:.98rem;line-height:1.5;text-wrap:pretty;}
+
+  /* 비교 표 */
+  .table-wrap{width:100%;max-width:58rem;overflow-x:auto;}
+  table.compare{
+    width:100%;min-width:34rem;
+    border-collapse:collapse;
+    background:var(--card);
+    border-radius:16px;
+    overflow:hidden;
+    box-shadow:0 1px 3px rgba(0,0,0,.06);
+  }
+  table.compare th,table.compare td{
+    padding:1rem 1.3rem;
+    text-align:left;
+    border-bottom:1px solid var(--border);
+    font-size:.98rem;
+  }
+  table.compare th{
+    background:var(--primary);
+    color:#fff;
+    font-size:.9rem;
+  }
+  table.compare td:first-child{font-weight:700;color:var(--text-muted);width:22%;}
+  table.compare tr:last-child td{border-bottom:none;}
+  table.compare td.ours{color:var(--primary-dark);font-weight:600;}
+
+  /* 시스템 구조 — 타임라인 */
+  .timeline{
+    position:relative;
+    width:100%;max-width:42rem;
+    padding-left:2.4rem;
+  }
+  .timeline::before{
+    content:"";position:absolute;left:.7rem;top:.4rem;bottom:1.6rem;width:2px;
+    background:var(--border);
+  }
+  .tier{position:relative;padding-bottom:1.7rem;}
+  .tier:last-child{padding-bottom:0;}
+  .tier::before{
+    content:"";position:absolute;left:-2.4rem;top:.2rem;
+    width:14px;height:14px;border-radius:50%;
+    background:var(--primary);
+    box-shadow:0 0 0 4px var(--bg);
+  }
+  .tier h4{margin:0 0 .25rem 0;font-size:1.05rem;color:var(--primary-dark);}
+  .tier p{margin:0;font-size:.92rem;color:var(--text-muted);line-height:1.5;}
+
+  /* 지금 되는 기능 — 체크리스트 */
+  .checklist{width:100%;max-width:44rem;margin-bottom:1.6rem;}
+  .check-row{
+    display:flex;align-items:baseline;gap:.8rem;
+    padding:.85rem 0;
+    border-bottom:1px solid var(--border);
+  }
+  .check-row:last-child{border-bottom:none;}
+  .check-row .dot{margin-top:.15rem;}
+  .check-row strong{font-size:1rem;}
+  .check-row span.desc{color:var(--text-muted);font-size:.92rem;}
+  .dot{
+    width:10px;height:10px;border-radius:50%;
+    background:var(--success);
+    display:inline-block;
+    flex:none;
+  }
+  .dot.warn{background:var(--warning);}
+
+  /* 개발 중 — 태그 칩 */
+  .chips{display:flex;flex-wrap:wrap;gap:.7rem;max-width:52rem;}
+  .chip{
+    display:inline-flex;align-items:center;gap:.5rem;
+    background:var(--warning-bg);
+    color:var(--warning);
+    font-weight:700;font-size:.92rem;
+    padding:.55rem 1.1rem;
+    border-radius:999px;
+  }
+  .badge{
+    display:inline-block;
+    font-size:.78rem;
+    font-weight:700;
+    padding:.25rem .6rem;
+    border-radius:999px;
+    background:var(--warning-bg);
+    color:var(--warning);
+    margin-bottom:1.2rem;
+  }
+  .placeholder{
+    width:100%;
+    max-width:52rem;
+    aspect-ratio:16/8;
+    border:2px dashed #c7c9d9;
+    border-radius:16px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    color:var(--text-muted);
+    font-size:1rem;
+    margin-top:.5rem;
+    background:#fff;
+  }
+
+  /* 팀 */
+  .team{
+    display:flex;
+    gap:1.4rem;
+    flex-wrap:wrap;
+    margin-top:1rem;
+    max-width:68rem;
+  }
+  .person{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:16px;
+    padding:1.5rem 1.8rem;
+    text-align:center;
+    min-width:11rem;
+  }
+  .person .role{color:var(--text-muted);font-size:.82rem;margin-bottom:.35rem;}
+  .person .name{font-size:1.1rem;font-weight:700;}
+
+  /* K.MATE 흐름 */
+  .flow{
+    display:flex;
+    align-items:center;
+    gap:1rem;
+    flex-wrap:wrap;
+    max-width:60rem;
+  }
+  .flow .step{
+    background:var(--card);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:1rem 1.4rem;
+    font-size:.92rem;
+    font-weight:600;
+  }
+  .flow .arrow{color:var(--text-muted);font-size:1.3rem;}
+
+  /* 비전 */
+  .vision-list{margin-top:.5rem;}
+  .vision-item{
+    display:flex;align-items:center;gap:1.1rem;
+    padding:.8rem 0;
+    font-size:1.2rem;font-weight:600;
+    color:#fff;
+  }
+  .vision-item .icon{font-size:1.7rem;}
+
+  nav.progress{
+    position:fixed;
+    bottom:1.5vh;left:50%;transform:translateX(-50%);
+    display:flex;
+    z-index:10;
+  }
+  nav.progress .pip{
+    -webkit-appearance:none;appearance:none;
+    background:none;border:none;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    width:32px;height:44px;
+    padding:0;
+  }
+  nav.progress .pip::after{
+    content:"";
+    width:22px;height:8px;border-radius:5px;
+    background:rgba(0,0,0,.22);
+    display:block;
+    transform:scaleX(.36);
+    transform-origin:center;
+    transition:transform .2s ease,background .2s ease;
+  }
+  nav.progress .pip[aria-current="true"]::after{background:var(--primary);transform:scaleX(1);}
+  nav.progress .pip:focus-visible{outline:3px solid var(--primary-light);outline-offset:2px;border-radius:6px;}
+  .hint{
+    position:fixed;top:3vh;right:3vw;
+    font-size:.8rem;color:var(--text-muted);
+    background:rgba(255,255,255,.85);
+    padding:.4rem .8rem;border-radius:999px;
+    z-index:10;
+  }
+</style>
+</head>
+<body>
+
+<div id="deck">
+
+  <section class="slide cover">
+    <div class="eyebrow">전주비전대학교 · 혁신지원사업 2026 D-MIX 공모전</div>
+    <h1>NovaClass</h1>
+    <p class="tagline">수업, 출석, 성적, AI 튜터까지. 하나의 플랫폼에서.</p>
+    <div class="meta">AI Education Platform Team</div>
+  </section>
+
+  <section class="slide">
+    <h2>왜 NovaClass가 필요한가?</h2>
+    <div class="reasons">
+      <div class="reason"><span class="icon">🤖</span><div><h3>교육 자동화</h3><p>채점·요약·피드백 같은 교사의 반복 업무를 AI가 덜어줘야 합니다.</p></div></div>
+      <div class="reason"><span class="icon">🌏</span><div><h3>다국어 지원 공백</h3><p>외국인 유학생이 늘어나는 만큼, 모국어 기반 학습 지원이 필수입니다.</p></div></div>
+      <div class="reason"><span class="icon">🎯</span><div><h3>개인화 학습 부재</h3><p>기존 LMS는 학생마다 다른 수준과 속도에 맞춰주지 못합니다.</p></div></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <h2>기존 서비스와 무엇이 다른가</h2>
+    <div class="table-wrap">
+      <table class="compare">
+        <tr><th></th><th>구글 클래스룸 등 기존 LMS</th><th>NovaClass</th></tr>
+        <tr><td>자료 요약</td><td>선생님이 직접 정리</td><td class="ours">AI가 3단계(한 줄/단락/상세)로 자동 요약</td></tr>
+        <tr><td>언어 지원</td><td>단일 언어 UI</td><td class="ours">영어/미얀마어 UI 지원</td></tr>
+        <tr><td>학습 지원</td><td>자료 배포까지만</td><td class="ours">AI 튜터(K.MATE)가 질의응답·퀴즈까지 연결</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section class="slide">
+    <h2>시스템 구조</h2>
+    <div class="timeline">
+      <div class="tier"><h4>사용자 UI</h4><p>React 19 + Vite · 웹 인터페이스</p></div>
+      <div class="tier"><h4>서버 / API</h4><p>Node.js · Express 5 · 인증, 클래스, 자료, K.MATE API</p></div>
+      <div class="tier"><h4>AI 엔진</h4><p>Groq(K.MATE 채팅·퀴즈·자료 분석) + Anthropic Claude(AI 보조)</p></div>
+      <div class="tier"><h4>데이터</h4><p>MySQL · 사용자·클래스·자료·요약 저장</p></div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <h2>지금 이렇게 동작합니다</h2>
+    <div class="checklist">
+      <div class="check-row"><span class="dot"></span><strong>클래스 관리</strong><span class="desc">클래스 개설, 초대 코드로 참여</span></div>
+      <div class="check-row"><span class="dot"></span><strong>자료 + AI 요약</strong><span class="desc">업로드한 자료를 AI가 3단계로 요약</span></div>
+      <div class="check-row"><span class="dot"></span><strong>K.MATE AI 튜터</strong><span class="desc">한국어 질의응답 + TOPIK 퀴즈</span></div>
+      <div class="check-row"><span class="dot"></span><strong>대시보드</strong><span class="desc">내 클래스와 학습 현황 한눈에</span></div>
+    </div>
+    <div class="placeholder">화면 스크린샷 / 데모 GIF 자리</div>
+  </section>
+
+  <section class="slide">
+    <h2>K.MATE<span class="sub">TOPIK 준비를 도와주는 AI 튜터</span></h2>
+    <div class="flow">
+      <div class="step">한국어로 질문</div>
+      <div class="arrow">→</div>
+      <div class="step">즉시 답변</div>
+      <div class="arrow">→</div>
+      <div class="step">TOPIK 연습 퀴즈 생성</div>
+      <div class="arrow">→</div>
+      <div class="step">채점 + 설명</div>
+    </div>
+    <p class="tagline" style="color:var(--text-muted);margin-top:2.2rem;">K.MATE는 NovaClass의 대표 기능이지만, NovaClass는 K.MATE만을 위한 앱이 아닌 수업 전체를 아우르는 플랫폼입니다.</p>
+  </section>
+
+  <section class="slide">
+    <h2>계속 만들어가는 중입니다</h2>
+    <span class="badge">개발 중</span>
+    <div class="chips">
+      <span class="chip"><span class="dot warn"></span>과제 제출/관리</span>
+      <span class="chip"><span class="dot warn"></span>출석 관리</span>
+      <span class="chip"><span class="dot warn"></span>성적 관리</span>
+      <span class="chip"><span class="dot warn"></span>게시글/공지</span>
+      <span class="chip"><span class="dot warn"></span>학습 자료실</span>
+      <span class="chip"><span class="dot warn"></span>화상 수업 연동</span>
+    </div>
+  </section>
+
+  <section class="slide cover">
+    <h1 style="font-size:clamp(1.8rem,4vw,3rem);">모든 학생이<br>언어 장벽 없이 배우는 교실</h1>
+    <div class="vision-list">
+      <div class="vision-item"><span class="icon">🌐</span>10개 이상 언어 번역</div>
+      <div class="vision-item"><span class="icon">🛠️</span>코드 디버거</div>
+      <div class="vision-item"><span class="icon">🎙️</span>음성 인식(STT) 질의응답</div>
+    </div>
+  </section>
+
+  <section class="slide">
+    <h2>함께 만든 사람들</h2>
+    <div class="team">
+      <div class="person"><div class="role">프론트엔드</div><div class="name">Victoria</div></div>
+      <div class="person"><div class="role">백엔드</div><div class="name">Thine Htike Aung</div></div>
+      <div class="person"><div class="role">Project Manager</div><div class="name">Nant Khin Sandar Lin</div></div>
+      <div class="person"><div class="role">UI/UX Design</div><div class="name">Wuttywin</div></div>
+      <div class="person"><div class="role">PPT / Research</div><div class="name">Roi Aung · Ja Seng Nan</div></div>
+    </div>
+  </section>
+
+  <section class="slide cover">
+    <h1 style="font-size:clamp(2rem,5vw,3.5rem);">감사합니다</h1>
+    <p class="tagline">궁금한 점은 언제든 편하게 물어봐 주세요.</p>
+  </section>
+
+</div>
+
+<div class="hint">← → 로 이동, 클릭도 가능</div>
+<nav class="progress" id="progress" aria-label="슬라이드 탐색"></nav>
+<div class="sr-only" aria-live="polite" id="slide-status"></div>
+
+<script>
+  const deck = document.getElementById('deck');
+  const slides = document.querySelectorAll('.slide');
+  const progress = document.getElementById('progress');
+  const status = document.getElementById('slide-status');
+  let i = 0;
+
+  slides.forEach((_, idx) => {
+    const pip = document.createElement('button');
+    pip.type = 'button';
+    pip.className = 'pip';
+    pip.setAttribute('aria-label', `슬라이드 ${idx + 1}로 이동`);
+    pip.setAttribute('aria-current', idx === 0 ? 'true' : 'false');
+    pip.addEventListener('click', () => go(idx));
+    progress.appendChild(pip);
+  });
+
+  function go(idx){
+    i = Math.max(0, Math.min(slides.length - 1, idx));
+    deck.style.transform = `translateX(-${i * 100}vw)`;
+    document.querySelectorAll('.pip').forEach((p, idx2) => p.setAttribute('aria-current', idx2 === i ? 'true' : 'false'));
+    status.textContent = `슬라이드 ${i + 1} / ${slides.length}`;
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === ' ') go(i + 1);
+    if (e.key === 'ArrowLeft') go(i - 1);
+  });
+
+  let touchX = null;
+  document.addEventListener('touchstart', (e) => { touchX = e.touches[0].clientX; });
+  document.addEventListener('touchend', (e) => {
+    if (touchX === null) return;
+    const dx = e.changedTouches[0].clientX - touchX;
+    if (dx > 50) go(i - 1);
+    if (dx < -50) go(i + 1);
+    touchX = null;
+  });
+
+  document.querySelectorAll('.slide').forEach((s, idx) => {
+    s.addEventListener('click', (e) => {
+      if (e.target.closest('.pip')) return;
+      if (e.clientX > window.innerWidth / 2) go(idx + 1);
+      else if (idx > 0) go(idx - 1);
+    });
+  });
+</script>
+
+</body>
+</html>

@@ -9,7 +9,7 @@
 ## 1. 최종 폴더 구조 (이미 존재함, 변경 금지)
 
 `routes/`, `controllers/`, `pages/`는 **이름별 하위 폴더**로 나뉘어 있어서
-각자 자기 폴더에만 파일을 넣으면 서로 파일이 섞이거나 덮어쓸 일이 없습니다. 상세는 [`docs/STRUCTURE.md`](docs/STRUCTURE.md) 참고.
+각자 자기 폴더에만 파일을 넣으면 서로 파일이 섞이거나 덮어쓸 일이 없습니다. 상세는 [`docs/PROJECT.md`](docs/PROJECT.md) 참고.
 
 ```
 NovaClass/
@@ -55,7 +55,7 @@ NovaClass/
 3. `nova-class-frontend/src/App.jsx`에 본인 페이지 import + `<Route>` 를 추가.
 4. `config/`, `middleware/`, `components/`, `services/` 같은 **공용 폴더를 수정해야 하는 경우만**
    `_incoming/`에 파일을 넣고 AI에게 "기존 파일과 비교해서 충돌 여부 보고" 요청 (자동 덮어쓰기 금지).
-5. 새로 추가/수정한 파일은 [`docs/MERGE_LOG.md`](docs/MERGE_LOG.md)에 한 줄씩 기록 + 파일 단위로 커밋
+5. 새로 추가/수정한 파일은 [`docs/PROJECT.md`](docs/PROJECT.md#2-병합-로그)의 병합 로그 표에 한 줄씩 기록 + 파일 단위로 커밋
    (`--author`로 원작성자 지정). 여러 파일을 한 커밋에 묶지 않습니다.
 
 ## 4. 병합 후 (git)

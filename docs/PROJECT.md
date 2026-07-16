@@ -1,11 +1,10 @@
-# NovaClass 프로젝트 구조 참고 문서
+# NovaClass 참고 문서
 
-프론트엔드/백엔드 전체 구조 레퍼런스. 새 기능을 어디에 넣을지 헷갈릴 때 이 문서를 먼저 확인.
-병합 작업 절차/규칙은 [`MERGE_GUIDE.md`](../MERGE_GUIDE.md) 참고.
+프론트엔드/백엔드 구조와 병합 진행 상황을 한 파일에서 확인. 병합 절차 자체는 [`MERGE_GUIDE.md`](../MERGE_GUIDE.md) 참고.
 
 ---
 
-## 전체 트리
+## 1. 프로젝트 구조
 
 `routes/`, `controllers/`, `pages/`는 **작성자 이름별 하위 폴더**로 나뉩니다.
 새 파일은 반드시 자기 이름 폴더 안에만 추가하고, 다른 사람 폴더는 건드리지 않습니다.
@@ -68,7 +67,7 @@ NovaClass/
         └── assets/
 ```
 
-## 새 라우트/페이지 추가하는 법
+### 새 라우트/페이지 추가하는 법
 
 - 백엔드: `controllers/<이름>/xxx.controller.js` + `routes/<이름>/xxx.routes.js` 작성 →
   `server.js`에 `app.use("/api/xxx", require("./routes/<이름>/xxx.routes"));` 한 줄 추가.
@@ -79,11 +78,9 @@ NovaClass/
 > `assignment`, `attendance`, `grades`, `meeting`, `posts`, `resources`.
 > 라우트 연결이 안 됐거나 다른 방식으로 등록돼 있는지 확인 필요.
 
----
+### 폴더별 규칙
 
-## 폴더별 규칙
-
-### Backend
+**Backend**
 | 폴더 | 용도 | 하지 말 것 |
 |---|---|---|
 | `config/` | DB/외부 서비스 연결 설정 | 비즈니스 로직 넣기 |
@@ -92,7 +89,7 @@ NovaClass/
 | `middleware/` | 요청 공통 처리 (인증, 업로드 등) | 특정 기능 전용 로직 |
 | `scripts/` | 1회성/운영용 스크립트 | 서버 런타임 코드 |
 
-### Frontend
+**Frontend**
 | 폴더 | 용도 | 하지 말 것 |
 |---|---|---|
 | `src/pages/` | URL 경로 1개당 화면 1개 | 재사용 UI 조각 두기 |
@@ -103,6 +100,28 @@ NovaClass/
 ### 네이밍 규칙
 같은 기능은 레이어를 넘나들며 이름을 통일합니다.
 예: `kmate` 기능 → `kmate.controller.js` + `kmate.routes.js` + `pages/KMate.jsx`
+
+---
+
+## 2. 병합 로그
+
+`_incoming/`에서 파일을 정식 폴더로 옮기거나, 공용 폴더(`middleware/`, `config/`, `components/`, `services/`)를 수정할 때마다
+**한 줄씩** 아래 표에 기록합니다. git blame으로 나중에 확인할 수도 있지만, 명령어 없이 표만 보고 바로
+"이 파일 누구 것/왜 이렇게 됐는지"를 알기 위한 문서입니다. 병합이 다 끝나도 표는 지우지 않고 기록으로 남겨둡니다.
+
+**사용법**: 파일 하나 처리할 때마다 (1) 아래 표에 한 줄 추가 (2) 그 파일만 따로 커밋
+(여러 파일을 한 커밋에 묶지 않기 — 표와 커밋이 1:1로 안 맞게 됨):
+```bash
+git add nova-class-backend/controllers/thine/attendance.controller.js
+git commit --author="Thine Htike Aung <teammate@email.com>" -m "merge: attendance.controller.js (teammate)"
+```
+
+| 날짜 | 파일 경로 | 원작성자 | 처리 방식 | 비고 |
+|---|---|---|---|---|
+| 2026-07-16 | (예시) `nova-class-backend/controllers/victoria/kmate.controller.js` | 팀원(Thine) | 팀원 버전 채택 | 내 버전보다 예외처리가 더 잘 되어 있어서 |
+| 2026-07-16 | (예시) `nova-class-frontend/src/pages/victoria/KMate.jsx` | 나(Victoria) + 팀원 | 수동 병합 | 팀원은 UI만, 나는 로직만 있어서 합침 |
+
+> 표에 없는 파일 = 아직 처리 안 됨. `_incoming/`을 비우기 전에 표와 대조해서 빠진 게 없는지 확인.
 
 ---
 

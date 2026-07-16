@@ -13,12 +13,16 @@ app.use(cors({
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-app.use("/api/auth",       require("./routes/auth.routes"));
-app.use("/api/ai",         require("./routes/ai.routes"));
-app.use("/api/classroom",  require("./routes/classroom.routes"));
-app.use("/api/kmate",      require("./routes/kmate.routes"));
-app.use("/api/progress",   require("./routes/progress.routes"));
-app.use("/api/multimodal", require("./routes/multimodal.routes"));
+// --- Victoria's routes ---
+app.use("/api/auth",       require("./routes/victoria/auth.routes"));
+app.use("/api/ai",         require("./routes/victoria/ai.routes"));
+app.use("/api/classroom",  require("./routes/victoria/classroom.routes"));
+app.use("/api/kmate",      require("./routes/victoria/kmate.routes"));
+app.use("/api/progress",   require("./routes/victoria/progress.routes"));
+app.use("/api/multimodal", require("./routes/victoria/multimodal.routes"));
+
+// --- Thine's routes (add as they land in routes/thine/) ---
+// app.use("/api/...", require("./routes/thine/xxx.routes"));
 
 app.get("/", (req, res) => res.json({ status: "✅ Nova Class API running", port: process.env.PORT || 5001 }));
 

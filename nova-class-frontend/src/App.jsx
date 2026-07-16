@@ -1,12 +1,15 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { LanguageProvider } from "./LanguageContext";
-import Login from "./pages/Login";
-import Dashboard from "./pages/Dashboard";
-import KMate from "./pages/KMate";
-import Classroom from "./pages/Classroom";
-import ClassDetail from "./pages/ClassDetail";
-import Settings from "./pages/Settings";
-import Exam from "./pages/Exam";
+// --- Victoria's pages ---
+import Login from "./pages/victoria/Login";
+import Dashboard from "./pages/victoria/Dashboard";
+import KMate from "./pages/victoria/KMate";
+import Classroom from "./pages/victoria/Classroom";
+import ClassDetail from "./pages/victoria/ClassDetail";
+import Settings from "./pages/victoria/Settings";
+import Exam from "./pages/victoria/Exam";
+// --- Thine's pages (add as they land in pages/thine/) ---
+// import XXX from "./pages/thine/XXX";
 import NovaAssistant from "./components/NovaAssistant";
 
 function ProtectedRoute({ children }) {

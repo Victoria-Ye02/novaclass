@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="mm">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Happy Birthday Saw Eh Chan ♡</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@500;700&family=Nunito:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/intro.css">
+  <link rel="stylesheet" href="css/pages.css">
+  <link rel="stylesheet" href="css/components.css">
+</head>
+<body>
+
+  <!-- ============ INTRO SCREEN ============ -->
+  <div id="intro-screen">
+    <div class="intro-heart" id="ih">♥</div>
+    <div class="intro-line" id="il1">ဒီ website လေးကို</div>
+    <div class="intro-name" id="iname">Saw Eh Chan</div>
+    <div class="intro-line" id="il2">တစ်ယောက်တည်းအတွက်သာ</div>
+    <div class="intro-line" id="il3">ရည်ရွယ်ပြီး ဖန်တီးထားပါတယ် ♡</div>
+    <div class="intro-sub" id="isub">ကျေနပ်အောင် ပြင်ဆင်ပြီးပြီ...</div>
+    <button class="intro-btn" id="enter-btn" onclick="enterSite()">ဝင်ရောက်ကြည့်ရှုမည် ♡</button>
+  </div>
+
+  <!-- ============ MAIN APP ============ -->
+  <div id="main-app">
+
+    <!-- Music toggle button (fixed, always visible) -->
+    <button id="music-btn" onclick="toggleMusic()" title="Music ပိတ်မည်"
+      style="position:fixed;bottom:20px;right:20px;z-index:100;
+             width:42px;height:42px;border-radius:50%;
+             background:rgba(214,58,111,0.15);border:1.5px solid #f4a0c0;
+             font-size:18px;cursor:pointer;color:#d63a6f;
+             backdrop-filter:blur(4px);transition:background 0.2s;">♫</button>
+
+    <!-- Floating hearts background -->
+    <div class="fh-wrap">
+      <span class="fh" style="left:6%;animation-delay:0s">♡</span>
+      <span class="fh" style="left:20%;animation-delay:1.5s">♥</span>
+      <span class="fh" style="left:38%;animation-delay:3s">♡</span>
+      <span class="fh" style="left:58%;animation-delay:0.8s">♥</span>
+      <span class="fh" style="left:76%;animation-delay:2.2s">♡</span>
+      <span class="fh" style="left:90%;animation-delay:4s">♥</span>
+    </div>
+
+    <!-- PAGE: Home -->
+    <div id="page-home" class="page active">
+      <div class="hero">
+        <div class="hero-heart">♥</div>
+        <div class="hero-sub">Happy Birthday</div>
+        <div class="hero-name">Saw Eh Chan</div>
+        <div class="hero-tagline">မင်းရဲ့ ဒီနေ့မှာ ချစ်ခြင်းမေတ္တာနဲ့ ပြည့်နှက်ပါစေ ♡</div>
+        <div class="nav-row">
+          <button class="nav-btn" onclick="go('page-story')">ကျွန်တော်တို့ ဇာတ်လမ်း</button>
+          <button class="nav-btn" onclick="go('page-letter')">ချစ်လှမ်းစာ</button>
+          <button class="nav-btn" onclick="go('page-quiz')">Quiz</button>
+          <button class="nav-btn" onclick="go('page-gallery')">Photos</button>
+          <button class="nav-btn" onclick="go('page-wish')">Birthday Wish</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE: Story / Timeline -->
+    <div id="page-story" class="page">
+      <div class="section">
+        <div class="section-title">ကျွန်တော်တို့ ဇာတ်လမ်း ♡</div>
+        <div class="timeline">
+          <div class="tl-item">
+            <div class="tl-dot"></div>
+            <div class="tl-card">
+              <div class="tl-label">ပထမဆုံး တွေ့တဲ့ နေ့</div>
+              <div class="tl-text">မင်းကို ပထမဆုံး မြင်ကြည့်တဲ့ ထိုနေ့ကို ဘယ်တော့မှ မမေ့နိုင်ဘူး ♡</div>
+            </div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot"></div>
+            <div class="tl-card">
+              <div class="tl-label">ပထမဆုံး Date</div>
+              <div class="tl-text">တကြည်တကြည် ချိန်းထားတဲ့ ထိုနေ့က ကျွန်တော့် ရင်ထဲမှာ အမြဲရှိနေမယ် ♡</div>
+            </div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot"></div>
+            <div class="tl-card">
+              <div class="tl-label">ချစ်ကြောင်း ပြောတဲ့ နေ့</div>
+              <div class="tl-text">ဒီ နှလုံးသားနဲ့ မင်းကို ချစ်ကြောင်း ပထမဆုံး ဝန်ခံခဲ့တဲ့ ထိုအချိန် ♡</div>
+            </div>
+          </div>
+          <div class="tl-item">
+            <div class="tl-dot"></div>
+            <div class="tl-card">
+              <div class="tl-label">ဒီနေ့ — မင်းရဲ့ မွေးနေ့</div>
+              <div class="tl-text">မင်းကို ချစ်တဲ့ ဒီနှလုံးသားနဲ့ ဒီ website လေး ဆောက်ပေးလိုက်တာ မမေ့ပါနဲ့ ♡</div>
+            </div>
+          </div>
+        </div>
+        <div class="nav-row" style="margin-top:1rem">
+          <button class="nav-btn" onclick="go('page-home')">← Home</button>
+          <button class="nav-btn" onclick="go('page-letter')">Letter →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE: Letter -->
+    <div id="page-letter" class="page">
+      <div class="section">
+        <div class="section-title">ချစ်လှမ်းစာ ✉</div>
+        <div class="letter-card">
+          <div class="letter-text">
+            Saw Eh Chan ကို,<br><br>
+            မင်းကို ဘယ်လောက် ချစ်တယ်ဆိုတာ စကားလုံးနဲ့ ဘယ်တော့မှ ပြောမကုန်ဘူး။<br><br>
+            မင်းနဲ့ ရှိတဲ့ နေ့တိုင်းက ကျွန်တော့် အတွက် အကောင်းဆုံး နေ့တွေပဲ။
+            မင်း ရယ်မောတဲ့ အသံ၊ မင်း ကြည့်တဲ့ မျက်လုံးတွေ — ဒါတွေကို ကျွန်တော် ချစ်တယ်။<br><br>
+            ဒီ မွေးနေ့မှာ မင်း ပျော်ရွှင်ချမ်းသာပါစေလို့ ဆုတောင်းနေတယ် ♡
+          </div>
+          <div class="letter-sign">မင်းကို ချစ်တဲ့သူ ♡</div>
+        </div>
+        <div class="nav-row" style="margin-top:1.5rem">
+          <button class="nav-btn" onclick="go('page-story')">← Story</button>
+          <button class="nav-btn" onclick="go('page-quiz')">Quiz →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE: Quiz -->
+    <div id="page-quiz" class="page">
+      <div class="section">
+        <div class="section-title">ကျွန်တော်တို့ Quiz ♡</div>
+
+        <div class="quiz-card">
+          <div class="quiz-q">1. ကျွန်တော် မင်းကို ချစ်တာ ဘယ်လောက်?</div>
+          <div class="fitb-wrap">
+            ကျွန်တော် မင်းကို
+            <input class="fitb-input" id="qa1" placeholder="...">
+            လောက် ချစ်တယ်
+          </div>
+          <button class="check-btn" id="cb1" onclick="checkFitb(1, 'နက္ခတ်တာရာတွေ', 'နက္ခတ်')">စစ်ကြည့်မယ်</button>
+          <div class="fitb-result" id="qr1"></div>
+        </div>
+
+        <div class="quiz-card">
+          <div class="quiz-q">2. မင်းဆီမှာ ကျွန်တော် အကြိုက်ဆုံး အရာက?</div>
+          <div class="fitb-wrap">
+            ကျွန်တော် မင်းရဲ့
+            <input class="fitb-input" id="qa2" placeholder="...">
+            ကို အကြိုက်ဆုံး
+          </div>
+          <button class="check-btn" id="cb2" onclick="checkFitb(2, 'အပြုံး', 'ပြုံး')">စစ်ကြည့်မယ်</button>
+          <div class="fitb-result" id="qr2"></div>
+        </div>
+
+        <div class="quiz-card">
+          <div class="quiz-q">3. ကျွန်တော်တို့ ရဲ့ special ဆုံး color က?</div>
+          <div class="fitb-wrap">
+            ကျွန်တော်တို့ ရဲ့ color က
+            <input class="fitb-input" id="qa3" placeholder="...">
+            ပဲ
+          </div>
+          <button class="check-btn" id="cb3" onclick="checkFitb(3, 'ပန်းရောင်', 'pink')">စစ်ကြည့်မယ်</button>
+          <div class="fitb-result" id="qr3"></div>
+        </div>
+
+        <div class="score-box">
+          <div class="score-num" id="sc-num">0 / 3</div>
+          <div class="score-lbl">မင်း မှန်ခဲ့တဲ့ အဖြေ ♡</div>
+        </div>
+
+        <div class="nav-row" style="margin-top:1.25rem">
+          <button class="nav-btn" onclick="go('page-letter')">← Letter</button>
+          <button class="nav-btn" onclick="go('page-gallery')">Photos →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE: Gallery -->
+    <div id="page-gallery" class="page">
+      <div class="section">
+        <div class="section-title">ကျွန်တော်တို့ Photos ♡</div>
+        <div class="gallery-grid" id="gg"></div>
+        <input type="file" accept="image/*" id="file-input">
+        <div class="nav-row" style="margin-top:1.5rem">
+          <button class="nav-btn" onclick="go('page-quiz')">← Quiz</button>
+          <button class="nav-btn" onclick="go('page-wish')">Wish →</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- PAGE: Birthday Wish -->
+    <div id="page-wish" class="page">
+      <div class="wish-section">
+        <div class="section-title">Birthday Wish ♡</div>
+        <div class="wish-big">Happy Birthday<br>Saw Eh Chan ♡</div>
+        <div class="wish-sub">
+          မင်းရဲ့ ဒီ မွေးနေ့မှာ ပျော်ရွှင်မှုတွေ၊ ချမ်းသာမှုတွေနဲ့
+          ချစ်ခြင်းမေတ္တာတွေ အမြဲ ရှိနေပါစေ ♡
+        </div>
+        <button class="boom-btn" onclick="boom()">♥ Celebrate!</button>
+        <div class="conf-area" id="ca"></div>
+        <div class="nav-row" style="margin-top:1rem">
+          <button class="nav-btn" onclick="go('page-gallery')">← Photos</button>
+          <button class="nav-btn" onclick="go('page-home')">Home</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- end #main-app -->
+
+  <script src="js/intro.js"></script>
+  <script src="js/navigation.js"></script>
+  <script src="js/quiz.js"></script>
+  <script src="js/gallery.js"></script>
+  <script src="js/confetti.js"></script>
+  <script src="js/audio.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

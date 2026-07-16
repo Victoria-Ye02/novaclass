@@ -1,0 +1,72 @@
+/* =============================================
+   base.css — reset, fonts, shared variables
+   ============================================= */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --pink-dark:    #d63a6f;
+  --pink-mid:     #c06080;
+  --pink-light:   #f4a0c0;
+  --pink-pale:    #fde8f0;
+  --pink-bg:      #fdf0f5;
+  --pink-card:    #fff5f8;
+  --pink-border:  #f4c0d0;
+  --text-deep:    #6b3050;
+  --text-muted:   #a05070;
+  --font-body:    'Nunito', sans-serif;
+  --font-script:  'Dancing Script', cursive;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--pink-bg);
+  min-height: 100vh;
+}
+
+/* Shared layout */
+.section {
+  padding: 2rem 1.5rem;
+  max-width: 600px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+.section-title {
+  font-family: var(--font-script);
+  font-size: 30px;
+  color: var(--pink-dark);
+  margin-bottom: 1.25rem;
+  text-align: center;
+}
+
+/* Nav buttons */
+.nav-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 1.5rem;
+}
+
+.nav-btn {
+  background: white;
+  border: 1.5px solid var(--pink-border);
+  border-radius: 20px;
+  padding: 0.5rem 1.2rem;
+  font-size: 14px;
+  color: var(--pink-dark);
+  font-family: var(--font-body);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.nav-btn:hover {
+  background: var(--pink-pale);
+}

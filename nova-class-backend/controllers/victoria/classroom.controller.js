@@ -1,5 +1,5 @@
 const pool = require("../../config/db");
-const Groq = require("groq-sdk");
+const { completeText } = require("../../services/ai/groqText");
 const pdfParse = require("pdf-parse");
 const fs = require("fs");
 const path = require("path");
@@ -17,15 +17,12 @@ const FILE_CONTENT_TYPES = {
   webm: "video/webm",
 };
 
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
 async function askGroq(prompt, maxTokens = 1024) {
-  const res = await groq.chat.completions.create({
+  const completion = await completeText({
     messages: [{ role: "user", content: prompt }],
-    model: "llama-3.1-8b-instant",
-    max_tokens: maxTokens,
+    maxTokens,
   });
-  return res.choices[0].message.content;
+  return completion.choices[0].message.content;
 }
 
 function generateCode() {
@@ -239,7 +236,7 @@ exports.uploadMaterial = async (req, res) => {
       });
     }
 
-    // Claude AI summary — best effort
+    // AI summary — best effort
     let summaryData = null;
     try {
       const prompt = `You are a teaching assistant. Read this material and return a JSON summary.
@@ -412,12 +409,11 @@ ${context}
         ...(history || []).map(h => ({ role: h.role === "assistant" ? "assistant" : "user", content: h.content })),
         { role: "user", content: message },
       ];
-      const res2 = await groq.chat.completions.create({
+      const completion = await completeText({
         messages: msgs,
-        model: "llama-3.3-70b-versatile",
-        max_tokens: 600,
+        maxTokens: 600,
       });
-      return res.json({ reply: res2.choices[0].message.content });
+      return res.json({ reply: completion.choices[0].message.content });
     }
 
     let systemPrompt = "";
@@ -437,17 +433,16 @@ Material: ${context.slice(0, 6000)}`;
 Material: ${context.slice(0, 6000)}`;
     }
 
-    const res2 = await groq.chat.completions.create({
+    const completion = await completeText({
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ],
-      model: "llama-3.3-70b-versatile",
-      max_tokens: 1500,
-      response_format: { type: "json_object" },
+      maxTokens: 1500,
+      responseFormat: { type: "json_object" },
     });
 
-    const parsed = JSON.parse(res2.choices[0].message.content);
+    const parsed = JSON.parse(completion.choices[0].message.content);
     return res.json({ data: parsed.data });
   } catch (err) {
     console.error("materialAI error:", err.message);

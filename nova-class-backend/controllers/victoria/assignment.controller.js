@@ -1,7 +1,6 @@
 const pool = require("../../config/db");
 const fs = require("fs");
-const Groq = require("groq-sdk");
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const { completeText } = require("../../services/ai/groqText");
 
 async function checkAccess(classId, userId) {
   const [classes] = await pool.query("SELECT * FROM classes WHERE id = ?", [classId]);
@@ -286,13 +285,12 @@ JSON format ဖြင့်သာ ဖြေဆိုပါ:
   "feedback": "feedback in Burmese here"
 }`;
 
-    const result = await groq.chat.completions.create({
+    const completion = await completeText({
       messages: [{ role: "user", content: prompt }],
-      model: "llama-3.3-70b-versatile",
-      max_tokens: 500,
-      response_format: { type: "json_object" },
+      maxTokens: 500,
+      responseFormat: { type: "json_object" },
     });
-    const parsed = JSON.parse(result.choices[0].message.content);
+    const parsed = JSON.parse(completion.choices[0].message.content);
     res.json({
       isComplete: parsed.isComplete,
       score: parsed.score,

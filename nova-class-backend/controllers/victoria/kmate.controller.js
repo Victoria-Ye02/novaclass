@@ -1,7 +1,5 @@
-const Groq = require("groq-sdk");
 const pool = require("../../config/db");
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const { completeText } = require("../../services/ai/groqText");
 
 // POST /api/kmate/ask  { question }
 exports.ask = async (req, res) => {
@@ -9,9 +7,8 @@ exports.ask = async (req, res) => {
   if (!question) return res.status(400).json({ error: "question is required" });
 
   try {
-    const chat = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      max_tokens: 1024,
+    const completion = await completeText({
+      maxTokens: 1024,
       messages: [
         { role: "system", content: `You are K.MATE, an expert Korean language tutor specializing in TOPIK (Test of Proficiency in Korean).
 Help students understand Korean grammar, vocabulary, reading, and writing.
@@ -21,7 +18,7 @@ When explaining grammar, use the format: pattern → meaning → example.` },
       ],
     });
 
-    const answer = chat.choices[0].message.content;
+    const answer = completion.choices[0].message.content;
 
     // Save to history
     await pool.query(
@@ -66,13 +63,12 @@ Return ONLY valid JSON array:
   }
 ]`;
 
-    const chat = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      max_tokens: 2048,
+    const completion = await completeText({
+      maxTokens: 2048,
       messages: [{ role: "user", content: prompt }],
     });
 
-    let out = chat.choices[0].message.content.trim()
+    let out = completion.choices[0].message.content.trim()
       .replace(/```json\s*/g, "").replace(/```\s*/g, "");
     const start = out.indexOf("[");
     const end = out.lastIndexOf("]") + 1;

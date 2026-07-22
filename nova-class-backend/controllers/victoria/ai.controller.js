@@ -1,6 +1,4 @@
-const Anthropic = require("@anthropic-ai/sdk");
-
-const ai = new Anthropic({ apiKey: process.env.CLAUDE_API_KEY });
+const { completeText } = require("../../services/ai/groqText");
 
 // POST /api/ai/summarize  { text }
 exports.summarize = async (req, res) => {
@@ -19,13 +17,12 @@ Detect language and reply in same language.
 Text:
 ${text.slice(0, 30000)}`;
 
-    const msg = await ai.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1024,
+    const completion = await completeText({
+      maxTokens: 1024,
       messages: [{ role: "user", content: prompt }],
     });
 
-    let out = msg.content[0].text.trim()
+    let out = completion.choices[0].message.content.trim()
       .replace(/```json\s*/g, "").replace(/```\s*/g, "");
     const start = out.indexOf("{");
     const end = out.lastIndexOf("}") + 1;
@@ -43,18 +40,18 @@ exports.chat = async (req, res) => {
 
   try {
     const messages = [
+      { role: "system", content: "You are a helpful study assistant for students. Answer questions clearly and concisely. Support multiple languages." },
       ...history.map(h => ({ role: h.role, content: h.content })),
       { role: "user", content: message },
     ];
 
-    const msg = await ai.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 1024,
-      system: "You are a helpful study assistant for students. Answer questions clearly and concisely. Support multiple languages.",
+    const completion = await completeText({
+      maxTokens: 1024,
       messages,
     });
 
-    res.json({ response: msg.content[0].text });
+    const response = completion.choices[0].message.content;
+    res.json({ response });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

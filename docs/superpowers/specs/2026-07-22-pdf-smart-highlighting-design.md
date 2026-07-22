@@ -41,7 +41,7 @@ Pages are uploaded and processed in bounded batches to avoid excessive browser m
 
 ### Importance selection
 
-The backend sends bounded, page-indexed text candidates to the existing Groq integration. The prompt requests exact candidate identifiers, a concise explanation, and a category such as concept, formula, definition, or conclusion. AI output is schema-validated; unknown identifiers, malformed coordinates, duplicate regions, and excessively broad selections are rejected.
+The backend sends bounded, page-indexed text candidates to the existing Groq integration and uses `openai/gpt-oss-120b` for Smart Highlighting importance selection. The model choice is isolated in the Smart Highlighting service and does not change the models used by the project's other AI features. The prompt requests exact candidate identifiers, a concise explanation, and a category such as concept, formula, definition, or conclusion. AI output is schema-validated; unknown identifiers, malformed coordinates, duplicate regions, and excessively broad selections are rejected.
 
 Selected neighboring items are merged only when they belong to the same logical highlight. Stored results contain the page number, normalized rectangles, original excerpt, category, and explanation.
 
@@ -80,7 +80,7 @@ If OCR credentials are missing or a provider rejects a request, the API returns 
 
 ## Privacy and Configuration
 
-Google Cloud Vision credentials are configured only through backend environment variables and are excluded from Git. Text or rendered page images are sent to Google Cloud Vision only for OCR and to Groq only as bounded extracted text for importance selection. NovaClass does not persist rendered page images in its database or uploads directory after processing.
+Google Cloud Vision credentials are configured only through backend environment variables and are excluded from Git. Text or rendered page images are sent to Google Cloud Vision only for OCR and to Groq's `openai/gpt-oss-120b` model only as bounded extracted text for importance selection. NovaClass does not persist rendered page images in its database or uploads directory after processing.
 
 Deployment documentation will list the required Google Cloud project, Vision API enablement, service-account credential configuration, and existing Groq key requirement. Logs must not contain document text, page images, access tokens, or provider credentials.
 

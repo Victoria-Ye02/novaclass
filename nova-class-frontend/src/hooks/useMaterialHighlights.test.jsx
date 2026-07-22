@@ -340,6 +340,82 @@ describe("useMaterialHighlights", () => {
     });
   });
 
+  it("recovers instead of failing when a concurrent viewer already advanced the shared analysis past accepting pages (409 on page submission)", async () => {
+    // Simulates two viewers opening the same not-yet-analyzed material: this
+    // viewer is still submitting pages when another viewer's pipeline finishes
+    // first and calls /complete, flipping the shared analysis's status away
+    // from pending/failed. The next POST .../pages this viewer makes then 409s
+    // ("Highlight analysis is not accepting pages"). That must be treated as
+    // "someone else advanced the shared analysis", not a local failure: the
+    // hook should refresh from the server and resume polling instead of
+    // reporting status "failed".
+    API.get.mockResolvedValueOnce(missingResponse());
+    API.post.mockImplementation((url) => {
+      if (url.endsWith("/highlights/start")) {
+        return Promise.resolve({
+          data: { analysisId: 42, status: "pending", progress: { completedPages: 0, totalPages: 2 }, submittedPages: [] },
+        });
+      }
+      if (url.endsWith("/highlights/pages")) {
+        return Promise.reject(
+          Object.assign(new Error("Highlight analysis is not accepting pages"), {
+            response: { status: 409, data: { error: "Highlight analysis is not accepting pages" } },
+          })
+        );
+      }
+      if (url.endsWith("/highlights/complete")) {
+        throw new Error("must not call /complete after a 409 on /pages");
+      }
+      throw new Error(`Unexpected POST ${url}`);
+    });
+    extractPdfPage.mockImplementation((_pdf, pageNumber) => Promise.resolve(textCandidate(pageNumber)));
+
+    const { result } = renderHook(() => useMaterialHighlights({ materialId: "50", enabled: true }));
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+
+    // The refreshStatus() call triggered by the 409 GETs the canonical state:
+    // the other viewer's analysis is legitimately still processing.
+    API.get.mockResolvedValueOnce({
+      data: { status: "processing", progress: { completedPages: 2, totalPages: 2 }, submittedPages: [1, 2], highlights: {} },
+    });
+
+    await act(async () => {
+      await result.current.preparePdf({ numPages: 2 });
+    });
+
+    expect(result.current.status).toBe("processing");
+    expect(result.current.error).toBeNull();
+    expect(API.post).not.toHaveBeenCalledWith(
+      "/classroom/materials/50/highlights/complete",
+      expect.anything(),
+      expect.anything()
+    );
+
+    // Polling should have been scheduled by applyServerState because the
+    // refreshed status was "processing" — advancing the clock should trigger
+    // a further GET, and once that GET reports "ready", the hook should
+    // reflect it.
+    const getCallsBeforePoll = API.get.mock.calls.length;
+    API.get.mockResolvedValueOnce({
+      data: {
+        status: "ready",
+        progress: { completedPages: 2, totalPages: 2 },
+        submittedPages: [1, 2],
+        highlights: { 1: [{ id: 2, excerpt: "e", explanation: "x", category: "concept", rects: [] }] },
+      },
+    });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(API.get.mock.calls.length).toBeGreaterThan(getCallsBeforePoll);
+    expect(result.current.status).toBe("ready");
+    expect(result.current.highlights).toEqual({
+      1: [{ id: 2, excerpt: "e", explanation: "x", category: "concept", rects: [] }],
+    });
+  });
+
   it("defaults visibility to true and allows toggling", async () => {
     API.get.mockResolvedValue(missingResponse());
 

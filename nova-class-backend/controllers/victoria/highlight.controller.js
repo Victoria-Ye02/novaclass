@@ -122,7 +122,7 @@ function serviceError(res, error) {
   if (error?.code === "ENOENT" || error?.code === "MATERIAL_FILE_MISSING") {
     return clientError(res, 404, "Material file not found");
   }
-  console.error("Highlight service error:", error?.message || error?.code || error?.name);
+  console.error("Highlight service error:", error?.code || error?.name || "unknown_error");
   return clientError(res, 500, "Highlight service unavailable");
 }
 

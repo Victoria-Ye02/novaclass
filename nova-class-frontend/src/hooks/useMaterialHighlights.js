@@ -155,14 +155,29 @@ export function useMaterialHighlights({ materialId, enabled }) {
         if (signal.aborted || preparationRef.current !== preparation) return;
 
         const formData = buildPageFormData(analysisId, pageNumber, extracted);
-        await retryRequest(
-          () => API.post(
-            `/classroom/materials/${materialIdValue}/highlights/pages`,
-            formData,
+        try {
+          await retryRequest(
+            () => API.post(
+              `/classroom/materials/${materialIdValue}/highlights/pages`,
+              formData,
+              { signal }
+            ),
             { signal }
-          ),
-          { signal }
-        );
+          );
+        } catch (error) {
+          // A 409 here means another viewer of this shared analysis already
+          // advanced it past pending/failed (e.g. they finished submitting
+          // pages and called /complete first). That is not a local failure —
+          // refresh from the server so we pick up the real (likely
+          // "processing") status and resume polling, instead of showing a
+          // false "failed" state.
+          if (error?.response?.status === 409) {
+            if (signal.aborted || preparationRef.current !== preparation) return;
+            await refreshStatus(preparation, controller);
+            return;
+          }
+          throw error;
+        }
 
         submittedCount += 1;
         preparation.submittedPageNumbers.add(pageNumber);

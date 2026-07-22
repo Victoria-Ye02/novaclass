@@ -14,6 +14,12 @@ function viewerPageWidth() {
     : Math.min(820, window.innerWidth - 160);
 }
 
+function isEditableTarget(target) {
+  if (!(target instanceof Element)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return target.isContentEditable || ["input", "textarea", "select"].includes(tagName);
+}
+
 export default function PdfLessonViewer({
   fileUrl,
   title,
@@ -51,7 +57,7 @@ export default function PdfLessonViewer({
     setLoadError(false);
   }, []);
 
-  function goToPage(requestedPage) {
+  const goToPage = useCallback((requestedPage) => {
     if (!numPages) return;
     const parsed = Number.parseInt(requestedPage, 10);
     const nextPage = Number.isFinite(parsed)
@@ -59,7 +65,30 @@ export default function PdfLessonViewer({
       : currentPage;
     setCurrentPage(nextPage);
     setPageInput(String(nextPage));
-  }
+  }, [currentPage, numPages]);
+
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (
+        savedPagesOpen ||
+        event.defaultPrevented ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.shiftKey ||
+        isEditableTarget(event.target)
+      ) {
+        return;
+      }
+
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      goToPage(currentPage + (event.key === "ArrowRight" ? 1 : -1));
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [currentPage, goToPage, savedPagesOpen]);
 
   function commitPageInput() {
     goToPage(pageInput);
@@ -76,6 +105,7 @@ export default function PdfLessonViewer({
           type="button"
           className="pdf-toolbar-button"
           aria-label="Previous page"
+          aria-keyshortcuts="ArrowLeft"
           disabled={!numPages || currentPage <= 1}
           onClick={() => goToPage(currentPage - 1)}
         >
@@ -102,6 +132,7 @@ export default function PdfLessonViewer({
           type="button"
           className="pdf-toolbar-button"
           aria-label="Next page"
+          aria-keyshortcuts="ArrowRight"
           disabled={!numPages || currentPage >= numPages}
           onClick={() => goToPage(currentPage + 1)}
         >

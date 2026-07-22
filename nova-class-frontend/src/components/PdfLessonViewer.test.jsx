@@ -84,4 +84,84 @@ describe("PdfLessonViewer", () => {
 
     expect(screen.getByRole("button", { name: "Remove saved page 1" }).disabled).toBe(true);
   });
+
+  it("moves between pages with the left and right arrow keys", async () => {
+    renderViewer();
+    await screen.findByTestId("rendered-page-1");
+
+    const rightEvent = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(window, rightEvent);
+    expect(rightEvent.defaultPrevented).toBe(true);
+    expect(screen.getByTestId("rendered-page-2")).toBeTruthy();
+
+    const leftEvent = new KeyboardEvent("keydown", {
+      key: "ArrowLeft",
+      bubbles: true,
+      cancelable: true,
+    });
+    fireEvent(window, leftEvent);
+    expect(leftEvent.defaultPrevented).toBe(true);
+    expect(screen.getByTestId("rendered-page-1")).toBeTruthy();
+  });
+
+  it("keeps keyboard navigation within the loaded page range", async () => {
+    renderViewer();
+    await screen.findByTestId("rendered-page-1");
+
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    expect(screen.getByTestId("rendered-page-1")).toBeTruthy();
+
+    for (let press = 0; press < 8; press += 1) {
+      fireEvent.keyDown(window, { key: "ArrowRight" });
+    }
+    expect(screen.getByTestId("rendered-page-5")).toBeTruthy();
+  });
+
+  it("does not intercept arrows while the page input is focused", async () => {
+    renderViewer();
+    await screen.findByTestId("rendered-page-1");
+    const input = screen.getByRole("spinbutton", { name: "Page number" });
+    input.focus();
+
+    const event = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(screen.getByTestId("rendered-page-1")).toBeTruthy();
+  });
+
+  it("preserves vertical arrows and modified key combinations", async () => {
+    renderViewer();
+    await screen.findByTestId("rendered-page-1");
+
+    const downEvent = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+    });
+    window.dispatchEvent(downEvent);
+    expect(downEvent.defaultPrevented).toBe(false);
+
+    fireEvent.keyDown(window, { key: "ArrowRight", metaKey: true });
+    expect(screen.getByTestId("rendered-page-1")).toBeTruthy();
+  });
+
+  it("ignores arrow navigation while the saved-page dialog is open", async () => {
+    renderViewer({ bookmarks: [1, 4] });
+    await screen.findByTestId("rendered-page-1");
+    fireEvent.click(screen.getByRole("button", { name: "Open saved pages" }));
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+
+    expect(screen.getByTestId("rendered-page-1")).toBeTruthy();
+    expect(screen.getByRole("dialog", { name: "Saved pages" })).toBeTruthy();
+  });
 });

@@ -9,13 +9,24 @@ const storage = multer.diskStorage({
   },
 });
 
-// PDF only — for materials/resources
-const pdfOnly = multer({
+// Document formats — for materials/resources (PDF, Word, PowerPoint, images, video)
+const ALLOWED_DOCUMENT_MIMETYPES = new Set([
+  "application/pdf",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation", // .pptx
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/gif",
+  "video/mp4",
+  "video/webm",
+]);
+const documentUpload = multer({
   storage,
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    if (file.mimetype === "application/pdf") cb(null, true);
-    else cb(new Error("Only PDF files are allowed"), false);
+    if (ALLOWED_DOCUMENT_MIMETYPES.has(file.mimetype)) cb(null, true);
+    else cb(new Error("PDF, DOCX, PPTX, PNG, JPEG, WEBP, GIF, MP4, WEBM 파일만 업로드할 수 있습니다."), false);
   },
 });
 
@@ -25,5 +36,5 @@ const anyFile = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
-module.exports = pdfOnly;
+module.exports = documentUpload;
 module.exports.anyFile = anyFile;

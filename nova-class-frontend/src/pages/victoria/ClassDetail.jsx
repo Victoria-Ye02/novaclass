@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useLocation } from "react-router-dom";
 import Sidebar from "../../components/Sidebar";
 import API from "../../services/api";
 import { useLang } from "../../LanguageContext";
@@ -7,6 +7,7 @@ import { useLang } from "../../LanguageContext";
 export default function ClassDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [classInfo, setClassInfo] = useState(null);
   const [materials, setMaterials] = useState([]);
   const [members, setMembers] = useState([]);
@@ -23,7 +24,6 @@ export default function ClassDetail() {
   const [submittingComment, setSubmittingComment] = useState({});
 
   // Classwork state
-  const [expandedId, setExpandedId] = useState(null);
   const [selectedMat, setSelectedMat] = useState(null);
   const [uploadModal, setUploadModal] = useState(false);
   const [uploadForm, setUploadForm] = useState({ title: "", week: 1, instructions: "" });
@@ -1294,120 +1294,153 @@ export default function ClassDetail() {
                 {/* Lessons tab */}
                 {classworkTab === "lessons" && (
                 <div>
-                <div style={banner}>
+                {selectedMat ? (
+                  /* ── Lesson detail (full page) ── */
                   <div>
-                    <div style={{ fontSize: "18px", fontWeight: 700, color: "#fff" }}>{classInfo.name} — Lessons</div>
-                    <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.8)", marginTop: "4px" }}>
-                      {isTeacher ? "Upload and manage course materials" : "Click a material to open AI Study Mentor"}
+                    <button
+                      onClick={() => { setSelectedMat(null); setAiModal(null); setAiResult(null); setChatHistory([]); }}
+                      style={{ display: "flex", alignItems: "center", gap: "8px", background: "none", border: "none", color: "#6b7280", fontSize: "13px", fontWeight: 600, cursor: "pointer", padding: "0 0 16px" }}
+                    >
+                      ← Back to Lessons
+                    </button>
+                    <div style={banner}>
+                      <div>
+                        <div style={{ fontSize: "18px", fontWeight: 700, color: "#fff" }}>{selectedMat.title}</div>
+                        <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.8)", marginTop: "4px" }}>
+                          Week {selectedMat.week || 1} · Posted {formatDate(selectedMat.created_at)}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-
-                {/* Hint: select a material to use AI */}
-                {aiHint && !selectedMat && (
-                  <div style={{ background: "#f0f4ff", border: "2px solid #3B37CC", borderRadius: "10px", padding: "12px 16px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "10px" }}>
-                    <span style={{ fontSize: "20px" }}>👆</span>
-                    <div>
-                      <div style={{ fontSize: "13px", fontWeight: 700, color: "#3B37CC" }}>Select a material below</div>
-                      <div style={{ fontSize: "12px", color: "#6b7280" }}>Click any material to activate AI Study Mentor</div>
+                    {selectedMat.instructions && (
+                      <p style={{ fontSize: "13px", color: "#374151", lineHeight: 1.6, marginBottom: "20px" }}>{selectedMat.instructions}</p>
+                    )}
+                    <div style={{ marginBottom: "10px", fontSize: "11px", fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "1px" }}>
+                      Reference Materials
                     </div>
-                    <button onClick={() => setAiHint(false)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: "16px" }}>×</button>
-                  </div>
-                )}
-
-                {materials.length === 0 ? (
-                  <div style={{ textAlign: "center", padding: "64px 0", color: "#9ca3af" }}>
-                    {isTeacher ? 'Click "+ New Material" to add your first material.' : "No materials posted yet."}
+                    {selectedMat.file_url ? (() => {
+                      const fileName = selectedMat.file_name || selectedMat.title;
+                      const ext = (selectedMat.file_url.split(".").pop() || "").toLowerCase();
+                      const kind = {
+                        pdf: { icon: "📕", label: "PDF Document" },
+                        docx: { icon: "📘", label: "Word Document" },
+                        pptx: { icon: "📙", label: "PowerPoint" },
+                        png: { icon: "🖼️", label: "Image" }, jpg: { icon: "🖼️", label: "Image" },
+                        jpeg: { icon: "🖼️", label: "Image" }, webp: { icon: "🖼️", label: "Image" }, gif: { icon: "🖼️", label: "Image" },
+                      }[ext] || { icon: "📄", label: "File" };
+                      const openPreview = () => navigate(`/classroom/${id}/material/${selectedMat.id}`, { state: { backgroundLocation: location } });
+                      return (
+                        <div
+                          onClick={openPreview}
+                          role="button" tabIndex={0}
+                          onKeyDown={e => e.key === "Enter" && openPreview()}
+                          style={{ ...fileChip, maxWidth: "420px", cursor: "pointer" }}
+                        >
+                          <span style={{ fontSize: "18px" }}>{kind.icon}</span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: "13px", fontWeight: 600, color: "#1a1a2e", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileName}</div>
+                            <div style={{ fontSize: "11px", color: "#9ca3af" }}>{kind.label}</div>
+                          </div>
+                          <span style={{ color: "#3B37CC", fontSize: "18px" }}>›</span>
+                        </div>
+                      );
+                    })() : (
+                      <p style={{ fontSize: "13px", color: "#9ca3af" }}>No file attached.</p>
+                    )}
                   </div>
                 ) : (
-                  Object.entries(weekGroups).sort((a, b) => Number(a[0]) - Number(b[0])).map(([week, mats]) => (
-                    <div key={week}>
-                      <div style={weekLabel}>Week {week}</div>
-                      {mats.map(mat => (
-                        <div key={mat.id}>
-                          <div
-                            onClick={async () => {
-                              const isDeselecting = selectedMat?.id === mat.id;
-                              setExpandedId(isDeselecting ? null : mat.id);
-                              setSelectedMat(isDeselecting ? null : mat);
-                              if (!isDeselecting) markMatSeen(mat.id);
-                              setAiResult(null); setChatHistory([]);
-                              // If user came from Stream tab with a pending AI action
-                              if (aiHint && !isDeselecting) {
-                                const action = aiHint;
-                                setAiHint(false);
-                                setAiModal(action);
-                                if (action !== "chat") {
-                                  setAiLoading(true);
-                                  try {
-                                    const { data } = await API.post(`/classroom/materials/${mat.id}/ai`, { action });
-                                    setAiResult(data.data);
-                                  } catch {
-                                    setAiResult({ error: "AI unavailable. Check GEMINI_API_KEY in backend .env" });
-                                  } finally {
-                                    setAiLoading(false);
+                  /* ── Lesson list ── */
+                  <>
+                    <div style={banner}>
+                      <div>
+                        <div style={{ fontSize: "18px", fontWeight: 700, color: "#fff" }}>{classInfo.name} — Lessons</div>
+                        <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.8)", marginTop: "4px" }}>
+                          {isTeacher ? "Upload and manage course materials" : "Click a material to open AI Study Mentor"}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Hint: select a material to use AI */}
+                    {aiHint && (
+                      <div style={{ background: "#f0f4ff", border: "2px solid #3B37CC", borderRadius: "10px", padding: "12px 16px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "10px" }}>
+                        <span style={{ fontSize: "20px" }}>👆</span>
+                        <div>
+                          <div style={{ fontSize: "13px", fontWeight: 700, color: "#3B37CC" }}>Select a material below</div>
+                          <div style={{ fontSize: "12px", color: "#6b7280" }}>Click any material to activate AI Study Mentor</div>
+                        </div>
+                        <button onClick={() => setAiHint(false)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: "16px" }}>×</button>
+                      </div>
+                    )}
+
+                    {materials.length === 0 ? (
+                      <div style={{ textAlign: "center", padding: "64px 0", color: "#9ca3af" }}>
+                        {isTeacher ? 'Click "+ New Material" to add your first material.' : "No materials posted yet."}
+                      </div>
+                    ) : (
+                      Object.entries(weekGroups).sort((a, b) => Number(a[0]) - Number(b[0])).map(([week, mats]) => (
+                        <div key={week}>
+                          <div style={weekLabel}>Week {week}</div>
+                          {mats.map(mat => (
+                            <div
+                              key={mat.id}
+                              onClick={async () => {
+                                setSelectedMat(mat);
+                                markMatSeen(mat.id);
+                                setAiResult(null); setChatHistory([]);
+                                // If user came from Stream tab with a pending AI action
+                                if (aiHint) {
+                                  const action = aiHint;
+                                  setAiHint(false);
+                                  setAiModal(action);
+                                  if (action !== "chat") {
+                                    setAiLoading(true);
+                                    try {
+                                      const { data } = await API.post(`/classroom/materials/${mat.id}/ai`, { action });
+                                      setAiResult(data.data);
+                                    } catch {
+                                      setAiResult({ error: "AI unavailable. Check GEMINI_API_KEY in backend .env" });
+                                    } finally {
+                                      setAiLoading(false);
+                                    }
                                   }
                                 }
-                              }
-                            }}
-                            style={{ ...matRow, background: selectedMat?.id === mat.id ? "#f0f4ff" : !seenMatIds.has(mat.id) ? "#fefbff" : "#fff", borderColor: selectedMat?.id === mat.id ? "#3B37CC" : "#e5e7eb" }}
-                          >
-                            <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-                              <div style={{ position: "relative" }}>
-                                <div style={{ ...matIcon, background: selectedMat?.id === mat.id ? "#3B37CC" : "#f0f4ff" }}>
-                                  <span style={{ filter: selectedMat?.id === mat.id ? "brightness(10)" : "none" }}>📄</span>
-                                </div>
-                                {!seenMatIds.has(mat.id) && <span style={{ position: "absolute", top: "-3px", right: "-3px", width: "8px", height: "8px", borderRadius: "50%", background: "#ef4444", border: "2px solid #fff", display: "block" }} />}
-                              </div>
-                              <div>
-                                <div style={{ fontSize: "14px", fontWeight: !seenMatIds.has(mat.id) ? 700 : 600, color: "#1a1a2e", display: "flex", alignItems: "center", gap: "6px" }}>
-                                  {mat.title}
-                                  {!seenMatIds.has(mat.id) && <span style={{ fontSize: "10px", fontWeight: 800, color: "#ef4444", background: "#fef2f2", padding: "1px 6px", borderRadius: "10px" }}>NEW</span>}
-                                </div>
-                                <div style={{ fontSize: "12px", color: "#9ca3af" }}>Posted {formatDate(mat.created_at)}</div>
-                              </div>
-                            </div>
-                            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                              {mat.topic && <span style={{ fontSize: "11px", background: "#f0f4ff", color: "#3B37CC", padding: "2px 8px", borderRadius: "10px", fontWeight: 600 }}>📂 {mat.topic}</span>}
-                              {isTeacher && (
-                                <button onClick={e => { e.stopPropagation(); setTopicModal({ type: "material", id: mat.id, current: mat.topic || "" }); setTopicInput(mat.topic || ""); }}
-                                  style={{ fontSize: "11px", padding: "2px 7px", background: "#f3f4f6", color: "#6b7280", border: "none", borderRadius: "6px", cursor: "pointer" }}>
-                                  📂 Topic
-                                </button>
-                              )}
-                              <span style={{ fontSize: "12px", color: "#9ca3af" }}>No due date</span>
-                              <span style={{ color: "#9ca3af", fontSize: "12px", display: "inline-block", transform: expandedId === mat.id ? "rotate(180deg)" : "none", transition: "0.2s" }}>▼</span>
-                            </div>
-                          </div>
-                          {expandedId === mat.id && (
-                            <div style={expandPanel}>
-                              {mat.instructions && (
-                                <p style={{ fontSize: "13px", color: "#6b7280", marginBottom: "14px", lineHeight: 1.6 }}>{mat.instructions}</p>
-                              )}
-                              <div style={{ marginBottom: "8px", fontSize: "11px", fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "1px" }}>
-                                Reference Materials
-                              </div>
-                              {mat.file_url ? (
-                                <a href={`http://localhost:5001${mat.file_url}`} target="_blank" rel="noopener noreferrer" style={fileChip}>
-                                  <span style={{ fontSize: "18px" }}>📕</span>
-                                  <div style={{ flex: 1 }}>
-                                    <div style={{ fontSize: "13px", fontWeight: 600, color: "#1a1a2e", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{mat.file_name || mat.title + ".pdf"}</div>
-                                    <div style={{ fontSize: "11px", color: "#9ca3af" }}>PDF Document</div>
+                              }}
+                              style={{ ...matRow, background: !seenMatIds.has(mat.id) ? "#fefbff" : "#fff" }}
+                            >
+                              <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                                <div style={{ position: "relative" }}>
+                                  <div style={matIcon}>
+                                    <span>📄</span>
                                   </div>
-                                  <span style={{ color: "#3B37CC", fontSize: "18px" }}>↓</span>
-                                </a>
-                              ) : (
-                                <p style={{ fontSize: "13px", color: "#9ca3af" }}>No file attached.</p>
-                              )}
+                                  {!seenMatIds.has(mat.id) && <span style={{ position: "absolute", top: "-3px", right: "-3px", width: "8px", height: "8px", borderRadius: "50%", background: "#ef4444", border: "2px solid #fff", display: "block" }} />}
+                                </div>
+                                <div>
+                                  <div style={{ fontSize: "14px", fontWeight: !seenMatIds.has(mat.id) ? 700 : 600, color: "#1a1a2e", display: "flex", alignItems: "center", gap: "6px" }}>
+                                    {mat.title}
+                                    {!seenMatIds.has(mat.id) && <span style={{ fontSize: "10px", fontWeight: 800, color: "#ef4444", background: "#fef2f2", padding: "1px 6px", borderRadius: "10px" }}>NEW</span>}
+                                  </div>
+                                  <div style={{ fontSize: "12px", color: "#9ca3af" }}>Posted {formatDate(mat.created_at)}</div>
+                                </div>
+                              </div>
+                              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                                {mat.topic && <span style={{ fontSize: "11px", background: "#f0f4ff", color: "#3B37CC", padding: "2px 8px", borderRadius: "10px", fontWeight: 600 }}>📂 {mat.topic}</span>}
+                                {isTeacher && (
+                                  <button onClick={e => { e.stopPropagation(); setTopicModal({ type: "material", id: mat.id, current: mat.topic || "" }); setTopicInput(mat.topic || ""); }}
+                                    style={{ fontSize: "11px", padding: "2px 7px", background: "#f3f4f6", color: "#6b7280", border: "none", borderRadius: "6px", cursor: "pointer" }}>
+                                    📂 Topic
+                                  </button>
+                                )}
+                                <span style={{ fontSize: "12px", color: "#9ca3af" }}>No due date</span>
+                                <span style={{ color: "#9ca3af", fontSize: "12px" }}>›</span>
+                              </div>
                             </div>
-                          )}
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  ))
-                )}
-                {isTeacher && (
-                  <button onClick={() => setUploadModal(true)} style={fab}>+</button>
+                      ))
+                    )}
+                    {isTeacher && (
+                      <button onClick={() => setUploadModal(true)} style={fab}>+</button>
+                    )}
+                  </>
                 )}
               </div>
               )}
@@ -3234,11 +3267,6 @@ const matIcon = {
   width: "36px", height: "36px", borderRadius: "8px",
   background: "#f0f4ff", display: "flex", alignItems: "center",
   justifyContent: "center", fontSize: "16px", flexShrink: 0,
-};
-
-const expandPanel = {
-  background: "#f8f9fa", border: "1px solid #e5e7eb", borderTop: "none",
-  borderRadius: "0 0 10px 10px", padding: "16px 20px", marginBottom: "3px",
 };
 
 const fileChip = {

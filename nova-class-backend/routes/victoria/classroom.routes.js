@@ -19,6 +19,8 @@ router.get("/classes/:id/materials",        auth, ctrl.listMaterials);
 router.post("/classes/:id/materials",       auth, upload.single("file"), ctrl.uploadMaterial);
 router.get("/materials/:materialId/summary", auth, ctrl.getSummary);
 router.post("/materials/:materialId/ai",    auth, ctrl.materialAI);
+router.get("/materials/:materialId",         auth, ctrl.getMaterial);
+router.get("/materials/:materialId/file",    auth.viaQueryOrHeader, ctrl.getMaterialFile);
 
 router.get("/classes/:id/posts",           auth, posts.getPosts);
 router.post("/classes/:id/posts",          auth, posts.createPost);

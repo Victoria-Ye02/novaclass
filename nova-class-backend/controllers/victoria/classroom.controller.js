@@ -1,7 +1,21 @@
 const pool = require("../../config/db");
 const Groq = require("groq-sdk");
-const { PDFParse } = require("pdf-parse");
+const pdfParse = require("pdf-parse");
 const fs = require("fs");
+const path = require("path");
+
+const FILE_CONTENT_TYPES = {
+  pdf: "application/pdf",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+  mp4: "video/mp4",
+  webm: "video/webm",
+};
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -196,12 +210,13 @@ exports.uploadMaterial = async (req, res) => {
       return res.status(201).json({ id: materialId, title, instructions, week, file_url: null, summary: null });
     }
 
-    // Extract PDF text
-    const buffer = fs.readFileSync(req.file.path);
-    const parser = new PDFParse({ data: buffer });
-    const parsed = await parser.getText();
-    await parser.destroy();
-    const text = parsed.text.trim();
+    // Extract text — only PDFs support extraction (Word/PowerPoint/images are stored as-is)
+    let text = "";
+    if (req.file.mimetype === "application/pdf") {
+      const buffer = fs.readFileSync(req.file.path);
+      const parsed = await pdfParse(buffer);
+      text = parsed.text.trim();
+    }
 
     // Save material with extracted text
     const [result] = await pool.query(
@@ -218,7 +233,9 @@ exports.uploadMaterial = async (req, res) => {
       return res.status(201).json({
         id: materialId, title, instructions, week,
         file_url: `/uploads/${filePath}`, summary: null,
-        warning: "Uploaded. No extractable text (scanned PDF?)."
+        warning: req.file.mimetype === "application/pdf"
+          ? "Uploaded. No extractable text (scanned PDF?)."
+          : "Uploaded. AI summary is only available for PDF files."
       });
     }
 
@@ -262,7 +279,7 @@ Detect the language and reply in the same language.`;
       id: materialId, title, instructions, week,
       file_url: `/uploads/${filePath}`,
       summary: summaryData,
-      warning: summaryData ? undefined : "Uploaded. AI summary unavailable (check GEMINI_API_KEY).",
+      warning: summaryData ? undefined : "Uploaded. AI summary unavailable (check GROQ_API_KEY).",
     });
   } catch (err) {
     console.error(err.message);
@@ -452,6 +469,82 @@ exports.getSummary = async (req, res) => {
     );
     if (summaries.length === 0) return res.status(404).json({ error: "No summary available" });
     res.json(summaries[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET /api/classroom/materials/:materialId — metadata for the in-app preview page
+exports.getMaterial = async (req, res) => {
+  try {
+    const [[m]] = await pool.query(
+      "SELECT id, class_id, title, instructions, week, file_path, created_at FROM materials WHERE id = ?",
+      [req.params.materialId]
+    );
+    if (!m) return res.status(404).json({ error: "Material not found" });
+    const access = await checkAccess(m.class_id, req.user.id);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+
+    const ext = m.file_path ? (m.file_path.split(".").pop() || "").toLowerCase() : null;
+    res.json({
+      id: m.id,
+      class_id: m.class_id,
+      title: m.title,
+      instructions: m.instructions,
+      week: m.week,
+      created_at: m.created_at,
+      file_ext: ext,
+      file_url: m.file_path ? `/classroom/materials/${m.id}/file` : null,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET /api/classroom/materials/:materialId/file — streams the file inline (in-app preview, not a download)
+exports.getMaterialFile = async (req, res) => {
+  try {
+    const [[m]] = await pool.query("SELECT class_id, file_path FROM materials WHERE id = ?", [req.params.materialId]);
+    if (!m || !m.file_path) return res.status(404).json({ error: "File not found" });
+    const access = await checkAccess(m.class_id, req.user.id);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+
+    // file_path is always a bare filename written by multer — basename() guards
+    // against path traversal even if that assumption ever changes upstream.
+    const safeName = path.basename(m.file_path);
+    const filePath = path.join(__dirname, "../../uploads", safeName);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "File not found on disk" });
+
+    const ext = (safeName.split(".").pop() || "").toLowerCase();
+    const contentType = FILE_CONTENT_TYPES[ext] || "application/octet-stream";
+    const { size: fileSize } = fs.statSync(filePath);
+
+    res.setHeader("Content-Type", contentType);
+    // "inline" (not "attachment") is what makes the browser render it in an
+    // <iframe>/<img>/<video> instead of triggering a download.
+    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(safeName)}"`);
+    res.setHeader("Accept-Ranges", "bytes");
+    // Deliberately not setting X-Frame-Options: the frontend (5173) and this API (5001)
+    // are different origins, so even SAMEORIGIN would block the <iframe>. Express doesn't
+    // set the header by default, so simply omitting it here keeps embedding allowed.
+
+    const range = req.headers.range;
+    if (range) {
+      const match = /bytes=(\d*)-(\d*)/.exec(range);
+      const start = match?.[1] ? parseInt(match[1], 10) : 0;
+      const end = match?.[2] ? parseInt(match[2], 10) : fileSize - 1;
+      if (!match || start >= fileSize || end >= fileSize || start > end) {
+        res.setHeader("Content-Range", `bytes */${fileSize}`);
+        return res.status(416).end();
+      }
+      res.status(206);
+      res.setHeader("Content-Range", `bytes ${start}-${end}/${fileSize}`);
+      res.setHeader("Content-Length", end - start + 1);
+      fs.createReadStream(filePath, { start, end }).pipe(res);
+    } else {
+      res.setHeader("Content-Length", fileSize);
+      fs.createReadStream(filePath).pipe(res);
+    }
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

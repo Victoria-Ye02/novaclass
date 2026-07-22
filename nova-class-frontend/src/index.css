@@ -26,3 +26,36 @@ body {
 button { cursor: pointer; font-family: inherit; border: none; outline: none; }
 input, textarea { font-family: inherit; outline: none; }
 a { text-decoration: none; color: inherit; }
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@keyframes overlayFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes overlayCardIn {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.material-overlay-backdrop {
+  padding: 48px 60px;
+  animation: overlayFadeIn 150ms ease-out;
+}
+
+.material-overlay-card {
+  animation: overlayCardIn 150ms ease-out;
+}
+
+@media (max-width: 640px) {
+  .material-overlay-backdrop {
+    padding: 0;
+  }
+  .material-overlay-card {
+    border-radius: 0;
+  }
+}

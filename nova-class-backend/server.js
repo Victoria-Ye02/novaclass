@@ -26,5 +26,13 @@ app.use("/api/multimodal", require("./routes/victoria/multimodal.routes"));
 
 app.get("/", (req, res) => res.json({ status: "✅ Nova Class API running", port: process.env.PORT || 5001 }));
 
+// Catches multer/fileFilter errors and any other thrown errors as clean JSON
+// instead of Express's default HTML stack-trace page.
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  console.error(err);
+  res.status(400).json({ error: err.message || "요청을 처리할 수 없습니다." });
+});
+
 const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

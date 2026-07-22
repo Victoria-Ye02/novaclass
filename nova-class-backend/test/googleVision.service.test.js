@@ -3,18 +3,37 @@ const assert = require("node:assert/strict");
 const vision = require("../services/ai/googleVision");
 
 test("extractImageContext returns bounded text labels and objects", async () => {
+  const image = Buffer.from("image");
+  const sourceText = `${"x".repeat(12000)}truncated`;
+  let request;
+
   vision.setVisionClientForTests({
-    annotateImage: async () => [{
-      fullTextAnnotation: { text: "Equation x = 2" },
-      labelAnnotations: [{ description: "Document" }],
-      localizedObjectAnnotations: [{ name: "Book" }],
-    }],
+    annotateImage: async (nextRequest) => {
+      request = nextRequest;
+      return [{
+        fullTextAnnotation: { text: sourceText },
+        labelAnnotations: [{ description: "Document" }],
+        localizedObjectAnnotations: [{ name: "Book" }],
+      }];
+    },
   });
-  assert.deepEqual(await vision.extractImageContext(Buffer.from("image")), {
-    text: "Equation x = 2",
+
+  const context = await vision.extractImageContext(image);
+
+  assert.deepEqual(request, {
+    image: { content: image },
+    features: [
+      { type: "DOCUMENT_TEXT_DETECTION" },
+      { type: "LABEL_DETECTION", maxResults: 12 },
+      { type: "OBJECT_LOCALIZATION", maxResults: 12 },
+    ],
+  });
+  assert.deepEqual(context, {
+    text: "x".repeat(12000),
     labels: ["Document"],
     objects: ["Book"],
   });
+  assert.equal(context.text.length, 12000);
 });
 
 test("detectDocumentText returns the document annotation", async () => {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
+import PdfHighlightOverlay from "./PdfHighlightOverlay";
 import "./PdfLessonViewer.css";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -8,6 +9,7 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
 ).toString();
 
 const ZOOM_LEVELS = [50, 75, 100, 125, 150, 175, 200];
+const NO_HIGHLIGHTS = [];
 
 function viewerPageWidth() {
   if (typeof window === "undefined") return 820;
@@ -30,7 +32,18 @@ export default function PdfLessonViewer({
   bookmarkError,
   onToggleBookmark,
   onDismissEmptySpace,
+  onPdfReady,
+  highlightState,
 }) {
+  const {
+    status: highlightStatus = "idle",
+    progress: highlightProgress = { completedPages: 0, totalPages: 0 },
+    highlights: allHighlights = {},
+    visible: highlightsVisible = true,
+    setVisible: setHighlightsVisible,
+    retry: retryHighlights,
+  } = highlightState || {};
+
   const [numPages, setNumPages] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
@@ -47,6 +60,7 @@ export default function PdfLessonViewer({
   const currentPageSaved = savedPages.includes(currentPage);
   const bookmarkBusy = syncingPage !== null;
   const renderedPageWidth = pageWidth * zoomPercent / 100;
+  const currentPageHighlights = allHighlights[currentPage] || NO_HIGHLIGHTS;
 
   useEffect(() => {
     const onResize = () => setPageWidth(viewerPageWidth());
@@ -54,12 +68,13 @@ export default function PdfLessonViewer({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const onDocumentLoad = useCallback(({ numPages: loadedPageCount }) => {
-    setNumPages(loadedPageCount);
+  const onDocumentLoad = useCallback((pdf) => {
+    setNumPages(pdf.numPages);
     setCurrentPage(1);
     setPageInput("1");
     setLoadError(false);
-  }, []);
+    onPdfReady?.(pdf);
+  }, [onPdfReady]);
 
   const changeZoom = useCallback((direction) => {
     setZoomPercent((currentZoom) => {
@@ -204,6 +219,40 @@ export default function PdfLessonViewer({
             +
           </button>
         </div>
+        {highlightStatus !== "idle" && (
+          <>
+            <span className="pdf-toolbar-divider" aria-hidden="true" />
+            <div className="pdf-highlight-toolbar" role="group" aria-label="AI highlight controls">
+              {highlightStatus === "failed" ? (
+                <button
+                  type="button"
+                  className="pdf-highlight-retry"
+                  onClick={() => retryHighlights?.()}
+                >
+                  AI 분석 재시도
+                </button>
+              ) : highlightStatus === "ready" ? (
+                <button
+                  type="button"
+                  className={`pdf-highlight-toggle${highlightsVisible ? " is-active" : ""}`}
+                  aria-label="Toggle AI highlights"
+                  aria-pressed={highlightsVisible}
+                  onClick={() => setHighlightsVisible?.(!highlightsVisible)}
+                >
+                  <span aria-hidden="true">✨</span> AI 하이라이트
+                </button>
+              ) : (
+                <span
+                  className="pdf-highlight-progress"
+                  role="status"
+                  aria-label="AI highlight analysis progress"
+                >
+                  AI 분석 중 {highlightProgress.completedPages}/{highlightProgress.totalPages}
+                </span>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       <div
@@ -247,6 +296,10 @@ export default function PdfLessonViewer({
                 loading={<div className="pdf-page-skeleton" style={{ width: renderedPageWidth }} />}
               />
             </Document>
+            <PdfHighlightOverlay
+              highlights={currentPageHighlights}
+              visible={highlightsVisible}
+            />
           </div>
         )}
       </div>

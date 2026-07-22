@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import API from "../../services/api";
+import { useMaterialHighlights } from "../../hooks/useMaterialHighlights";
 import MaterialPreview from "./MaterialPreview";
 
 const navigate = vi.fn();
@@ -25,11 +26,19 @@ vi.mock("../../hooks/useMaterialBookmarks", () => ({
   }),
 }));
 
+vi.mock("../../hooks/useMaterialHighlights", () => ({
+  useMaterialHighlights: vi.fn(),
+}));
+
 vi.mock("../../components/PdfLessonViewer", () => ({
-  default: ({ onDismissEmptySpace }) => (
+  default: ({ onDismissEmptySpace, highlightState, onPdfReady }) => (
     <div data-testid="controlled-pdf-viewer">
       <button type="button" onClick={() => onDismissEmptySpace?.()}>
         Click empty PDF space
+      </button>
+      <span data-testid="highlight-status">{highlightState?.status}</span>
+      <button type="button" onClick={() => onPdfReady?.({ numPages: 3, getPage: vi.fn() })}>
+        Trigger PDF ready
       </button>
     </div>
   ),
@@ -53,6 +62,16 @@ describe("MaterialPreview PDF integration", () => {
       clear: vi.fn(),
     });
     API.get.mockResolvedValue({ data: pdfMaterial() });
+    useMaterialHighlights.mockReturnValue({
+      status: "ready",
+      progress: { completedPages: 5, totalPages: 5 },
+      highlights: {},
+      visible: true,
+      setVisible: vi.fn(),
+      preparePdf: vi.fn(),
+      retry: vi.fn(),
+      error: null,
+    });
   });
 
   afterEach(() => {
@@ -104,5 +123,34 @@ describe("MaterialPreview PDF integration", () => {
 
     await waitFor(() => expect(screen.getByRole("img", { name: "Diagram" })).toBeTruthy());
     expect(screen.queryByTestId("controlled-pdf-viewer")).toBeNull();
+  });
+
+  it("connects useMaterialHighlights for the current material and passes its state to the viewer", async () => {
+    render(<MaterialPreview />);
+    await screen.findByTestId("controlled-pdf-viewer");
+
+    expect(useMaterialHighlights).toHaveBeenCalledWith({ materialId: "9", enabled: true });
+    expect(screen.getByTestId("highlight-status").textContent).toBe("ready");
+  });
+
+  it("wires onPdfReady to the hook's preparePdf callback", async () => {
+    const preparePdf = vi.fn();
+    useMaterialHighlights.mockReturnValue({
+      status: "processing",
+      progress: { completedPages: 1, totalPages: 3 },
+      highlights: {},
+      visible: true,
+      setVisible: vi.fn(),
+      preparePdf,
+      retry: vi.fn(),
+      error: null,
+    });
+
+    render(<MaterialPreview />);
+    await screen.findByTestId("controlled-pdf-viewer");
+
+    fireEvent.click(screen.getByRole("button", { name: "Trigger PDF ready" }));
+
+    expect(preparePdf).toHaveBeenCalledWith({ numPages: 3, getPage: expect.any(Function) });
   });
 });

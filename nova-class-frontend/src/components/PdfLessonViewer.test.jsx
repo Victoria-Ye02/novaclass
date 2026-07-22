@@ -7,7 +7,10 @@ vi.mock("react-pdf", async () => {
   return {
     pdfjs: { GlobalWorkerOptions: { workerSrc: "" } },
     Document: ({ children, onLoadSuccess }) => {
-      React.useEffect(() => onLoadSuccess({ numPages: 5 }), [onLoadSuccess]);
+      React.useEffect(
+        () => onLoadSuccess({ numPages: 5, getPage: vi.fn() }),
+        [onLoadSuccess]
+      );
       return <div data-testid="pdf-document">{children}</div>;
     },
     Page: ({ pageNumber, width }) => (
@@ -19,6 +22,20 @@ vi.mock("react-pdf", async () => {
 });
 
 afterEach(cleanup);
+
+function makeHighlightState(overrides = {}) {
+  return {
+    status: "ready",
+    progress: { completedPages: 5, totalPages: 5 },
+    highlights: {},
+    visible: true,
+    setVisible: vi.fn(),
+    preparePdf: vi.fn(),
+    retry: vi.fn(),
+    error: null,
+    ...overrides,
+  };
+}
 
 function renderViewer(overrides = {}) {
   const props = {
@@ -243,5 +260,106 @@ describe("PdfLessonViewer", () => {
     }
 
     expect(Number(page.dataset.width)).toBe(baseWidth * 2);
+  });
+
+  describe("highlight integration", () => {
+    it("calls onPdfReady with the loaded pdf proxy", async () => {
+      const onPdfReady = vi.fn();
+      renderViewer({ onPdfReady, highlightState: makeHighlightState() });
+      await screen.findByTestId("rendered-page-1");
+
+      expect(onPdfReady).toHaveBeenCalledTimes(1);
+      const [pdfArg] = onPdfReady.mock.calls[0];
+      expect(pdfArg.numPages).toBe(5);
+      expect(typeof pdfArg.getPage).toBe("function");
+    });
+
+    it("renders only the current page's highlight regions", async () => {
+      const highlightState = makeHighlightState({
+        highlights: {
+          1: [{
+            id: 1, excerpt: "Page one highlight", explanation: "Explains page one",
+            category: "concept", rects: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.05 }],
+          }],
+          2: [{
+            id: 2, excerpt: "Page two highlight", explanation: "Explains page two",
+            category: "concept", rects: [{ x: 0.15, y: 0.15, width: 0.2, height: 0.05 }],
+          }],
+        },
+      });
+      renderViewer({ highlightState });
+      await screen.findByTestId("rendered-page-1");
+
+      expect(screen.getByRole("button", { name: "Page one highlight" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Page two highlight" })).toBeNull();
+
+      fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+
+      expect(screen.getByRole("button", { name: "Page two highlight" })).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Page one highlight" })).toBeNull();
+    });
+
+    it("shows analysis progress in the toolbar while processing", async () => {
+      renderViewer({
+        highlightState: makeHighlightState({
+          status: "processing",
+          progress: { completedPages: 2, totalPages: 5 },
+        }),
+      });
+      await screen.findByTestId("rendered-page-1");
+
+      expect(
+        screen.getByRole("status", { name: "AI highlight analysis progress" }).textContent
+      ).toContain("2/5");
+    });
+
+    it("toggles ready highlights off and on from the toolbar", async () => {
+      const setVisible = vi.fn();
+      const highlightState = makeHighlightState({
+        visible: true,
+        setVisible,
+        highlights: {
+          1: [{
+            id: 1, excerpt: "Page one highlight", explanation: "Explains page one",
+            category: "concept", rects: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.05 }],
+          }],
+        },
+      });
+      renderViewer({ highlightState });
+      await screen.findByTestId("rendered-page-1");
+
+      expect(screen.getByRole("button", { name: "Page one highlight" })).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Toggle AI highlights" }));
+      expect(setVisible).toHaveBeenCalledWith(false);
+    });
+
+    it("hides highlight regions when highlightState.visible is false", async () => {
+      const highlightState = makeHighlightState({
+        visible: false,
+        highlights: {
+          1: [{
+            id: 1, excerpt: "Page one highlight", explanation: "Explains page one",
+            category: "concept", rects: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.05 }],
+          }],
+        },
+      });
+      renderViewer({ highlightState });
+      await screen.findByTestId("rendered-page-1");
+
+      expect(screen.queryByRole("button", { name: "Page one highlight" })).toBeNull();
+    });
+
+    it("shows a retry affordance on failure without removing the PDF page", async () => {
+      const retry = vi.fn();
+      renderViewer({ highlightState: makeHighlightState({ status: "failed", retry }) });
+      await screen.findByTestId("rendered-page-1");
+
+      const retryButton = screen.getByRole("button", { name: "AI 분석 재시도" });
+      fireEvent.click(retryButton);
+
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(screen.getByTestId("rendered-page-1")).toBeTruthy();
+    });
   });
 });

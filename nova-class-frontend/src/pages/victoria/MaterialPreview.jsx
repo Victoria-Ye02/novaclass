@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import API from "../../services/api";
 import PdfLessonViewer from "../../components/PdfLessonViewer";
 import { useMaterialBookmarks } from "../../hooks/useMaterialBookmarks";
+import { useMaterialHighlights } from "../../hooks/useMaterialHighlights";
 
 const API_ORIGIN = "http://localhost:5001";
 
@@ -96,6 +97,7 @@ export default function MaterialPreview({ isOverlay = false }) {
     materialId,
     enabled: isPdf && Boolean(fileUrl),
   });
+  const highlightState = useMaterialHighlights({ materialId, enabled: isPdf });
 
   const content = (
     <>
@@ -144,6 +146,8 @@ export default function MaterialPreview({ isOverlay = false }) {
             bookmarkError={bookmarkError}
             onToggleBookmark={toggleBookmark}
             onDismissEmptySpace={isOverlay ? goBack : undefined}
+            highlightState={highlightState}
+            onPdfReady={highlightState.preparePdf}
           />
         ) : isImage ? (
           <div style={centerMsg}>

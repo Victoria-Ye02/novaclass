@@ -1,10 +1,9 @@
-const Groq = require("groq-sdk");
 const fs = require("fs");
 const path = require("path");
 const pdfParse = require("pdf-parse/lib/pdf-parse.js");
 const mammoth = require("mammoth");
-
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const { completeText, transcribeAudio } = require("../../services/ai/groqText");
+const { extractImageContext } = require("../../services/ai/googleVision");
 
 exports.analyzeFile = async (req, res) => {
   const { question } = req.body;
@@ -22,18 +21,16 @@ exports.analyzeFile = async (req, res) => {
     // ── IMAGE ──
     if (mime.startsWith("image/")) {
       const imageData = fs.readFileSync(filePath);
-      const base64 = imageData.toString("base64");
-
-      const response = await groq.chat.completions.create({
-        model: "meta-llama/llama-4-scout-17b-16e-instruct",
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image_url", image_url: { url: `data:${mime};base64,${base64}` } },
-            { type: "text", text: question || "Describe this image in detail. If it contains text, extract it. If it's a study material or assignment, explain what it shows." },
-          ],
-        }],
-        max_tokens: 1024,
+      const imageContext = await extractImageContext(imageData);
+      const response = await completeText({
+        messages: [
+          { role: "system", content: "You are a helpful study assistant. Analyze extracted image context and answer clearly." },
+          {
+            role: "user",
+            content: `Image text:\n${imageContext.text}\n\nLabels: ${imageContext.labels.join(", ")}\nObjects: ${imageContext.objects.join(", ")}\n\n${question || "Describe this image in detail. If it contains text, explain it. If it's a study material or assignment, explain what it shows."}`,
+          },
+        ],
+        maxTokens: 1024,
       });
 
       result = { type: "image", answer: response.choices[0].message.content };
@@ -41,20 +38,18 @@ exports.analyzeFile = async (req, res) => {
 
     // ── AUDIO ──
     else if (mime.startsWith("audio/") || [".mp3", ".mp4", ".wav", ".m4a", ".ogg", ".flac", ".webm"].includes(ext)) {
-      const transcription = await groq.audio.transcriptions.create({
+      const transcription = await transcribeAudio({
         file: fs.createReadStream(filePath),
-        model: "whisper-large-v3",
-        response_format: "text",
+        responseFormat: "text",
       });
 
       if (question && question.trim()) {
-        const chat = await groq.chat.completions.create({
-          model: "llama-3.3-70b-versatile",
+        const chat = await completeText({
           messages: [
             { role: "system", content: "You are a helpful study assistant." },
             { role: "user", content: `Audio transcription:\n${transcription}\n\nQuestion: ${question}` },
           ],
-          max_tokens: 1024,
+          maxTokens: 1024,
         });
         result = {
           type: "audio",
@@ -72,13 +67,12 @@ exports.analyzeFile = async (req, res) => {
       const pdfData = await pdfParse(buffer);
       const text = pdfData.text.slice(0, 12000);
 
-      const chat = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
+      const chat = await completeText({
         messages: [
           { role: "system", content: "You are a helpful study assistant. Analyze documents and answer questions clearly." },
           { role: "user", content: `Document content:\n${text}\n\n${question || "Summarize this document."}` },
         ],
-        max_tokens: 1024,
+        maxTokens: 1024,
       });
 
       result = { type: "pdf", answer: chat.choices[0].message.content };
@@ -89,13 +83,12 @@ exports.analyzeFile = async (req, res) => {
       const { value: text } = await mammoth.extractRawText({ path: filePath });
       const trimmed = text.slice(0, 12000);
 
-      const chat = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
+      const chat = await completeText({
         messages: [
           { role: "system", content: "You are a helpful study assistant. Analyze documents and answer questions clearly." },
           { role: "user", content: `Document content:\n${trimmed}\n\n${question || "Summarize this document."}` },
         ],
-        max_tokens: 1024,
+        maxTokens: 1024,
       });
 
       result = { type: "docx", answer: chat.choices[0].message.content };

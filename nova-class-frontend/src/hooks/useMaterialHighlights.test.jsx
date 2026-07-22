@@ -226,9 +226,13 @@ describe("useMaterialHighlights", () => {
     expect(API.get).toHaveBeenCalledTimes(1);
   });
 
-  it("exposes retry after a failed analysis and resumes polling", async () => {
+  it("exposes retry after a failed analysis and resumes polling (all pages submitted, backend-side failure)", async () => {
+    // All pages were already submitted (submittedPages covers every totalPages
+    // slot) — the analysis itself failed server-side (e.g. the AI batch
+    // failed), which is the scenario the backend /retry endpoint is designed
+    // for and can service without any local pipeline work.
     API.get.mockResolvedValueOnce({
-      data: { status: "failed", progress: { completedPages: 1, totalPages: 2 }, submittedPages: [1], highlights: {} },
+      data: { status: "failed", progress: { completedPages: 2, totalPages: 2 }, submittedPages: [1, 2], highlights: {} },
     });
 
     const { result } = renderHook(() => useMaterialHighlights({ materialId: "7", enabled: true }));
@@ -237,10 +241,10 @@ describe("useMaterialHighlights", () => {
     expect(typeof result.current.retry).toBe("function");
 
     API.post.mockResolvedValueOnce({
-      data: { analysisId: 3, status: "processing", progress: { completedPages: 1, totalPages: 2 } },
+      data: { analysisId: 3, status: "processing", progress: { completedPages: 2, totalPages: 2 } },
     });
     API.get.mockResolvedValueOnce({
-      data: { status: "processing", progress: { completedPages: 1, totalPages: 2 }, submittedPages: [1], highlights: {} },
+      data: { status: "processing", progress: { completedPages: 2, totalPages: 2 }, submittedPages: [1, 2], highlights: {} },
     });
 
     await act(async () => {
@@ -254,6 +258,86 @@ describe("useMaterialHighlights", () => {
     );
     expect(result.current.status).toBe("processing");
     expect(result.current.error).toBeNull();
+  });
+
+  it("resumes the local pipeline on retry when a page submission failed before all pages were submitted", async () => {
+    // Page 1 submits successfully; page 2's submission call fails permanently
+    // (retryRequest's own retries are exhausted) before every page was ever
+    // submitted, leaving the backend analysis in a state that would 409 on
+    // POST /retry. Calling retry() should instead resume the local pipeline
+    // (start -> submit missing pages -> complete) and succeed.
+    API.get.mockResolvedValueOnce(missingResponse());
+
+    const persistedPages = new Set();
+    let pageAttempts = 0;
+    API.post.mockImplementation((url, body) => {
+      if (url.endsWith("/highlights/start")) {
+        return Promise.resolve({
+          data: {
+            analysisId: 9,
+            status: "pending",
+            progress: { completedPages: persistedPages.size, totalPages: 2 },
+            submittedPages: Array.from(persistedPages),
+          },
+        });
+      }
+      if (url.endsWith("/highlights/pages")) {
+        pageAttempts += 1;
+        if (pageAttempts === 2) {
+          return Promise.reject(Object.assign(new Error("network down"), { code: "ERR_NETWORK" }));
+        }
+        const pageNumber = Number(body.get("pageNumber"));
+        persistedPages.add(pageNumber);
+        return Promise.resolve({ data: { analysisId: 9, pageNumber, sourceType: "text", candidateCount: 1 } });
+      }
+      if (url.endsWith("/highlights/complete")) {
+        return Promise.resolve({ data: { analysisId: 9, status: "processing" } });
+      }
+      if (url.endsWith("/highlights/retry")) {
+        throw new Error("backend /retry must not be called when pages are incomplete");
+      }
+      throw new Error(`Unexpected POST ${url}`);
+    });
+    extractPdfPage.mockImplementation((_pdf, pageNumber) => Promise.resolve(textCandidate(pageNumber)));
+
+    const { result } = renderHook(() => useMaterialHighlights({ materialId: "20", enabled: true }));
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+
+    await act(async () => {
+      await result.current.preparePdf({ numPages: 2 });
+    });
+
+    expect(result.current.status).toBe("failed");
+    expect(result.current.error).toBeTruthy();
+    expect(persistedPages.has(1)).toBe(true);
+    expect(persistedPages.has(2)).toBe(false);
+
+    API.get.mockResolvedValueOnce({
+      data: {
+        status: "ready",
+        progress: { completedPages: 2, totalPages: 2 },
+        submittedPages: [1, 2],
+        highlights: { 2: [{ id: 4, excerpt: "e", explanation: "x", category: "concept", rects: [] }] },
+      },
+    });
+
+    await act(async () => {
+      await result.current.retry();
+    });
+
+    expect(API.post).not.toHaveBeenCalledWith(
+      "/classroom/materials/20/highlights/retry",
+      expect.anything(),
+      expect.anything()
+    );
+    const startCalls = API.post.mock.calls.filter(([url]) => url.endsWith("/highlights/start"));
+    expect(startCalls).toHaveLength(2);
+    expect(extractPdfPage).toHaveBeenCalledWith(expect.anything(), 1);
+    expect(extractPdfPage.mock.calls.filter(([, pageNumber]) => pageNumber === 2)).toHaveLength(2);
+    expect(result.current.status).toBe("ready");
+    expect(result.current.highlights).toEqual({
+      2: [{ id: 4, excerpt: "e", explanation: "x", category: "concept", rects: [] }],
+    });
   });
 
   it("defaults visibility to true and allows toggling", async () => {
@@ -292,6 +376,67 @@ describe("useMaterialHighlights", () => {
       await Promise.all([firstCall, secondCall]);
     });
 
+    const startCalls = API.post.mock.calls.filter(([url]) => url.endsWith("/highlights/start"));
+    expect(startCalls).toHaveLength(1);
+  });
+
+  it("returns a promise from preparePdf that only settles once the pipeline it triggers finishes, even when called before the initial cache-check GET resolves", async () => {
+    const deferredGet = createDeferred();
+    API.get.mockReturnValueOnce(deferredGet.promise);
+    API.get.mockResolvedValueOnce({
+      data: {
+        status: "ready",
+        progress: { completedPages: 1, totalPages: 1 },
+        submittedPages: [1],
+        highlights: { 1: [{ id: 7, excerpt: "e", explanation: "x", category: "concept", rects: [] }] },
+      },
+    });
+    API.post.mockImplementation((url) => {
+      if (url.endsWith("/highlights/start")) {
+        return Promise.resolve({
+          data: { analysisId: 6, status: "pending", progress: { completedPages: 0, totalPages: 1 }, submittedPages: [] },
+        });
+      }
+      if (url.endsWith("/highlights/pages")) {
+        return Promise.resolve({ data: { analysisId: 6, pageNumber: 1, sourceType: "text", candidateCount: 1 } });
+      }
+      if (url.endsWith("/highlights/complete")) {
+        return Promise.resolve({ data: { analysisId: 6, status: "processing" } });
+      }
+      throw new Error(`Unexpected POST ${url}`);
+    });
+    extractPdfPage.mockResolvedValue(textCandidate(1));
+
+    const { result } = renderHook(() => useMaterialHighlights({ materialId: "30", enabled: true }));
+
+    let settled = false;
+    let preparePromise;
+    act(() => {
+      // Called before the mount effect's cache-check GET has resolved.
+      preparePromise = result.current.preparePdf({ numPages: 1 });
+    });
+    preparePromise.then(() => {
+      settled = true;
+    });
+
+    // Flush pending microtasks without resolving the cache-check GET yet —
+    // the returned promise must not have settled immediately.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(settled).toBe(false);
+
+    await act(async () => {
+      deferredGet.resolve(missingResponse());
+      await preparePromise;
+    });
+
+    expect(settled).toBe(true);
+    expect(result.current.status).toBe("ready");
+    expect(result.current.highlights).toEqual({
+      1: [{ id: 7, excerpt: "e", explanation: "x", category: "concept", rects: [] }],
+    });
     const startCalls = API.post.mock.calls.filter(([url]) => url.endsWith("/highlights/start"));
     expect(startCalls).toHaveLength(1);
   });

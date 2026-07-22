@@ -41,6 +41,23 @@ function shouldPoll(status, preparation) {
   return false;
 }
 
+function createAwaitedPipelinePromise(preparation) {
+  if (!preparation.awaitedPipelinePromise) {
+    preparation.awaitedPipelinePromise = new Promise((resolve) => {
+      preparation.resolveAwaitedPipelinePromise = resolve;
+    });
+  }
+  return preparation.awaitedPipelinePromise;
+}
+
+function resolveAwaitedPipelinePromise(preparation) {
+  if (preparation.resolveAwaitedPipelinePromise) {
+    const resolve = preparation.resolveAwaitedPipelinePromise;
+    preparation.resolveAwaitedPipelinePromise = null;
+    resolve();
+  }
+}
+
 export function useMaterialHighlights({ materialId, enabled }) {
   const [state, setState] = useState(INITIAL_STATE);
   const [visible, setVisible] = useState(true);
@@ -76,6 +93,12 @@ export function useMaterialHighlights({ materialId, enabled }) {
     const status = mapStatus(data?.status);
     preparation.cacheStatus = data?.status;
     preparation.cacheChecked = true;
+    if (Number.isFinite(Number(data?.progress?.totalPages)) && Number(data?.progress?.totalPages) > 0) {
+      preparation.totalPages = Number(data.progress.totalPages);
+    }
+    if (Array.isArray(data?.submittedPages)) {
+      preparation.submittedPageNumbers = new Set(data.submittedPages);
+    }
     setStateIfCurrent(preparation, {
       materialId: preparation.materialId,
       status,
@@ -116,6 +139,8 @@ export function useMaterialHighlights({ materialId, enabled }) {
 
       const analysisId = startData.analysisId;
       const alreadySubmitted = new Set(startData.submittedPages || []);
+      preparation.totalPages = totalPages;
+      preparation.submittedPageNumbers = new Set(alreadySubmitted);
       let submittedCount = alreadySubmitted.size;
       setStateIfCurrent(preparation, (previous) => ({
         ...previous,
@@ -140,6 +165,7 @@ export function useMaterialHighlights({ materialId, enabled }) {
         );
 
         submittedCount += 1;
+        preparation.submittedPageNumbers.add(pageNumber);
         setStateIfCurrent(preparation, (previous) => ({
           ...previous,
           progress: { completedPages: submittedCount, totalPages },
@@ -173,11 +199,19 @@ export function useMaterialHighlights({ materialId, enabled }) {
     if (!preparation.cacheChecked) return;
     if (preparation.started) return;
     if (!preparation.pendingPdf) return;
-    if (!["missing", "pending"].includes(preparation.cacheStatus)) return;
+    if (!["missing", "pending"].includes(preparation.cacheStatus)) {
+      resolveAwaitedPipelinePromise(preparation);
+      return;
+    }
 
     preparation.started = true;
     clearPollTimer();
-    preparation.pipelinePromise = runPreparationPipeline(preparation, preparation.pendingPdf, controller);
+    const pipelinePromise = runPreparationPipeline(preparation, preparation.pendingPdf, controller);
+    preparation.pipelinePromise = pipelinePromise;
+    pipelinePromise.then(
+      () => resolveAwaitedPipelinePromise(preparation),
+      () => resolveAwaitedPipelinePromise(preparation)
+    );
   }, [clearPollTimer, runPreparationPipeline]);
 
   useEffect(() => {
@@ -198,6 +232,10 @@ export function useMaterialHighlights({ materialId, enabled }) {
       started: false,
       pendingPdf: null,
       pipelinePromise: null,
+      totalPages: 0,
+      submittedPageNumbers: new Set(),
+      awaitedPipelinePromise: null,
+      resolveAwaitedPipelinePromise: null,
     };
     preparationRef.current = preparation;
 
@@ -231,18 +269,46 @@ export function useMaterialHighlights({ materialId, enabled }) {
     if (!preparation || !controller || controller.signal.aborted || !pdf) {
       return Promise.resolve();
     }
-    if (preparation.pendingPdf) {
-      return preparation.pipelinePromise || Promise.resolve();
+
+    if (!preparation.pendingPdf) {
+      preparation.pendingPdf = pdf;
+      maybeStartPreparation(preparation, controller);
     }
-    preparation.pendingPdf = pdf;
-    maybeStartPreparation(preparation, controller);
-    return preparation.pipelinePromise || Promise.resolve();
+
+    // If the pipeline has already started, its own promise tracks completion.
+    if (preparation.pipelinePromise) return preparation.pipelinePromise;
+    // If the cache check has already resolved (synchronously, within the call
+    // above, or from an earlier call), the "start or not" decision is final —
+    // nothing further will ever run, so there is nothing left to await.
+    if (preparation.cacheChecked) return Promise.resolve();
+    // The cache check is still in flight: return a promise that settles once
+    // the pipeline this call triggers (started later, from the cache-check
+    // GET's continuation) actually finishes — not an immediately-resolved one.
+    return createAwaitedPipelinePromise(preparation);
   }, [maybeStartPreparation]);
 
   const retry = useCallback(async () => {
     const preparation = preparationRef.current;
     const controller = lifecycleControllerRef.current;
     if (!preparation || !controller || controller.signal.aborted) return;
+
+    const totalPages = preparation.totalPages || 0;
+    const submittedCount = preparation.submittedPageNumbers ? preparation.submittedPageNumbers.size : 0;
+    const pagesIncomplete = totalPages > 0 && submittedCount < totalPages;
+
+    // If pages were never fully submitted (a local page-submission call failed
+    // permanently before the pipeline finished), the backend /retry endpoint
+    // will 409 ("All PDF pages must be submitted before analysis"). The
+    // pipeline itself (start -> submit missing pages -> complete) is
+    // idempotent server-side, so simply re-running it resumes correctly. Only
+    // take this path when we still have the pdf needed to extract pages.
+    if (pagesIncomplete && preparation.pendingPdf) {
+      clearPollTimer();
+      const pipelinePromise = runPreparationPipeline(preparation, preparation.pendingPdf, controller);
+      preparation.pipelinePromise = pipelinePromise;
+      await pipelinePromise;
+      return;
+    }
 
     clearPollTimer();
     setStateIfCurrent(preparation, (previous) => ({ ...previous, status: "processing", error: null }));
@@ -266,7 +332,7 @@ export function useMaterialHighlights({ materialId, enabled }) {
         error: HIGHLIGHT_FAILURE_MESSAGE,
       }));
     }
-  }, [clearPollTimer, refreshStatus, setStateIfCurrent]);
+  }, [clearPollTimer, refreshStatus, runPreparationPipeline, setStateIfCurrent]);
 
   const isActive = Boolean(enabled && materialId);
   const stateIsCurrent = isActive && String(state.materialId) === String(materialId);

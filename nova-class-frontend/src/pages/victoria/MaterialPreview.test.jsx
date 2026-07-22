@@ -78,6 +78,18 @@ describe("MaterialPreview PDF integration", () => {
     expect(navigate).not.toHaveBeenCalled();
   });
 
+  it("fills the viewport in overlay mode", async () => {
+    render(<MaterialPreview isOverlay />);
+
+    await screen.findByTestId("controlled-pdf-viewer");
+    const card = screen.getByTestId("material-overlay-card");
+
+    expect(card.style.width).toBe("100vw");
+    expect(card.style.height).toBe("100dvh");
+    expect(card.style.maxWidth).toBe("none");
+    expect(card.style.borderRadius).toBe("0px");
+  });
+
   it("preserves the existing image preview path", async () => {
     API.get.mockResolvedValue({
       data: {

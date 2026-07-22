@@ -43,19 +43,10 @@ a { text-decoration: none; color: inherit; }
 }
 
 .material-overlay-backdrop {
-  padding: 48px 60px;
+  padding: 0;
   animation: overlayFadeIn 150ms ease-out;
 }
 
 .material-overlay-card {
   animation: overlayCardIn 150ms ease-out;
-}
-
-@media (max-width: 640px) {
-  .material-overlay-backdrop {
-    padding: 0;
-  }
-  .material-overlay-card {
-    border-radius: 0;
-  }
 }

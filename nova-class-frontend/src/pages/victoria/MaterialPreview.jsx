@@ -169,7 +169,7 @@ export default function MaterialPreview({ isOverlay = false }) {
   if (isOverlay) {
     return (
       <div className="material-overlay-backdrop" style={backdrop} onClick={goBack}>
-        <div className="material-overlay-card" style={overlayCard} onClick={e => e.stopPropagation()}>
+        <div className="material-overlay-card" data-testid="material-overlay-card" style={overlayCard} onClick={e => e.stopPropagation()}>
           {content}
         </div>
       </div>
@@ -196,8 +196,8 @@ const backdrop = {
 };
 
 const overlayCard = {
-  width: "100%", maxWidth: "1100px", height: "100%",
-  background: "#1a1a2e", borderRadius: "16px", boxShadow: "0 25px 50px -12px rgba(0,0,0,0.5)",
+  width: "100vw", maxWidth: "none", height: "100dvh",
+  background: "#1a1a2e", borderRadius: 0, boxShadow: "none",
   overflow: "hidden", cursor: "default",
   display: "flex", flexDirection: "column",
 };

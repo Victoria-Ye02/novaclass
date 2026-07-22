@@ -9,6 +9,7 @@ const grades = require("../../controllers/victoria/grades.controller");
 const resources = require("../../controllers/victoria/resources.controller");
 const attendance = require("../../controllers/victoria/attendance.controller");
 const meeting = require("../../controllers/victoria/meeting.controller");
+const bookmarks = require("../../controllers/victoria/bookmark.controller");
 
 router.post("/classes",                     auth, ctrl.createClass);
 router.get("/classes",                      auth, ctrl.listClasses);
@@ -21,6 +22,9 @@ router.get("/materials/:materialId/summary", auth, ctrl.getSummary);
 router.post("/materials/:materialId/ai",    auth, ctrl.materialAI);
 router.get("/materials/:materialId",         auth, ctrl.getMaterial);
 router.get("/materials/:materialId/file",    auth.viaQueryOrHeader, ctrl.getMaterialFile);
+router.get("/materials/:materialId/bookmarks", auth, bookmarks.listBookmarks);
+router.post("/materials/:materialId/bookmarks", auth, bookmarks.saveBookmark);
+router.delete("/materials/:materialId/bookmarks/:pageNumber", auth, bookmarks.removeBookmark);
 
 router.get("/classes/:id/posts",           auth, posts.getPosts);
 router.post("/classes/:id/posts",          auth, posts.createPost);

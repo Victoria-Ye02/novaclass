@@ -1,5 +1,6 @@
 const mysql = require("mysql2/promise");
-require("dotenv").config({ path: "../.env" });
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, "../.env") });
 
 async function setup() {
   const conn = await mysql.createConnection({
@@ -71,6 +72,19 @@ async function setup() {
       summary_detailed TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (material_id) REFERENCES materials(id)
+    )
+  `);
+
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS material_page_bookmarks (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      material_id INT NOT NULL,
+      page_number INT UNSIGNED NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_material_page_bookmark (user_id, material_id, page_number),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE
     )
   `);
 

@@ -36,5 +36,12 @@ const anyFile = multer({
   limits: { fileSize: 50 * 1024 * 1024 },
 });
 
+const highlightPageImage = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => cb(null, ["image/png", "image/jpeg"].includes(file.mimetype)),
+});
+
 module.exports = documentUpload;
 module.exports.anyFile = anyFile;
+module.exports.highlightPageImage = highlightPageImage;

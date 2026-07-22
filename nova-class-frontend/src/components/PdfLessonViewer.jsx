@@ -7,6 +7,8 @@ pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url
 ).toString();
 
+const ZOOM_LEVELS = [50, 75, 100, 125, 150, 175, 200];
+
 function viewerPageWidth() {
   if (typeof window === "undefined") return 820;
   return window.innerWidth <= 640
@@ -33,6 +35,7 @@ export default function PdfLessonViewer({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageInput, setPageInput] = useState("1");
   const [pageWidth, setPageWidth] = useState(viewerPageWidth);
+  const [zoomPercent, setZoomPercent] = useState(100);
   const [savedPagesOpen, setSavedPagesOpen] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
@@ -57,6 +60,19 @@ export default function PdfLessonViewer({
     setLoadError(false);
   }, []);
 
+  const changeZoom = useCallback((direction) => {
+    setZoomPercent((currentZoom) => {
+      const currentIndex = ZOOM_LEVELS.indexOf(currentZoom);
+      const nextIndex = Math.min(
+        Math.max(currentIndex + direction, 0),
+        ZOOM_LEVELS.length - 1
+      );
+      return ZOOM_LEVELS[nextIndex];
+    });
+  }, []);
+
+  const resetZoom = useCallback(() => setZoomPercent(100), []);
+
   const goToPage = useCallback((requestedPage) => {
     if (!numPages) return;
     const parsed = Number.parseInt(requestedPage, 10);
@@ -72,14 +88,31 @@ export default function PdfLessonViewer({
       if (
         savedPagesOpen ||
         event.defaultPrevented ||
-        event.metaKey ||
-        event.ctrlKey ||
-        event.altKey ||
-        event.shiftKey ||
         isEditableTarget(event.target)
       ) {
         return;
       }
+
+      const zoomModifier = event.metaKey || event.ctrlKey;
+      if (zoomModifier && !event.altKey) {
+        if (event.key === "+" || event.key === "=") {
+          event.preventDefault();
+          changeZoom(1);
+          return;
+        }
+        if (event.key === "-") {
+          event.preventDefault();
+          changeZoom(-1);
+          return;
+        }
+        if (event.key === "0") {
+          event.preventDefault();
+          resetZoom();
+          return;
+        }
+      }
+
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
 
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
@@ -88,7 +121,7 @@ export default function PdfLessonViewer({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentPage, goToPage, savedPagesOpen]);
+  }, [changeZoom, currentPage, goToPage, resetZoom, savedPagesOpen]);
 
   function commitPageInput() {
     goToPage(pageInput);
@@ -138,6 +171,38 @@ export default function PdfLessonViewer({
         >
           →
         </button>
+        <span className="pdf-toolbar-divider" aria-hidden="true" />
+        <div className="pdf-zoom-controls" role="group" aria-label="PDF zoom controls">
+          <button
+            type="button"
+            className="pdf-toolbar-button pdf-zoom-step"
+            aria-label="Zoom out"
+            aria-keyshortcuts="Control+- Meta+-"
+            disabled={zoomPercent === ZOOM_LEVELS[0]}
+            onClick={() => changeZoom(-1)}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            className="pdf-zoom-reset"
+            aria-label="Reset zoom to 100%"
+            aria-keyshortcuts="Control+0 Meta+0"
+            onClick={resetZoom}
+          >
+            {zoomPercent}%
+          </button>
+          <button
+            type="button"
+            className="pdf-toolbar-button pdf-zoom-step"
+            aria-label="Zoom in"
+            aria-keyshortcuts="Control+= Meta+="
+            disabled={zoomPercent === ZOOM_LEVELS.at(-1)}
+            onClick={() => changeZoom(1)}
+          >
+            +
+          </button>
+        </div>
       </div>
 
       <div
@@ -176,6 +241,7 @@ export default function PdfLessonViewer({
               <Page
                 pageNumber={currentPage}
                 width={pageWidth}
+                scale={zoomPercent / 100}
                 renderAnnotationLayer={false}
                 renderTextLayer={false}
                 loading={<div className="pdf-page-skeleton" style={{ width: pageWidth }} />}

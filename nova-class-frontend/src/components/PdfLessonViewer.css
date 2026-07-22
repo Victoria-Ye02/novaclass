@@ -43,6 +43,42 @@
   opacity: 0.35;
 }
 
+.pdf-toolbar-divider {
+  width: 1px;
+  height: 24px;
+  margin: 0 2px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.pdf-zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pdf-zoom-step {
+  font-size: 19px;
+  font-weight: 700;
+}
+
+.pdf-zoom-reset {
+  min-width: 58px;
+  height: 36px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.2);
+  color: #fff;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+}
+
+.pdf-zoom-reset:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.12);
+}
+
 .pdf-page-control {
   display: flex;
   align-items: center;
@@ -64,6 +100,7 @@
 
 .pdf-page-control input:focus-visible,
 .pdf-toolbar-button:focus-visible,
+.pdf-zoom-reset:focus-visible,
 .pdf-heart-button:focus-visible,
 .pdf-saved-pages-button:focus-visible,
 .pdf-saved-pages-panel button:focus-visible {
@@ -344,6 +381,42 @@
 }
 
 @media (max-width: 640px) {
+  .pdf-viewer-toolbar {
+    gap: 5px;
+    padding: 0 6px;
+  }
+
+  .pdf-toolbar-button,
+  .pdf-zoom-reset {
+    width: 32px;
+    min-width: 32px;
+    height: 32px;
+  }
+
+  .pdf-page-control {
+    gap: 5px;
+  }
+
+  .pdf-page-control input {
+    width: 42px;
+    height: 32px;
+  }
+
+  .pdf-toolbar-divider {
+    margin: 0;
+  }
+
+  .pdf-zoom-controls {
+    gap: 4px;
+  }
+
+  .pdf-zoom-reset {
+    width: 50px;
+    min-width: 50px;
+    padding: 0 4px;
+    font-size: 11px;
+  }
+
   .pdf-viewer-background {
     padding: 16px 16px 92px;
   }

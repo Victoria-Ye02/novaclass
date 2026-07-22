@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import API from "../../services/api";
 import PdfLessonViewer from "../../components/PdfLessonViewer";
@@ -12,6 +12,11 @@ const FILE_TYPE_LABEL = {
   mp4: "Video", webm: "Video",
 };
 
+async function fetchMaterial(materialId) {
+  const { data } = await API.get(`/classroom/materials/${materialId}`);
+  return data;
+}
+
 export default function MaterialPreview({ isOverlay = false }) {
   const { id, materialId } = useParams();
   const navigate = useNavigate();
@@ -19,7 +24,35 @@ export default function MaterialPreview({ isOverlay = false }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
-  useEffect(() => { load(); }, [materialId]);
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(false);
+    try {
+      setMaterial(await fetchMaterial(materialId));
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, [materialId]);
+
+  useEffect(() => {
+    let active = true;
+    fetchMaterial(materialId)
+      .then((data) => {
+        if (active) {
+          setMaterial(data);
+          setError(false);
+        }
+      })
+      .catch(() => {
+        if (active) setError(true);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => { active = false; };
+  }, [materialId]);
 
   // Overlay mode: closing goes back to whatever pushed this route (the classroom
   // page underneath). Standalone mode (direct URL / refresh — no history to return
@@ -44,19 +77,6 @@ export default function MaterialPreview({ isOverlay = false }) {
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = prevOverflow; };
   }, [isOverlay]);
-
-  async function load() {
-    setLoading(true);
-    setError(false);
-    try {
-      const { data } = await API.get(`/classroom/materials/${materialId}`);
-      setMaterial(data);
-    } catch {
-      setError(true);
-    } finally {
-      setLoading(false);
-    }
-  }
 
   const token = localStorage.getItem("nova_token");
   const fileUrl = material?.file_url

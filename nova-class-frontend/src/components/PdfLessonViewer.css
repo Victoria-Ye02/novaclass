@@ -127,8 +127,6 @@
 
 .pdf-page-surface canvas {
   display: block;
-  max-width: 100%;
-  height: auto !important;
 }
 
 .pdf-loading-card,

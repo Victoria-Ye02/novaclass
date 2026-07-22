@@ -10,8 +10,8 @@ vi.mock("react-pdf", async () => {
       React.useEffect(() => onLoadSuccess({ numPages: 5 }), [onLoadSuccess]);
       return <div data-testid="pdf-document">{children}</div>;
     },
-    Page: ({ pageNumber, scale }) => (
-      <div data-testid={`rendered-page-${pageNumber}`} data-scale={scale}>
+    Page: ({ pageNumber, width }) => (
+      <div data-testid={`rendered-page-${pageNumber}`} data-width={width}>
         PDF page {pageNumber}
       </div>
     ),
@@ -170,63 +170,78 @@ describe("PdfLessonViewer", () => {
   it("zooms in, zooms out, and resets from the toolbar", async () => {
     renderViewer();
     const page = await screen.findByTestId("rendered-page-1");
-    expect(page.dataset.scale).toBe("1");
+    const baseWidth = Number(page.dataset.width);
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
-    expect(page.dataset.scale).toBe("1.25");
+    expect(Number(page.dataset.width)).toBe(baseWidth * 1.25);
     expect(screen.getByRole("button", { name: "Reset zoom to 100%" }).textContent).toContain("125%");
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
-    expect(page.dataset.scale).toBe("1");
+    expect(Number(page.dataset.width)).toBe(baseWidth);
 
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
     fireEvent.click(screen.getByRole("button", { name: "Reset zoom to 100%" }));
-    expect(page.dataset.scale).toBe("1");
+    expect(Number(page.dataset.width)).toBe(baseWidth);
   });
 
   it("clamps toolbar zoom between 50% and 200%", async () => {
     renderViewer();
     const page = await screen.findByTestId("rendered-page-1");
+    const baseWidth = Number(page.dataset.width);
     const zoomOut = screen.getByRole("button", { name: "Zoom out" });
     const zoomIn = screen.getByRole("button", { name: "Zoom in" });
 
     fireEvent.click(zoomOut);
     fireEvent.click(zoomOut);
-    expect(page.dataset.scale).toBe("0.5");
+    expect(Number(page.dataset.width)).toBe(baseWidth * 0.5);
     expect(zoomOut.disabled).toBe(true);
 
     for (let press = 0; press < 8; press += 1) fireEvent.click(zoomIn);
-    expect(page.dataset.scale).toBe("2");
+    expect(Number(page.dataset.width)).toBe(baseWidth * 2);
     expect(zoomIn.disabled).toBe(true);
   });
 
   it("supports Control and Command zoom shortcuts", async () => {
     renderViewer();
     const page = await screen.findByTestId("rendered-page-1");
+    const baseWidth = Number(page.dataset.width);
 
     fireEvent.keyDown(window, { key: "+", ctrlKey: true });
-    expect(page.dataset.scale).toBe("1.25");
+    expect(Number(page.dataset.width)).toBe(baseWidth * 1.25);
 
     fireEvent.keyDown(window, { key: "-", metaKey: true });
-    expect(page.dataset.scale).toBe("1");
+    expect(Number(page.dataset.width)).toBe(baseWidth);
 
     fireEvent.keyDown(window, { key: "+", metaKey: true });
     fireEvent.keyDown(window, { key: "0", metaKey: true });
-    expect(page.dataset.scale).toBe("1");
+    expect(Number(page.dataset.width)).toBe(baseWidth);
   });
 
   it("ignores zoom shortcuts in the page input and saved-page dialog", async () => {
     renderViewer({ bookmarks: [1, 4] });
     const page = await screen.findByTestId("rendered-page-1");
+    const baseWidth = Number(page.dataset.width);
     const input = screen.getByRole("spinbutton", { name: "Page number" });
     input.focus();
 
     fireEvent.keyDown(input, { key: "+", ctrlKey: true });
-    expect(page.dataset.scale).toBe("1");
+    expect(Number(page.dataset.width)).toBe(baseWidth);
 
     input.blur();
     fireEvent.click(screen.getByRole("button", { name: "Open saved pages" }));
     fireEvent.keyDown(window, { key: "+", ctrlKey: true });
-    expect(page.dataset.scale).toBe("1");
+    expect(Number(page.dataset.width)).toBe(baseWidth);
+  });
+
+  it("renders a page twice as wide at 200% zoom", async () => {
+    renderViewer();
+    const page = await screen.findByTestId("rendered-page-1");
+    const baseWidth = Number(page.dataset.width);
+
+    for (let press = 0; press < 4; press += 1) {
+      fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    }
+
+    expect(Number(page.dataset.width)).toBe(baseWidth * 2);
   });
 });

@@ -46,6 +46,7 @@ export default function PdfLessonViewer({
   );
   const currentPageSaved = savedPages.includes(currentPage);
   const bookmarkBusy = syncingPage !== null;
+  const renderedPageWidth = pageWidth * zoomPercent / 100;
 
   useEffect(() => {
     const onResize = () => setPageWidth(viewerPageWidth());
@@ -240,11 +241,10 @@ export default function PdfLessonViewer({
             >
               <Page
                 pageNumber={currentPage}
-                width={pageWidth}
-                scale={zoomPercent / 100}
+                width={renderedPageWidth}
                 renderAnnotationLayer={false}
                 renderTextLayer={false}
-                loading={<div className="pdf-page-skeleton" style={{ width: pageWidth }} />}
+                loading={<div className="pdf-page-skeleton" style={{ width: renderedPageWidth }} />}
               />
             </Document>
           </div>

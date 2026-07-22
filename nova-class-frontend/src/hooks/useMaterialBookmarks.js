@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import API from "../services/api";
 import { retryRequest } from "../utils/retryRequest";
 
@@ -10,39 +10,57 @@ function normalizePages(pages) {
 }
 
 export function useMaterialBookmarks({ materialId, enabled }) {
-  const [bookmarks, setBookmarks] = useState([]);
-  const [loading, setLoading] = useState(Boolean(enabled));
-  const [syncingPage, setSyncingPage] = useState(null);
-  const [error, setError] = useState(null);
+  const [loadedState, setLoadedState] = useState({
+    materialId: null,
+    bookmarks: [],
+    error: null,
+  });
+  const [syncingOperation, setSyncingOperation] = useState(null);
+  const [mutationError, setMutationError] = useState(null);
   const lifecycleControllerRef = useRef(null);
   const syncingRef = useRef(null);
+
+  const stateIsCurrent = enabled && String(loadedState.materialId) === String(materialId);
+  const bookmarks = useMemo(
+    () => stateIsCurrent ? loadedState.bookmarks : [],
+    [loadedState.bookmarks, stateIsCurrent]
+  );
+  const loading = Boolean(enabled && materialId && !stateIsCurrent);
+  const syncingPage = syncingOperation?.materialId === materialId
+    ? syncingOperation.page
+    : null;
+  const error = mutationError?.materialId === materialId
+    ? mutationError.message
+    : stateIsCurrent ? loadedState.error : null;
 
   useEffect(() => {
     lifecycleControllerRef.current?.abort();
     const controller = new AbortController();
     lifecycleControllerRef.current = controller;
     syncingRef.current = null;
-    setSyncingPage(null);
-    setError(null);
 
     if (!enabled || !materialId) {
-      setBookmarks([]);
-      setLoading(false);
       return () => controller.abort();
     }
 
-    setLoading(true);
     API.get(`/classroom/materials/${materialId}/bookmarks`, { signal: controller.signal })
       .then(({ data }) => {
-        if (!controller.signal.aborted) setBookmarks(normalizePages(data?.pages));
+        if (!controller.signal.aborted) {
+          setLoadedState({
+            materialId,
+            bookmarks: normalizePages(data?.pages),
+            error: null,
+          });
+        }
       })
       .catch((requestError) => {
         if (requestError?.code !== "ERR_CANCELED" && !controller.signal.aborted) {
-          setError("저장한 페이지 목록을 불러오지 못했습니다.");
+          setLoadedState({
+            materialId,
+            bookmarks: [],
+            error: "저장한 페이지 목록을 불러오지 못했습니다.",
+          });
         }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
       });
 
     return () => controller.abort();
@@ -60,9 +78,9 @@ export function useMaterialBookmarks({ materialId, enabled }) {
       : normalizePages([...previous, page]);
 
     syncingRef.current = page;
-    setSyncingPage(page);
-    setError(null);
-    setBookmarks(optimistic);
+    setSyncingOperation({ materialId, page });
+    setMutationError(null);
+    setLoadedState({ materialId, bookmarks: optimistic, error: null });
 
     const controller = lifecycleControllerRef.current;
     const signal = controller?.signal;
@@ -81,17 +99,20 @@ export function useMaterialBookmarks({ materialId, enabled }) {
       return true;
     } catch (requestError) {
       if (!signal?.aborted && requestError?.code !== "ERR_CANCELED") {
-        setBookmarks(previous);
-        setError("페이지 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.");
+        setLoadedState({ materialId, bookmarks: previous, error: null });
+        setMutationError({
+          materialId,
+          message: "페이지 저장에 실패했습니다. 잠시 후 다시 시도해 주세요.",
+        });
       }
       return false;
     } finally {
       syncingRef.current = null;
-      if (!signal?.aborted) setSyncingPage(null);
+      if (!signal?.aborted) setSyncingOperation(null);
     }
   }, [bookmarks, enabled, materialId]);
 
-  const clearError = useCallback(() => setError(null), []);
+  const clearError = useCallback(() => setMutationError(null), []);
 
   return { bookmarks, loading, syncingPage, error, toggleBookmark, clearError };
 }

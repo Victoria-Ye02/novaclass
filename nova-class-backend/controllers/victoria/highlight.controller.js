@@ -6,6 +6,7 @@ const pool = require("../../config/db");
 const ocr = require("../../services/ai/googleVisionOcr");
 const { normalizeCandidates } = require("../../services/highlights/candidates");
 const analyzer = require("../../services/highlights/analyze");
+const { getAccessibleMaterial } = require("../../services/access/materialAccess");
 
 const ANALYSIS_VERSION = 1;
 const MAX_PAGES = 2000;
@@ -13,30 +14,6 @@ const MAX_PAGES = 2000;
 function positiveInteger(value) {
   const number = Number(value);
   return Number.isInteger(number) && number > 0 ? number : null;
-}
-
-async function getAccessibleMaterial(materialId, userId) {
-  const [[material]] = await pool.query(
-    "SELECT id, class_id, file_path FROM materials WHERE id = ?",
-    [materialId]
-  );
-  if (!material) return { error: "Material not found", status: 404 };
-
-  const [[classroom]] = await pool.query(
-    "SELECT teacher_id FROM classes WHERE id = ?",
-    [material.class_id]
-  );
-  if (!classroom) return { error: "Class not found", status: 404 };
-  if (Number(classroom.teacher_id) === Number(userId)) return { material };
-
-  const [memberships] = await pool.query(
-    "SELECT 1 AS allowed FROM class_members WHERE class_id = ? AND user_id = ? LIMIT 1",
-    [material.class_id, userId]
-  );
-  if (memberships.length === 0) {
-    return { error: "Not a member of this class", status: 403 };
-  }
-  return { material };
 }
 
 async function sourceFingerprint(material) {
@@ -145,6 +122,7 @@ function serviceError(res, error) {
   if (error?.code === "ENOENT" || error?.code === "MATERIAL_FILE_MISSING") {
     return clientError(res, 404, "Material file not found");
   }
+  console.error("Highlight service error:", error?.message || error?.code || error?.name);
   return clientError(res, 500, "Highlight service unavailable");
 }
 
@@ -183,7 +161,14 @@ async function claimAnalysis(analysisId) {
 function launchAnalysis(analysisId, expectedAttemptCount) {
   Promise.resolve()
     .then(() => analyzer.analyzeHighlights(analysisId, { expectedAttemptCount }))
-    .catch(async () => {
+    .catch(async error => {
+      // Provider/document content may ride in error.message here, so log only
+      // a terse code/name label — never the raw message, stack, or payload.
+      console.error(
+        "Highlight analysis failed:",
+        analysisId,
+        error?.code || error?.name || "unknown_error"
+      );
       try {
         await pool.query(
           `UPDATE material_highlight_analyses
@@ -191,8 +176,13 @@ function launchAnalysis(analysisId, expectedAttemptCount) {
            WHERE id = ? AND status = 'processing' AND attempt_count = ?`,
           [analysisId, expectedAttemptCount]
         );
-      } catch {
+      } catch (updateError) {
         // Keep provider and document details out of logs and API responses.
+        console.error(
+          "Failed to record highlight analysis failure:",
+          analysisId,
+          updateError?.code || updateError?.name || "unknown_error"
+        );
       }
     });
 }

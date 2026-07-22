@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import API from "../../services/api";
+import PdfLessonViewer from "../../components/PdfLessonViewer";
+import { useMaterialBookmarks } from "../../hooks/useMaterialBookmarks";
 
 const API_ORIGIN = "http://localhost:5001";
 
@@ -65,6 +67,15 @@ export default function MaterialPreview({ isOverlay = false }) {
   const isImage = ["png", "jpg", "jpeg", "webp", "gif"].includes(ext);
   const isVideo = ["mp4", "webm"].includes(ext);
   const isPdf = ext === "pdf";
+  const {
+    bookmarks,
+    syncingPage,
+    error: bookmarkError,
+    toggleBookmark,
+  } = useMaterialBookmarks({
+    materialId,
+    enabled: isPdf && Boolean(fileUrl),
+  });
 
   const content = (
     <>
@@ -105,7 +116,15 @@ export default function MaterialPreview({ isOverlay = false }) {
             <div style={{ fontSize: "15px", color: "#6b7280" }}>No file attached to this lesson.</div>
           </div>
         ) : isPdf ? (
-          <iframe src={fileUrl} title={material.title} style={iframeStyle} />
+          <PdfLessonViewer
+            fileUrl={fileUrl}
+            title={material.title}
+            bookmarks={bookmarks}
+            syncingPage={syncingPage}
+            bookmarkError={bookmarkError}
+            onToggleBookmark={toggleBookmark}
+            onDismissEmptySpace={isOverlay ? goBack : undefined}
+          />
         ) : isImage ? (
           <div style={centerMsg}>
             <img src={fileUrl} alt={material.title} style={imgStyle} />
@@ -193,8 +212,6 @@ const body = {
   flex: 1, minHeight: 0, display: "flex", alignItems: "stretch", justifyContent: "center",
   background: "#525659",
 };
-
-const iframeStyle = { width: "100%", height: "100%", border: "none", background: "#fff" };
 
 const centerMsg = {
   flex: 1, display: "flex", flexDirection: "column", alignItems: "center",

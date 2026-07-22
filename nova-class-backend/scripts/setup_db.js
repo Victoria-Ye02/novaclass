@@ -88,6 +88,54 @@ async function setup() {
     )
   `);
 
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS material_highlight_analyses (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      material_id INT NOT NULL,
+      source_fingerprint CHAR(64) NOT NULL,
+      analysis_version INT UNSIGNED NOT NULL DEFAULT 1,
+      status ENUM('pending','processing','ready','failed') NOT NULL DEFAULT 'pending',
+      total_pages INT UNSIGNED NOT NULL,
+      completed_pages INT UNSIGNED NOT NULL DEFAULT 0,
+      failure_code VARCHAR(80),
+      attempt_count TINYINT UNSIGNED NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_material_highlight_analysis (material_id, source_fingerprint, analysis_version),
+      FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE
+    )
+  `);
+
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS material_highlight_pages (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      analysis_id INT NOT NULL,
+      page_number INT UNSIGNED NOT NULL,
+      source_type ENUM('text','ocr') NOT NULL,
+      candidates_json LONGTEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_material_highlight_page (analysis_id, page_number),
+      FOREIGN KEY (analysis_id) REFERENCES material_highlight_analyses(id) ON DELETE CASCADE
+    )
+  `);
+
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS material_pdf_highlights (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      analysis_id INT NOT NULL,
+      page_number INT UNSIGNED NOT NULL,
+      excerpt TEXT NOT NULL,
+      explanation TEXT,
+      category VARCHAR(80),
+      rects_json JSON NOT NULL,
+      display_order INT UNSIGNED NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      FOREIGN KEY (analysis_id) REFERENCES material_highlight_analyses(id) ON DELETE CASCADE
+    )
+  `);
+
   console.log("✅ All tables created successfully");
   await conn.end();
 }

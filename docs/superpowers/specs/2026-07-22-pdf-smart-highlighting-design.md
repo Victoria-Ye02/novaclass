@@ -4,7 +4,7 @@
 
 When a classroom PDF opens, NovaClass automatically identifies the most important sentences, concepts, and formulas and highlights them directly on the PDF. The result is shared per material and cached in the database so later viewers see it immediately without another AI analysis.
 
-The feature supports both text PDFs and scanned PDFs. Highlight geometry remains aligned at every supported zoom level. This work also corrects the existing zoom behavior so 200% is exactly twice the 100% rendered size and makes the material overlay fill the viewport on desktop and mobile.
+The feature supports both text PDFs and scanned PDFs. Highlight geometry remains aligned at every supported zoom level. This work also standardizes every project text-generation and reasoning call on Groq's `openai/gpt-oss-120b`, corrects the existing zoom behavior so 200% is exactly twice the 100% rendered size, and makes the material overlay fill the viewport on desktop and mobile.
 
 ## User Experience
 
@@ -41,9 +41,23 @@ Pages are uploaded and processed in bounded batches to avoid excessive browser m
 
 ### Importance selection
 
-The backend sends bounded, page-indexed text candidates to the existing Groq integration and uses `openai/gpt-oss-120b` for Smart Highlighting importance selection. The model choice is isolated in the Smart Highlighting service and does not change the models used by the project's other AI features. The prompt requests exact candidate identifiers, a concise explanation, and a category such as concept, formula, definition, or conclusion. AI output is schema-validated; unknown identifiers, malformed coordinates, duplicate regions, and excessively broad selections are rejected.
+The backend sends bounded, page-indexed text candidates to the existing Groq integration and uses `openai/gpt-oss-120b` for Smart Highlighting importance selection. The prompt requests exact candidate identifiers, a concise explanation, and a category such as concept, formula, definition, or conclusion. AI output is schema-validated; unknown identifiers, malformed coordinates, duplicate regions, and excessively broad selections are rejected.
 
 Selected neighboring items are merged only when they belong to the same logical highlight. Stored results contain the page number, normalized rectangles, original excerpt, category, and explanation.
+
+## Project-Wide AI Model Standardization
+
+Every text-generation and reasoning path in the backend uses Groq's `openai/gpt-oss-120b`. This includes classroom summaries, study mentor chat, Smart Highlighting, quizzes, assignment checks, K-Mate responses, general AI controller actions, and text responses produced after image, video, or audio preprocessing.
+
+The existing Anthropic-backed controller is migrated to the Groq client instead of changing only its model string. Direct Llama and Claude model identifiers are removed from production controller code. A shared model constant prevents future endpoints from silently selecting a different reasoning model.
+
+`openai/gpt-oss-120b` accepts text input and produces text output. Input conversion models and services therefore remain narrowly scoped preprocessors:
+
+- Google Cloud Vision performs OCR and visual feature extraction for scanned PDFs and image inputs. Its extracted text and labels are passed to `openai/gpt-oss-120b` for reasoning and the user-facing response.
+- Whisper remains responsible only for speech-to-text. The transcript is passed to `openai/gpt-oss-120b` whenever interpretation or a generated response is required.
+- No Llama or Claude model remains as a response-generation fallback. If GPT-OSS is unavailable, the feature returns its existing safe unavailable state instead of switching models.
+
+This migration preserves the existing public API response shapes. Prompt and structured-output handling must be adapted where GPT-OSS reasoning output differs, but frontend callers do not receive provider-specific fields.
 
 ## API and Data Model
 
@@ -80,7 +94,7 @@ If OCR credentials are missing or a provider rejects a request, the API returns 
 
 ## Privacy and Configuration
 
-Google Cloud Vision credentials are configured only through backend environment variables and are excluded from Git. Text or rendered page images are sent to Google Cloud Vision only for OCR and to Groq's `openai/gpt-oss-120b` model only as bounded extracted text for importance selection. NovaClass does not persist rendered page images in its database or uploads directory after processing.
+Google Cloud Vision credentials are configured only through backend environment variables and are excluded from Git. Text or rendered page images are sent to Google Cloud Vision only for OCR and to Groq's `openai/gpt-oss-120b` model only as bounded extracted text for importance selection. NovaClass does not persist rendered page images in its database or uploads directory after processing. The Anthropic API key is no longer required after the general AI controller migration; the existing Groq key becomes the single credential for all text-generation and reasoning features.
 
 Deployment documentation will list the required Google Cloud project, Vision API enablement, service-account credential configuration, and existing Groq key requirement. Logs must not contain document text, page images, access tokens, or provider credentials.
 
@@ -95,6 +109,10 @@ Backend unit and integration tests use provider doubles and cover:
 - AI schema validation, coordinate normalization, and persistence.
 - Batch progress, resume behavior, three automatic retries, and final failure.
 - Safe responses when Vision or Groq configuration is missing.
+- Project-wide calls select the shared `openai/gpt-oss-120b` constant.
+- Former Anthropic routes preserve their response contracts through Groq.
+- Image and audio paths retain Vision or Whisper preprocessing but use GPT-OSS for subsequent reasoning.
+- Production controller code contains no direct Llama or Claude model identifiers.
 
 Frontend tests use mocked PDF.js and API responses and cover:
 

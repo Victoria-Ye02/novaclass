@@ -1,4 +1,5 @@
 const pool = require("../../config/db");
+const { notifyUsers } = require("../../services/notifications");
 
 async function checkAccess(classId, userId) {
   const [[cls]] = await pool.query("SELECT * FROM classes WHERE id=?", [classId]);
@@ -10,6 +11,26 @@ async function checkAccess(classId, userId) {
   }
   return { role: isTeacher ? "teacher" : "student" };
 }
+
+// GET /meetings/active — every currently-live meeting across the classes this
+// user teaches or is enrolled in, so the Dashboard can surface it without the
+// student needing to open each class's Attendance tab to notice.
+exports.listMyActiveMeetings = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [meetings] = await pool.query(
+      `SELECT m.*, u.name AS host_name, c.name AS class_name
+       FROM class_meetings m
+       JOIN classes c ON c.id = m.class_id
+       JOIN users u ON u.id = m.started_by
+       WHERE m.is_active = 1
+         AND (c.teacher_id = ? OR c.id IN (SELECT class_id FROM class_members WHERE user_id = ?))
+       ORDER BY m.started_at DESC`,
+      [userId, userId]
+    );
+    res.json({ meetings });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+};
 
 // GET /classes/:id/meeting — get active meeting
 exports.getActiveMeeting = async (req, res) => {
@@ -46,6 +67,14 @@ exports.startMeeting = async (req, res) => {
       `SELECT m.*, u.name AS host_name FROM class_meetings m JOIN users u ON u.id=m.started_by WHERE m.id=?`,
       [result.insertId]
     );
+
+    const [members] = await pool.query("SELECT user_id FROM class_members WHERE class_id = ?", [req.params.id]);
+    await notifyUsers(members.map(m => m.user_id), {
+      type: "meeting_started",
+      title: `Live meeting started: ${meeting.title}`,
+      linkUrl: `/classroom/${req.params.id}`,
+    });
+
     res.status(201).json({ meeting });
   } catch (err) { res.status(500).json({ error: err.message }); }
 };

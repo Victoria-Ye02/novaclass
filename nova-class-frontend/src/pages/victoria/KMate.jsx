@@ -1,19 +1,20 @@
 import { useState, useRef, useEffect } from "react";
 import Sidebar from "../../components/Sidebar";
+import Icon from "../../components/Icon";
 import API from "../../services/api";
 
 const quickBtns = [
-  { label: "📝 Grammar Q1", q: "책을 많이 ( ) 지식을 쌓을 수 있다 — what is the answer?" },
-  { label: "📝 Grammar Q2", q: "이 동네로 이사를 ( ) 일 년이 됐다 — explain the answer" },
-  { label: "📖 Vocabulary",  q: "What does 가성비 mean?" },
-  { label: "ℹ️ TOPIK Info",  q: "What sections are in TOPIK II?" },
-  { label: "🇲🇲 Burmese",   q: "TOPIK II ရဲ့ grammar 만큼 ကို မြန်မာလို ရှင်းပြပေး" },
+  { icon: "note", label: "Grammar Q1", q: "책을 많이 ( ) 지식을 쌓을 수 있다 — what is the answer?" },
+  { icon: "note", label: "Grammar Q2", q: "이 동네로 이사를 ( ) 일 년이 됐다 — explain the answer" },
+  { icon: "book", label: "Vocabulary", q: "What does 가성비 mean?" },
+  { icon: "info", label: "TOPIK Info", q: "What sections are in TOPIK II?" },
+  { flag: "🇲🇲",  label: "Burmese",    q: "TOPIK II ရဲ့ grammar 만큼 ကို မြန်မာလို ရှင်းပြပေး" },
 ];
 
 const ATTACH_TYPES = [
-  { key: "image", icon: "📸", label: "Image", accept: "image/*" },
-  { key: "audio", icon: "🎤", label: "Audio", accept: "audio/*,.mp3,.wav,.m4a,.webm" },
-  { key: "file",  icon: "📄", label: "File",  accept: ".pdf,.docx" },
+  { key: "image", icon: "camera",     label: "Image", accept: "image/*" },
+  { key: "audio", icon: "microphone", label: "Audio", accept: "audio/*,.mp3,.wav,.m4a,.webm" },
+  { key: "file",  icon: "file",       label: "File",  accept: ".pdf,.docx" },
 ];
 
 function formatText(text) {
@@ -117,11 +118,12 @@ export default function KMate() {
       <main style={s.main}>
         <div style={s.header}>
           <div>
-            <h2 style={s.title}>🤖 K_MATE</h2>
+            <h2 style={s.title}><Icon name="bot" size={22} style={{ marginRight: "6px" }} />K_MATE</h2>
             <p style={s.sub}>TOPIK II AI Tutor — Ask anything in any language</p>
           </div>
           <button style={s.quizToggleBtn} onClick={() => setQuizMode(!quizMode)}>
-            {quizMode ? "💬 Back to Chat" : "📋 Practice Quiz"}
+            <Icon name={quizMode ? "chat" : "clipboard"} size={14} style={{ marginRight: "4px" }} />
+            {quizMode ? "Back to Chat" : "Practice Quiz"}
           </button>
         </div>
 
@@ -131,16 +133,16 @@ export default function KMate() {
             <div style={s.chatBox}>
               {messages.map((m, i) => (
                 <div key={i} style={{ ...s.msgRow, justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
-                  {m.role === "bot" && <div style={s.botAvatar}>🤖</div>}
+                  {m.role === "bot" && <Icon name="bot" size={24} style={s.botAvatar} />}
                   <div style={{ ...s.bubble, ...(m.role === "user" ? s.userBubble : s.botBubble) }}
                     dangerouslySetInnerHTML={{ __html: formatText(m.text) }} />
-                  {m.role === "user" && <div style={s.userAvatar}>👤</div>}
+                  {m.role === "user" && <Icon name="user" size={24} style={s.userAvatar} />}
                 </div>
               ))}
               {loading && (
                 <div style={{ ...s.msgRow, justifyContent: "flex-start" }}>
-                  <div style={s.botAvatar}>🤖</div>
-                  <div style={{ ...s.bubble, ...s.botBubble, color: "#9ca3af", fontStyle: "italic" }}>
+                  <Icon name="bot" size={24} style={s.botAvatar} />
+                  <div style={{ ...s.bubble, ...s.botBubble, color: "var(--text-faint)", fontStyle: "italic" }}>
                     K.Mate is thinking...
                   </div>
                 </div>
@@ -151,7 +153,10 @@ export default function KMate() {
             {/* Quick Buttons */}
             <div style={s.quickRow}>
               {quickBtns.map((b, i) => (
-                <button key={i} style={s.quickBtn} onClick={() => send(b.q)}>{b.label}</button>
+                <button key={i} style={s.quickBtn} onClick={() => send(b.q)}>
+                  {b.icon ? <Icon name={b.icon} size={12} style={{ marginRight: "4px" }} /> : b.flag + " "}
+                  {b.label}
+                </button>
               ))}
             </div>
 
@@ -159,7 +164,10 @@ export default function KMate() {
             <div style={s.inputBox}>
               {attachFile && (
                 <div style={s.attachChip}>
-                  <span>{ATTACH_TYPES.find(t => t.key === attachFile.type)?.icon} {attachFile.file.name}</span>
+                  <span>
+                    <Icon name={ATTACH_TYPES.find(t => t.key === attachFile.type)?.icon} size={14} />
+                    {" " + attachFile.file.name}
+                  </span>
                   <button style={s.chipRemove} onClick={() => setAttachFile(null)}>✕</button>
                 </div>
               )}
@@ -171,10 +179,10 @@ export default function KMate() {
                       <div style={s.attachMenu}>
                         {ATTACH_TYPES.map(t => (
                           <button key={t.key} style={s.attachMenuItem} onClick={() => pickAttachType(t.key)}
-                            onMouseEnter={e => e.currentTarget.style.background = "#f5f5f5"}
+                            onMouseEnter={e => e.currentTarget.style.background = "var(--surface-alt)"}
                             onMouseLeave={e => e.currentTarget.style.background = "transparent"}
                           >
-                            <span style={{ fontSize: "16px" }}>{t.icon}</span> {t.label}
+                            <Icon name={t.icon} size={16} /> {t.label}
                           </button>
                         ))}
                       </div>
@@ -246,18 +254,21 @@ function QuizMode() {
   const symbols = ["①","②","③","④"];
   const q = questions[current];
 
+  const TOPIC_ICON = { grammar: "note", vocabulary: "book", mixed: "target" };
+  const TOPIC_LABEL = { grammar: "Grammar", vocabulary: "Vocabulary", mixed: "Mixed" };
+
   if (step === "loading") return (
-    <div style={s.quizCenter}><div style={s.spinner}>⏳</div><p>Processing...</p></div>
+    <div style={s.quizCenter}><Icon name="hourglass" size={40} style={s.spinner} /><p>Processing...</p></div>
   );
 
   if (step === "settings") return (
     <div style={s.quizCard}>
-      <h3 style={s.quizTitle}>📋 TOPIK II Practice Quiz</h3>
+      <h3 style={s.quizTitle}><Icon name="clipboard" size={20} style={{ marginRight: "6px" }} />TOPIK II Practice Quiz</h3>
       <label style={s.qLabel}>Choose Topic</label>
       <div style={s.optRow}>
         {["grammar","vocabulary","mixed"].map(t => (
           <button key={t} style={{ ...s.optBtn, ...(topic===t ? s.optActive : {}) }} onClick={() => setTopic(t)}>
-            {t === "grammar" ? "📝 Grammar" : t === "vocabulary" ? "📖 Vocabulary" : "🎯 Mixed"}
+            <Icon name={TOPIC_ICON[t]} size={14} style={{ marginRight: "4px" }} />{TOPIC_LABEL[t]}
           </button>
         ))}
       </div>
@@ -277,7 +288,7 @@ function QuizMode() {
           </button>
         ))}
       </div>
-      <button style={s.startBtn} onClick={startQuiz}>🚀 Start Quiz</button>
+      <button style={s.startBtn} onClick={startQuiz}><Icon name="rocket" size={16} style={{ marginRight: "6px" }} />Start Quiz</button>
     </div>
   );
 
@@ -298,7 +309,9 @@ function QuizMode() {
         {current > 0 && <button style={s.navBtn} onClick={() => setCurrent(c => c-1)}>← Back</button>}
         {current < questions.length-1
           ? <button style={{ ...s.navBtn, ...s.navBtnPrimary }} disabled={!answers[current]} onClick={() => setCurrent(c => c+1)}>Next →</button>
-          : <button style={{ ...s.navBtn, ...s.navBtnGreen }} disabled={!answers[current]} onClick={submitQuiz}>✅ Submit Quiz</button>
+          : <button style={{ ...s.navBtn, ...s.navBtnGreen }} disabled={!answers[current]} onClick={submitQuiz}>
+              <Icon name="checkmark-yes" size={14} style={{ marginRight: "4px" }} />Submit Quiz
+            </button>
         }
       </div>
     </div>
@@ -306,16 +319,18 @@ function QuizMode() {
 
   if (step === "results" && result) {
     const pct = Math.round((result.score / result.total) * 100);
-    const emoji = pct >= 80 ? "🎉" : pct >= 60 ? "👍" : "💪";
+    const scoreIcon = pct >= 80 ? "party-popper" : pct >= 60 ? "thumbs-up" : "flexed-biceps";
     return (
       <div style={s.quizCard}>
         <div style={s.scoreCard}>
           <div style={s.scoreNum}>{result.score} / {result.total}</div>
-          <div style={s.scoreLabel}>{pct}% {emoji}</div>
+          <div style={s.scoreLabel}>{pct}% <Icon name={scoreIcon} size={18} /></div>
         </div>
         <div style={s.explanation} dangerouslySetInnerHTML={{ __html: formatText(result.explanation) }} />
         <div style={s.qNav}>
-          <button style={{ ...s.navBtn, ...s.navBtnPrimary }} onClick={() => { setStep("settings"); setResult(null); }}>🔄 Try Again</button>
+          <button style={{ ...s.navBtn, ...s.navBtnPrimary }} onClick={() => { setStep("settings"); setResult(null); }}>
+            <Icon name="refresh" size={14} style={{ marginRight: "4px" }} />Try Again
+          </button>
         </div>
       </div>
     );
@@ -324,101 +339,101 @@ function QuizMode() {
 }
 
 const s = {
-  layout: { display: "flex", minHeight: "100vh", background: "#f5f5f5" },
+  layout: { display: "flex", minHeight: "100vh", background: "var(--bg)" },
   main: { marginLeft: "240px", flex: 1, display: "flex", flexDirection: "column", height: "100vh", padding: "24px 32px" },
   header: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" },
-  title: { fontSize: "22px", fontWeight: 700, color: "#1a1a2e" },
-  sub: { fontSize: "13px", color: "#6b7280" },
+  title: { fontSize: "22px", fontWeight: 700, color: "var(--text)" },
+  sub: { fontSize: "13px", color: "var(--text-muted)" },
   quizToggleBtn: {
-    background: "#3B37CC", color: "#fff", padding: "10px 20px",
+    background: "var(--primary)", color: "#fff", padding: "10px 20px",
     borderRadius: "10px", fontSize: "14px", fontWeight: 600, border: "none",
   },
   chatBox: {
-    flex: 1, overflowY: "auto", background: "#fff", borderRadius: "16px",
-    padding: "20px", marginBottom: "12px", border: "1px solid #e5e7eb",
+    flex: 1, overflowY: "auto", background: "var(--surface)", borderRadius: "16px",
+    padding: "20px", marginBottom: "12px", border: "1px solid var(--border)",
     display: "flex", flexDirection: "column", gap: "16px",
   },
   msgRow: { display: "flex", gap: "10px", alignItems: "flex-end" },
   botAvatar: { fontSize: "24px", flexShrink: 0 },
   userAvatar: { fontSize: "24px", flexShrink: 0 },
   bubble: { maxWidth: "75%", padding: "12px 16px", borderRadius: "16px", fontSize: "14px", lineHeight: 1.7 },
-  userBubble: { background: "#3B37CC", color: "#fff", borderBottomRightRadius: "4px" },
-  botBubble: { background: "#f5f5f5", color: "#1a1a2e", border: "1px solid #e5e7eb", borderBottomLeftRadius: "4px" },
+  userBubble: { background: "var(--primary)", color: "#fff", borderBottomRightRadius: "4px" },
+  botBubble: { background: "var(--surface-alt)", color: "var(--text)", border: "1px solid var(--border)", borderBottomLeftRadius: "4px" },
   quickRow: { display: "flex", gap: "8px", flexWrap: "wrap", marginBottom: "12px" },
   quickBtn: {
-    background: "#fff", border: "1.5px solid #e5e7eb", color: "#3B37CC",
+    background: "var(--surface)", border: "1.5px solid var(--border)", color: "var(--primary)",
     padding: "6px 12px", borderRadius: "20px", fontSize: "12px", fontWeight: 500,
   },
-  inputBox: { background: "#fff", borderRadius: "14px", border: "1px solid #e5e7eb", padding: "12px" },
+  inputBox: { background: "var(--surface)", borderRadius: "14px", border: "1px solid var(--border)", padding: "12px" },
   inputRow: { display: "flex", gap: "10px", alignItems: "center" },
   textarea: {
     flex: 1, border: "none", resize: "none", fontSize: "14px",
-    color: "#1a1a2e", background: "transparent", outline: "none",
+    color: "var(--text)", background: "transparent", outline: "none",
   },
   attachBtn: {
-    width: "36px", height: "36px", borderRadius: "50%", border: "1.5px solid #e5e7eb",
-    background: "#f9fafb", color: "#3B37CC", fontSize: "20px", lineHeight: 1,
+    width: "36px", height: "36px", borderRadius: "50%", border: "1.5px solid var(--border)",
+    background: "var(--surface-alt)", color: "var(--primary)", fontSize: "20px", lineHeight: 1,
     display: "flex", alignItems: "center", justifyContent: "center",
     transition: "transform 0.15s", flexShrink: 0,
   },
   menuOverlay: { position: "fixed", inset: 0, zIndex: 10 },
   attachMenu: {
     position: "absolute", bottom: "46px", left: 0, width: "170px",
-    background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px",
+    background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px",
     boxShadow: "0 8px 24px rgba(0,0,0,0.15)", overflow: "hidden", zIndex: 11,
   },
   attachMenuItem: {
     width: "100%", display: "flex", alignItems: "center", gap: "8px",
-    padding: "10px 14px", border: "none", borderBottom: "1px solid #f3f4f6",
+    padding: "10px 14px", border: "none", borderBottom: "1px solid var(--surface-alt)",
     background: "transparent", cursor: "pointer", fontSize: "13px",
-    fontWeight: 600, color: "#1a1a2e", textAlign: "left",
+    fontWeight: 600, color: "var(--text)", textAlign: "left",
   },
   attachChip: {
     display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px",
-    background: "#ede9fe", color: "#3B37CC", fontSize: "12px", fontWeight: 600,
+    background: "var(--primary-tint)", color: "var(--primary)", fontSize: "12px", fontWeight: 600,
     padding: "6px 10px", borderRadius: "8px", marginBottom: "10px",
   },
   chipRemove: {
-    border: "none", background: "transparent", color: "#3B37CC",
+    border: "none", background: "transparent", color: "var(--primary)",
     cursor: "pointer", fontSize: "12px", fontWeight: 700,
   },
   sendBtn: {
-    background: "#3B37CC", color: "#fff", border: "none",
+    background: "var(--primary)", color: "#fff", border: "none",
     width: "40px", height: "40px", borderRadius: "10px", fontSize: "18px",
   },
   // Quiz styles
   quizCenter: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "12px" },
   spinner: { fontSize: "40px" },
-  quizCard: { background: "#fff", borderRadius: "16px", padding: "28px", border: "1px solid #e5e7eb", flex: 1, overflowY: "auto" },
-  quizTitle: { fontSize: "20px", fontWeight: 700, marginBottom: "20px", color: "#1a1a2e" },
-  qLabel: { display: "block", fontSize: "13px", fontWeight: 600, color: "#374151", marginBottom: "8px" },
+  quizCard: { background: "var(--surface)", borderRadius: "16px", padding: "28px", border: "1px solid var(--border)", flex: 1, overflowY: "auto" },
+  quizTitle: { fontSize: "20px", fontWeight: 700, marginBottom: "20px", color: "var(--text)" },
+  qLabel: { display: "block", fontSize: "13px", fontWeight: 600, color: "var(--text-muted)", marginBottom: "8px" },
   optRow: { display: "flex", gap: "10px", marginBottom: "20px", flexWrap: "wrap" },
   optBtn: {
-    flex: 1, padding: "10px 16px", border: "2px solid #e5e7eb",
+    flex: 1, padding: "10px 16px", border: "2px solid var(--border)",
     borderRadius: "10px", fontSize: "14px", fontWeight: 500,
-    background: "transparent", color: "#6b7280", minWidth: "100px",
+    background: "transparent", color: "var(--text-muted)", minWidth: "100px",
   },
-  optActive: { borderColor: "#3B37CC", background: "#ede9fe", color: "#3B37CC", fontWeight: 700 },
+  optActive: { borderColor: "var(--primary)", background: "var(--primary-tint)", color: "var(--primary)", fontWeight: 700 },
   startBtn: {
-    width: "100%", padding: "14px", background: "#3B37CC", color: "#fff",
+    width: "100%", padding: "14px", background: "var(--primary)", color: "#fff",
     borderRadius: "12px", fontSize: "16px", fontWeight: 700, border: "none", marginTop: "8px",
   },
-  qProgress: { fontSize: "13px", color: "#6b7280", marginBottom: "8px" },
-  qProgressBar: { height: "4px", background: "#e5e7eb", borderRadius: "4px", marginBottom: "20px" },
-  qProgressFill: { height: "100%", background: "#3B37CC", borderRadius: "4px", transition: "width 0.3s" },
-  qText: { fontSize: "17px", fontWeight: 600, color: "#1a1a2e", padding: "16px", background: "#f5f5f5", borderRadius: "10px", marginBottom: "20px", lineHeight: 1.7, borderLeft: "4px solid #3B37CC" },
+  qProgress: { fontSize: "13px", color: "var(--text-muted)", marginBottom: "8px" },
+  qProgressBar: { height: "4px", background: "var(--border)", borderRadius: "4px", marginBottom: "20px" },
+  qProgressFill: { height: "100%", background: "var(--primary)", borderRadius: "4px", transition: "width 0.3s" },
+  qText: { fontSize: "17px", fontWeight: 600, color: "var(--text)", padding: "16px", background: "var(--surface-alt)", borderRadius: "10px", marginBottom: "20px", lineHeight: 1.7, borderLeft: "4px solid var(--primary)" },
   optionsCol: { display: "flex", flexDirection: "column", gap: "10px", marginBottom: "20px" },
   choiceBtn: {
-    padding: "13px 16px", border: "2px solid #e5e7eb", borderRadius: "10px",
-    fontSize: "15px", background: "#fff", color: "#1a1a2e", textAlign: "left",
+    padding: "13px 16px", border: "2px solid var(--border)", borderRadius: "10px",
+    fontSize: "15px", background: "var(--surface)", color: "var(--text)", textAlign: "left",
   },
-  choiceActive: { borderColor: "#3B37CC", background: "#ede9fe", color: "#3B37CC", fontWeight: 600 },
+  choiceActive: { borderColor: "var(--primary)", background: "var(--primary-tint)", color: "var(--primary)", fontWeight: 600 },
   qNav: { display: "flex", gap: "10px", justifyContent: "flex-end" },
-  navBtn: { padding: "10px 24px", border: "1.5px solid #e5e7eb", borderRadius: "10px", fontSize: "14px", fontWeight: 600, background: "#fff", color: "#6b7280" },
-  navBtnPrimary: { background: "#3B37CC", color: "#fff", border: "none" },
+  navBtn: { padding: "10px 24px", border: "1.5px solid var(--border)", borderRadius: "10px", fontSize: "14px", fontWeight: 600, background: "var(--surface)", color: "var(--text-muted)" },
+  navBtnPrimary: { background: "var(--primary)", color: "#fff", border: "none" },
   navBtnGreen: { background: "#10b981", color: "#fff", border: "none" },
-  scoreCard: { textAlign: "center", padding: "24px", background: "#f5f5f5", borderRadius: "12px", marginBottom: "20px" },
-  scoreNum: { fontSize: "48px", fontWeight: 800, color: "#3B37CC" },
-  scoreLabel: { fontSize: "18px", color: "#6b7280", marginTop: "4px" },
-  explanation: { fontSize: "14px", lineHeight: 1.9, color: "#374151", marginBottom: "20px" },
+  scoreCard: { textAlign: "center", padding: "24px", background: "var(--surface-alt)", borderRadius: "12px", marginBottom: "20px" },
+  scoreNum: { fontSize: "48px", fontWeight: 800, color: "var(--primary)" },
+  scoreLabel: { fontSize: "18px", color: "var(--text-muted)", marginTop: "4px" },
+  explanation: { fontSize: "14px", lineHeight: 1.9, color: "var(--text-muted)", marginBottom: "20px" },
 };

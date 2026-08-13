@@ -1,20 +1,132 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Sidebar from "../../components/Sidebar";
+import Icon from "../../components/Icon";
 import API from "../../services/api";
 
-const today = new Date();
-const monthName = today.toLocaleString("default", { month: "long" });
-const year = today.getFullYear();
+const LIVE_MEETING_POLL_MS = 20000;
+const URGENT_WINDOW_MS = 24 * 60 * 60 * 1000;
+const WEEKDAY_LABELS = ["M", "T", "W", "T", "F"];
+
+function formatDateTime(dateStr) {
+  const d = new Date(dateStr);
+  const isToday = d.toDateString() === new Date().toDateString();
+  const time = d.toLocaleString("default", { hour: "numeric", minute: "2-digit", hour12: true });
+  const date = d.toLocaleString("default", { day: "numeric", month: "short" });
+  return { day: String(d.getDate()).padStart(2, "0"), month: d.toLocaleString("default", { month: "short" }).toUpperCase(), time, label: isToday ? `Today ${time}` : `${date}` };
+}
+
+function mondayOfThisWeek() {
+  const d = new Date();
+  const dow = d.getDay(); // 0=Sun..6=Sat
+  const diff = dow === 0 ? -6 : 1 - dow;
+  d.setDate(d.getDate() + diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
 export default function Dashboard() {
   const [summary, setSummary] = useState(null);
+  const [liveMeetings, setLiveMeetings] = useState([]);
+  const [classes, setClasses] = useState(null);
+  const [deadlines, setDeadlines] = useState(null);
+  const [attendance, setAttendance] = useState(null);
+  const [todayPlan, setTodayPlan] = useState(null);
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [bellOpen, setBellOpen] = useState(false);
   const navigate = useNavigate();
+  const bellRef = useRef(null);
   const name = localStorage.getItem("nova_name") || "Student";
+
+  function loadNotifications() {
+    API.get("/notifications").then(r => setNotifications(r.data.notifications || [])).catch(() => {});
+    API.get("/notifications/unread-count").then(r => setUnreadCount(r.data.count || 0)).catch(() => {});
+  }
 
   useEffect(() => {
     API.get("/progress/summary").then(r => setSummary(r.data)).catch(() => {});
+    API.get("/progress/today-plan").then(r => setTodayPlan(r.data)).catch(() => setTodayPlan({ studentPlan: [], teacherPlan: [] }));
+    API.get("/classroom/classes").then(r => setClasses(r.data)).catch(() => setClasses([]));
+    API.get("/classroom/deadlines").then(r => setDeadlines(r.data.deadlines || [])).catch(() => setDeadlines([]));
+    API.get("/classroom/attendance/summary").then(r => setAttendance(r.data)).catch(() => {});
+    loadNotifications();
   }, []);
+
+  // Polled (not push-based) so a class going live shows up here without the
+  // student needing to open that class's Attendance tab to notice.
+  useEffect(() => {
+    let cancelled = false;
+    function loadLiveMeetings() {
+      API.get("/classroom/meetings/active")
+        .then(r => { if (!cancelled) setLiveMeetings(r.data.meetings || []); })
+        .catch(() => {});
+    }
+    loadLiveMeetings();
+    const interval = setInterval(loadLiveMeetings, LIVE_MEETING_POLL_MS);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  useEffect(() => {
+    function onOutsideClick(e) {
+      if (bellRef.current && !bellRef.current.contains(e.target)) setBellOpen(false);
+    }
+    document.addEventListener("mousedown", onOutsideClick);
+    return () => document.removeEventListener("mousedown", onOutsideClick);
+  }, []);
+
+  function openNotification(n) {
+    if (!n.is_read) {
+      API.post(`/notifications/${n.id}/read`).catch(() => {});
+      setNotifications(prev => prev.map(x => (x.id === n.id ? { ...x, is_read: 1 } : x)));
+      setUnreadCount(c => Math.max(0, c - 1));
+    }
+    setBellOpen(false);
+    if (n.link_url) navigate(n.link_url);
+  }
+
+  const isTeaching = (summary?.classes_teaching ?? 0) > 0;
+  const isLearning = (summary?.classes_joined ?? 0) > 0;
+  const roleLabel = [isTeaching && "Teacher", isLearning && "Student"].filter(Boolean).join(" · ")
+    || (localStorage.getItem("nova_role") || "student").toUpperCase();
+
+  const now = Date.now();
+  const urgentDeadline = (deadlines || [])
+    .filter(d => {
+      const t = new Date(d.due_date).getTime();
+      return t > now && t - now < URGENT_WINDOW_MS;
+    })
+    .sort((a, b) => new Date(a.due_date) - new Date(b.due_date))[0];
+
+  let banner = null;
+  if (urgentDeadline) {
+    const due = formatDateTime(urgentDeadline.due_date);
+    banner = {
+      icon: "📌",
+      text: `"${urgentDeadline.title}" assignment due ${due.time} today — ${urgentDeadline.class_name} class`,
+      action: () => navigate(`/classroom/${urgentDeadline.class_id}`),
+    };
+  } else if ((summary?.to_grade_count ?? 0) > 0) {
+    const n = summary.to_grade_count;
+    banner = {
+      icon: "📝",
+      text: `${n} submission${n > 1 ? "s" : ""} waiting to be graded`,
+      action: () => navigate("/classroom"),
+    };
+  } else if (liveMeetings.length > 0) {
+    banner = {
+      icon: "🔴",
+      text: `${liveMeetings[0].class_name} is live now`,
+      action: () => window.open(liveMeetings[0].room_url, "_blank", "noreferrer"),
+    };
+  }
+
+  const weekStart = mondayOfThisWeek();
+  const weekDays = WEEKDAY_LABELS.map((label, i) => {
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() + i);
+    return { label, num: d.getDate(), isToday: d.toDateString() === new Date().toDateString() };
+  });
 
   return (
     <div style={s.layout}>
@@ -23,151 +135,219 @@ export default function Dashboard() {
         {/* Top Bar */}
         <div style={s.topbar}>
           <div style={s.searchWrap}>
-            <span style={s.searchIcon}>🔍</span>
+            <Icon name="search" size={14} style={s.searchIcon} />
             <input style={s.search} placeholder="Search lessons, materials, or students..." />
           </div>
-          <div style={s.userChip}>
-            <div style={s.avatar}>{name[0]?.toUpperCase()}</div>
-            <div>
-              <div style={s.userName}>{name}</div>
-              <div style={s.userRole}>STUDENT</div>
+          <div style={s.topbarRight}>
+            <div style={s.bellWrap} ref={bellRef}>
+              <button type="button" style={s.bellBtn} aria-label="Notifications" onClick={() => setBellOpen(o => !o)}>
+                <Icon name="bell" size={18} alt="" />
+                {unreadCount > 0 && <span data-testid="unread-badge" style={s.bellBadge}>{unreadCount}</span>}
+              </button>
+              {bellOpen && (
+                <div style={s.bellDropdown}>
+                  <div style={s.bellDropdownHeader}>
+                    <span>Notifications</span>
+                    {unreadCount > 0 && (
+                      <span
+                        style={s.bellMarkAll}
+                        onClick={() => {
+                          API.post("/notifications/read-all").catch(() => {});
+                          setNotifications(prev => prev.map(x => ({ ...x, is_read: 1 })));
+                          setUnreadCount(0);
+                        }}
+                      >
+                        Mark all read
+                      </span>
+                    )}
+                  </div>
+                  {notifications.length === 0 && <div style={s.bellEmpty}>No notifications yet</div>}
+                  {notifications.map(n => (
+                    <div key={n.id} style={{ ...s.bellItem, ...(n.is_read ? {} : s.bellItemUnread) }} onClick={() => openNotification(n)}>
+                      <div style={s.bellItemTitle}>{n.title}</div>
+                      <div style={s.bellItemTime}>{formatDateTime(n.created_at).label}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={s.userChip}>
+              <div style={s.avatar}>{name[0]?.toUpperCase()}</div>
+              <div>
+                <div style={s.userName}>{name}</div>
+                <div style={s.userRole}>{roleLabel}</div>
+              </div>
             </div>
           </div>
         </div>
 
         {/* Welcome */}
         <div style={s.welcomeRow}>
-          <div>
-            <h1 style={s.welcomeTitle}>Welcome back, {name}! 👋</h1>
-            <p style={s.welcomeSub}>Here is what is happening on your educational portal today.</p>
-          </div>
+          <h1 style={s.welcomeTitle}>Welcome back, {name} 👋</h1>
         </div>
 
-        {/* Stats Row */}
-        <div style={s.statsRow}>
-          {[
-            { icon: "💬", label: "Total Chats",    value: summary?.total_chats      ?? "—" },
-            { icon: "✅", label: "Quiz Accuracy",  value: summary?.overall_accuracy  ? `${summary.overall_accuracy}%` : "—" },
-            { icon: "📚", label: "Total Quizzes",  value: summary?.total_quizzes     ?? "—" },
-            { icon: "🎯", label: "TOPIK Level",    value: "II" },
-          ].map((stat, i) => (
-            <div key={i} style={s.statCard}>
-              <span style={s.statIcon}>{stat.icon}</span>
-              <div style={s.statValue}>{stat.value}</div>
-              <div style={s.statLabel}>{stat.label}</div>
+        {/* Priority banner */}
+        {banner && (
+          <div style={s.priorityBanner}>
+            <span style={s.priorityText}>{banner.icon} {banner.text}</span>
+            <button style={s.priorityBtn} onClick={banner.action}>View</button>
+          </div>
+        )}
+
+        {todayPlan && (isTeaching || isLearning) && (
+          <section style={s.todayPlanCard} aria-label="AI Today Plan">
+            <div style={s.todayPlanHeader}>
+              <div><span style={s.todayPlanSparkle}>✦</span> AI Today Plan</div>
+              <span style={s.todayPlanHint}>Your next best steps</span>
             </div>
-          ))}
-        </div>
+            <div style={s.todayPlanSections}>
+              {isLearning && (
+                <div style={s.todayPlanSection}>
+                  <h3 style={s.todayPlanTitle}>Student Today Plan</h3>
+                  {todayPlan.studentPlan?.length > 0 ? todayPlan.studentPlan.map((task, index) => (
+                    <button type="button" key={`${task.link}-${index}`} style={s.todayTask} onClick={() => navigate(task.link)}>
+                      <span style={s.todayTaskNumber}>{index + 1}</span>
+                      <span style={s.todayTaskCopy}><strong>{task.title}</strong><small>{task.reason}</small></span>
+                      <span style={s.todayTaskGo}>Start →</span>
+                    </button>
+                  )) : <p style={s.todayPlanEmpty}>You are all caught up. Review a lesson or practice with K_MATE.</p>}
+                </div>
+              )}
+              {isTeaching && (
+                <div style={s.todayPlanSection}>
+                  <h3 style={s.todayPlanTitle}>Teacher Today Plan</h3>
+                  {todayPlan.teacherPlan?.length > 0 ? todayPlan.teacherPlan.map((task, index) => (
+                    <button type="button" key={`${task.link}-${index}`} style={s.todayTask} onClick={() => navigate(task.link)}>
+                      <span style={s.todayTaskNumber}>{index + 1}</span>
+                      <span style={s.todayTaskCopy}><strong>{task.title}</strong><small>{task.reason}</small></span>
+                      <span style={s.todayTaskGo}>Review →</span>
+                    </button>
+                  )) : <p style={s.todayPlanEmpty}>No grading is waiting today. Your classes are up to date.</p>}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
+        {/* Unified summary card */}
+        {(isTeaching || isLearning) && (
+          <div style={s.summaryCard}>
+            <div style={s.summaryHalves}>
+              {isTeaching && (
+                <div style={{ ...s.summaryBlock, ...(isLearning ? s.summaryBlockBordered : {}) }}>
+                  <div style={s.summaryBlockIcon}><Icon name="graduation-cap" size={22} alt="" /></div>
+                  <div>
+                    <div style={s.summaryBlockLabel}>Teaching</div>
+                    <div style={s.summaryStatsRow}>
+                      <span><strong>{summary.classes_teaching}</strong> classes</span>
+                      <span><strong>{summary.to_grade_count}</strong> to grade</span>
+                      <span><strong>{liveMeetings.length}</strong> live now</span>
+                    </div>
+                    <div style={s.quickActions}>
+                      <button style={s.quickActionBtn} onClick={() => navigate("/classroom")}>
+                        <Icon name="add-file" size={13} alt="" /> Create assignment
+                      </button>
+                      <button style={s.quickActionBtn} onClick={() => navigate("/classroom")}>
+                        <Icon name="video-call" size={13} alt="" /> Start meeting
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {isLearning && (
+                <div style={s.summaryBlock}>
+                  <div style={{ ...s.summaryBlockIcon, ...s.summaryBlockIconCyan }}><Icon name="book" size={22} alt="" /></div>
+                  <div>
+                    <div style={s.summaryBlockLabel}>Learning</div>
+                    <div style={s.summaryStatsRow}>
+                      <span><strong>{summary.classes_joined}</strong> classes</span>
+                      <span><strong>{summary.questions_asked}</strong> K.MATE Qs</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {attendance && attendance.total > 0 && (
+              <div style={s.attendanceStrip}>
+                <div style={s.attendanceRing(attendance.rate)}>{attendance.rate}%</div>
+                <div style={s.attendanceText}>
+                  <div><strong>Your attendance — {attendance.rate}% this month</strong></div>
+                  <div style={s.attendanceBreakdown}>
+                    {attendance.present} present · {attendance.late} late · {attendance.absent} absent
+                  </div>
+                </div>
+                <span style={{ ...s.attendanceBadge, ...(attendance.rate >= 80 ? s.attendanceBadgeGood : s.attendanceBadgeBad) }}>
+                  {attendance.rate >= 80 ? "Above requirement" : "Below requirement"}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Main Grid */}
         <div style={s.grid}>
           {/* Left: Classes */}
           <div style={s.colLeft}>
             <div style={s.sectionHeader}>
-              <h3 style={s.sectionTitle}>Your Classes</h3>
-              <span style={s.viewAll}>View All</span>
+              <h3 style={s.sectionTitle}>Your classes</h3>
+              <span style={s.viewAll} onClick={() => navigate("/classroom")}>View All</span>
             </div>
-            <div style={s.classCards}>
-              {/* Add New */}
-              <div style={{ ...s.classCard, ...s.classCardAdd }} onClick={() => navigate("/classroom")}>
-                <div style={s.plusIcon}>+</div>
-                <div style={s.cardTitle}>Join or Create Class</div>
-                <div style={s.cardSub}>Start a new journey</div>
-              </div>
-              {/* Active */}
-              <div style={s.classCard}>
-                <span style={{ ...s.badge, background: "#d1fae5", color: "#065f46" }}>ACTIVE</span>
-                <div style={s.cardTitle}>Advanced Korean II</div>
-                <div style={s.cardSub}>Manage your learning or teaching materials here.</div>
-                <div style={s.cardFooter}>
-                  <div style={s.avatarGroup}>👤👤👤 <span style={s.cardSub}>+12</span></div>
-                  <span style={s.arrow}>→</span>
+            <div style={s.classList}>
+              {(classes || []).map(cls => (
+                <div key={cls.id} style={s.classRow} onClick={() => navigate(`/classroom/${cls.id}`)}>
+                  <div style={s.classRowIcon}><Icon name="book" size={16} alt="" /></div>
+                  <div style={s.classRowBody}>
+                    <div style={s.classRowName}>{cls.name}</div>
+                    <div style={s.classRowSub}>
+                      {cls.my_role === "teacher" ? (cls.subject || "General") : `Taught by ${cls.teacher_name}`} · {cls.material_count} materials
+                    </div>
+                  </div>
+                  <span style={{ ...s.classTag, ...(cls.my_role === "teacher" ? s.classTagTeaching : s.classTagLearning) }}>
+                    {cls.my_role === "teacher" ? "Teaching" : "Learning"}
+                  </span>
                 </div>
-              </div>
-              {/* Upcoming */}
-              <div style={s.classCard}>
-                <span style={{ ...s.badge, background: "#dbeafe", color: "#1e40af" }}>UPCOMING</span>
-                <div style={s.cardTitle}>TOPIK Prep (Intensive)</div>
-                <div style={s.progressWrap}>
-                  <div style={s.progressBar}><div style={{ ...s.progressFill, width: "65%" }} /></div>
-                  <span style={s.cardSub}>Curriculum Progress 65%</span>
-                </div>
-                <button style={s.resumeBtn} onClick={() => navigate("/kmate")}>Resume Lesson</button>
+              ))}
+              <div style={s.classRowAdd} onClick={() => navigate("/classroom")}>
+                <span>+ Join or Create Class</span>
               </div>
             </div>
 
-            {/* AI Tools */}
-            <div style={{ ...s.sectionHeader, marginTop: "24px" }}>
-              <h3 style={s.sectionTitle}>Recommended AI Tools</h3>
-              <span style={s.proBadge}>PRO</span>
+            <div style={{ ...s.sectionHeader, marginTop: "20px" }}>
+              <h3 style={s.sectionTitle}>AI Tools</h3>
             </div>
-            <div style={s.aiTools}>
-              {[
-                { icon: "🌐", name: "Smart Translator",  desc: "Real-time context"        },
-                { icon: "✏️", name: "Grammar Fixer",     desc: "Deep structural analysis" },
-                { icon: "📋", name: "TOPIK Quizzer",     desc: "Personalized practice"    },
-                { icon: "🤖", name: "K_MATE",            desc: "Help 24/7"                },
-              ].map((tool, i) => (
-                <div key={i} style={s.toolCard}
-                  onClick={() => tool.name === "K_MATE" && navigate("/kmate")}
-                >
-                  <div style={s.toolIcon}>{tool.icon}</div>
-                  <div style={s.toolName}>{tool.name}</div>
-                  <div style={s.toolDesc}>{tool.desc}</div>
-                </div>
-              ))}
+            <div style={s.aiToolsChip} onClick={() => navigate("/kmate")}>
+              <Icon name="bot" size={16} alt="" /> Open K_MATE and more AI tools →
             </div>
           </div>
 
-          {/* Right: Calendar + Events + Insights */}
+          {/* Right: This week + Upcoming */}
           <div style={s.colRight}>
-            {/* Calendar */}
             <div style={s.card}>
-              <div style={s.calHeader}>
-                <span style={s.calTitle}>{monthName} {year}</span>
-                <div style={s.calNav}><button style={s.calBtn}>‹</button><button style={s.calBtn}>›</button></div>
+              <h3 style={s.cardHeading}>This week</h3>
+              <div style={s.weekStrip} data-testid="week-strip">
+                {weekDays.map(d => (
+                  <div key={d.label + d.num} style={{ ...s.weekDay, ...(d.isToday ? s.weekDayToday : {}) }}>
+                    <div style={s.weekDayLabel}>{d.label}</div>
+                    <div style={s.weekDayNum}>{d.num}</div>
+                  </div>
+                ))}
               </div>
-              <MiniCalendar />
             </div>
 
-            {/* Upcoming Events */}
             <div style={s.card}>
-              <h3 style={s.cardHeading}>Upcoming Events</h3>
-              {[
-                { date: "28", month: "MAY", title: "TOPIK Mock Exam",      time: "09:00 AM – Online Portal" },
-                { date: "02", month: "JUN", title: "Curriculum Workshop",  time: "02:30 PM – Room 402"      },
-              ].map((e, i) => (
-                <div key={i} style={s.eventRow}>
-                  <div style={s.eventDate}>
-                    <div style={s.eventDay}>{e.date}</div>
-                    <div style={s.eventMonth}>{e.month}</div>
+              <h3 style={s.cardHeading}>Upcoming</h3>
+              {deadlines && deadlines.length === 0 && <p style={s.noEventsHint}>No upcoming deadlines — you're all caught up 🎉</p>}
+              {(deadlines || []).slice(0, 3).map(dl => {
+                const due = formatDateTime(dl.due_date);
+                return (
+                  <div key={dl.id} style={s.upcomingRow}>
+                    <span style={s.upcomingDot} />
+                    <span style={s.upcomingTitle}>{dl.title} — {dl.class_name}</span>
+                    <span style={s.upcomingTime}>{due.label}</span>
                   </div>
-                  <div>
-                    <div style={s.eventTitle}>{e.title}</div>
-                    <div style={s.eventTime}>{e.time}</div>
-                  </div>
-                </div>
-              ))}
-              <button style={s.scheduleBtn}>Full Schedule</button>
-            </div>
-
-            {/* Platform Insights */}
-            <div style={s.card}>
-              <h3 style={s.cardHeading}>Platform Insights</h3>
-              {[
-                { label: "Classroom Engagement", pct: 84 },
-                { label: "AI Tool Adoption",     pct: 62 },
-              ].map((item, i) => (
-                <div key={i} style={{ marginBottom: "12px" }}>
-                  <div style={s.insightRow}>
-                    <span style={s.insightLabel}>{item.label}</span>
-                    <span style={s.insightPct}>{item.pct}%</span>
-                  </div>
-                  <div style={s.progressBar}>
-                    <div style={{ ...s.progressFill, width: `${item.pct}%` }} />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
@@ -176,121 +356,158 @@ export default function Dashboard() {
   );
 }
 
-function MiniCalendar() {
-  const days = ["S","M","T","W","T","F","S"];
-  const today = new Date().getDate();
-  const cells = Array.from({ length: 35 }, (_, i) => i - 2);
-  return (
-    <div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: "4px", marginBottom: "8px" }}>
-        {days.map(d => <div key={d} style={{ textAlign: "center", fontSize: "11px", color: "#9ca3af", fontWeight: 600 }}>{d}</div>)}
-      </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: "4px" }}>
-        {cells.map((d, i) => (
-          <div key={i} style={{
-            textAlign: "center", fontSize: "12px", padding: "4px",
-            borderRadius: "50%", cursor: d > 0 ? "pointer" : "default",
-            background: d === today ? "#3B37CC" : "transparent",
-            color: d === today ? "#fff" : d > 0 ? "#374151" : "transparent",
-            fontWeight: d === today ? 700 : 400,
-          }}>{d > 0 ? d : ""}</div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 const s = {
-  layout: { display: "flex", minHeight: "100vh", background: "#f5f5f5" },
+  layout: { display: "flex", minHeight: "100vh", background: "var(--bg)" },
   main: { marginLeft: "240px", flex: 1, padding: "24px 32px", minHeight: "100vh" },
-  topbar: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "24px" },
+  topbar: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" },
   searchWrap: { position: "relative", flex: 1, maxWidth: "400px" },
   searchIcon: { position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", fontSize: "14px" },
   search: {
-    width: "100%", padding: "10px 10px 10px 36px", background: "#fff",
-    border: "1.5px solid #e5e7eb", borderRadius: "10px", fontSize: "14px",
+    width: "100%", padding: "10px 10px 10px 36px", background: "var(--surface)", color: "var(--text)",
+    border: "1.5px solid var(--border)", borderRadius: "10px", fontSize: "14px",
   },
+  topbarRight: { display: "flex", alignItems: "center", gap: "16px" },
+  bellWrap: { position: "relative" },
+  bellBtn: {
+    position: "relative", width: "38px", height: "38px", borderRadius: "50%",
+    background: "var(--surface)", border: "1px solid var(--border)",
+    display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer",
+  },
+  bellBadge: {
+    position: "absolute", top: "-2px", right: "-2px", background: "#DC2626", color: "#fff",
+    fontSize: "10px", fontWeight: 700, borderRadius: "9px", minWidth: "16px", height: "16px",
+    display: "flex", alignItems: "center", justifyContent: "center", padding: "0 3px",
+  },
+  bellDropdown: {
+    position: "absolute", top: "46px", right: 0, width: "300px", maxHeight: "360px", overflowY: "auto",
+    background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "14px",
+    boxShadow: "0 4px 20px rgba(15,23,42,0.12)", zIndex: 50,
+  },
+  bellDropdownHeader: {
+    display: "flex", justifyContent: "space-between", alignItems: "center",
+    padding: "12px 14px", borderBottom: "1px solid var(--border)", fontSize: "13px", fontWeight: 700, color: "var(--text)",
+  },
+  bellMarkAll: { fontSize: "12px", fontWeight: 600, color: "#4F46E5", cursor: "pointer" },
+  bellEmpty: { padding: "20px", textAlign: "center", fontSize: "13px", color: "var(--text-muted)" },
+  bellItem: { padding: "10px 14px", borderBottom: "1px solid var(--border)", cursor: "pointer" },
+  bellItemUnread: { background: "var(--surface-alt)" },
+  bellItemTitle: { fontSize: "13px", fontWeight: 600, color: "var(--text)" },
+  bellItemTime: { fontSize: "11px", color: "var(--text-muted)", marginTop: "2px" },
   userChip: { display: "flex", alignItems: "center", gap: "10px" },
   avatar: {
-    width: "36px", height: "36px", borderRadius: "50%", background: "#3B37CC",
+    width: "36px", height: "36px", borderRadius: "50%", background: "var(--primary)",
     color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700,
   },
-  userName: { fontSize: "14px", fontWeight: 600 },
-  userRole: { fontSize: "11px", color: "#6b7280", letterSpacing: "0.5px" },
-  welcomeRow: { marginBottom: "24px" },
-  welcomeTitle: { fontSize: "26px", fontWeight: 700, color: "#1a1a2e", marginBottom: "4px" },
-  welcomeSub: { fontSize: "14px", color: "#6b7280" },
-  statsRow: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "16px", marginBottom: "28px" },
-  statCard: {
-    background: "#fff", borderRadius: "12px", padding: "20px",
-    textAlign: "center", border: "1px solid #e5e7eb",
+  userName: { fontSize: "14px", fontWeight: 600, color: "var(--text)" },
+  userRole: { fontSize: "11px", color: "var(--text-muted)", letterSpacing: "0.3px" },
+  welcomeRow: { marginBottom: "16px" },
+  welcomeTitle: { fontSize: "24px", fontWeight: 700, color: "var(--text)" },
+  priorityBanner: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    background: "linear-gradient(135deg, #4F46E5, #6366F1)", color: "#fff",
+    borderRadius: "16px", padding: "16px 22px", marginBottom: "20px",
   },
-  statIcon: { fontSize: "24px", display: "block", marginBottom: "8px" },
-  statValue: { fontSize: "28px", fontWeight: 700, color: "#3B37CC" },
-  statLabel: { fontSize: "12px", color: "#6b7280", marginTop: "4px" },
-  grid: { display: "grid", gridTemplateColumns: "1fr 300px", gap: "24px" },
+  priorityText: { fontSize: "14px", fontWeight: 600 },
+  priorityBtn: {
+    background: "#fff", color: "#4F46E5", border: "none", borderRadius: "8px",
+    padding: "8px 18px", fontSize: "13px", fontWeight: 700, cursor: "pointer", flexShrink: 0,
+  },
+  todayPlanCard: { background: "linear-gradient(135deg, #EEF2FF, var(--surface))", border: "1px solid #C7D2FE", borderRadius: "16px", padding: "18px", marginBottom: "20px" },
+  todayPlanHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", color: "var(--text)", fontSize: "15px", fontWeight: 800, marginBottom: "14px" },
+  todayPlanSparkle: { color: "#4F46E5", marginRight: "6px" },
+  todayPlanHint: { color: "var(--text-muted)", fontSize: "12px", fontWeight: 600 },
+  todayPlanSections: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px" },
+  todayPlanSection: { display: "flex", flexDirection: "column", gap: "8px" },
+  todayPlanTitle: { color: "#3730A3", fontSize: "13px", fontWeight: 800, margin: 0 },
+  todayPlanEmpty: { margin: 0, padding: "11px", borderRadius: "10px", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-muted)", fontSize: "12px", lineHeight: 1.45 },
+  todayTask: { display: "flex", alignItems: "center", gap: "10px", width: "100%", padding: "10px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", cursor: "pointer", textAlign: "left", color: "var(--text)" },
+  todayTaskNumber: { width: "22px", height: "22px", flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: "#E0E7FF", color: "#4338CA", fontSize: "11px", fontWeight: 800 },
+  todayTaskCopy: { display: "flex", flex: 1, minWidth: 0, flexDirection: "column", gap: "2px", fontSize: "12px" },
+  todayTaskGo: { color: "#4F46E5", fontSize: "11px", fontWeight: 800, flexShrink: 0 },
+  summaryCard: {
+    background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px",
+    boxShadow: "0 4px 20px rgba(15,23,42,0.06)", marginBottom: "20px", overflow: "hidden",
+  },
+  summaryHalves: { display: "flex" },
+  summaryBlock: { flex: 1, display: "flex", gap: "14px", padding: "22px" },
+  summaryBlockBordered: { borderRight: "1px solid var(--border)" },
+  summaryBlockIcon: {
+    width: "44px", height: "44px", borderRadius: "12px", background: "#EEF2FF",
+    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+  },
+  summaryBlockIconCyan: { background: "#ECFEFF" },
+  summaryBlockLabel: { fontSize: "15px", fontWeight: 700, color: "var(--text)", marginBottom: "6px" },
+  summaryStatsRow: { display: "flex", gap: "16px", fontSize: "13px", color: "var(--text-muted)" },
+  quickActions: { display: "flex", gap: "8px", marginTop: "10px" },
+  quickActionBtn: {
+    display: "flex", alignItems: "center", gap: "5px", background: "var(--surface-alt)",
+    border: "1px solid var(--border)", borderRadius: "8px", padding: "6px 10px",
+    fontSize: "12px", fontWeight: 600, color: "var(--text)", cursor: "pointer",
+  },
+  attendanceStrip: {
+    display: "flex", alignItems: "center", gap: "14px", padding: "16px 22px",
+    background: "var(--surface-alt)", borderTop: "1px solid var(--border)",
+  },
+  attendanceRing: (rate) => ({
+    width: "42px", height: "42px", borderRadius: "50%", flexShrink: 0,
+    display: "flex", alignItems: "center", justifyContent: "center",
+    fontSize: "10px", fontWeight: 800, color: "var(--text)",
+    background: `conic-gradient(#16A34A ${rate}%, var(--border) ${rate}% 100%)`,
+  }),
+  attendanceText: { flex: 1, fontSize: "13px", color: "var(--text)" },
+  attendanceBreakdown: { fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" },
+  attendanceBadge: { fontSize: "11px", fontWeight: 700, padding: "4px 10px", borderRadius: "20px", flexShrink: 0 },
+  attendanceBadgeGood: { background: "#FEF3C7", color: "#D97706" },
+  attendanceBadgeBad: { background: "#FEE2E2", color: "#DC2626" },
+  grid: { display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: "20px" },
   colLeft: {},
   colRight: { display: "flex", flexDirection: "column", gap: "16px" },
-  sectionHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" },
-  sectionTitle: { fontSize: "16px", fontWeight: 700, color: "#1a1a2e" },
-  viewAll: { fontSize: "13px", color: "#3B37CC", cursor: "pointer", fontWeight: 600 },
-  proBadge: {
-    background: "#3B37CC", color: "#fff", padding: "2px 8px",
-    borderRadius: "4px", fontSize: "11px", fontWeight: 700,
+  sectionHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" },
+  sectionTitle: { fontSize: "15px", fontWeight: 700, color: "var(--text)" },
+  viewAll: { fontSize: "13px", color: "var(--primary)", cursor: "pointer", fontWeight: 600 },
+  classList: {
+    background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px",
+    boxShadow: "0 4px 20px rgba(15,23,42,0.06)", overflow: "hidden",
   },
-  classCards: { display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "16px" },
-  classCard: {
-    background: "#fff", borderRadius: "12px", padding: "20px",
-    border: "1px solid #e5e7eb", display: "flex", flexDirection: "column", gap: "8px",
+  classRow: {
+    display: "flex", alignItems: "center", gap: "12px", padding: "14px 18px",
+    borderBottom: "1px solid var(--border)", cursor: "pointer",
   },
-  classCardAdd: {
-    border: "2px dashed #e5e7eb", cursor: "pointer",
-    alignItems: "center", justifyContent: "center", textAlign: "center",
+  classRowIcon: {
+    width: "32px", height: "32px", borderRadius: "8px", background: "var(--surface-alt)",
+    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
   },
-  plusIcon: {
-    width: "40px", height: "40px", borderRadius: "50%", background: "#f5f5f5",
-    display: "flex", alignItems: "center", justifyContent: "center",
-    fontSize: "24px", color: "#6b7280", marginBottom: "8px",
+  classRowBody: { flex: 1, minWidth: 0 },
+  classRowName: { fontSize: "14px", fontWeight: 700, color: "var(--text)" },
+  classRowSub: { fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" },
+  classTag: { fontSize: "11px", fontWeight: 700, padding: "4px 10px", borderRadius: "20px", flexShrink: 0 },
+  classTagTeaching: { background: "#EEF2FF", color: "#4F46E5" },
+  classTagLearning: { background: "#ECFEFF", color: "#06B6D4" },
+  classRowAdd: {
+    padding: "14px 18px", border: "1.5px dashed var(--border)", textAlign: "center",
+    fontSize: "13px", fontWeight: 600, color: "var(--text-muted)", cursor: "pointer",
   },
-  badge: { padding: "3px 10px", borderRadius: "20px", fontSize: "11px", fontWeight: 700, width: "fit-content" },
-  cardTitle: { fontSize: "15px", fontWeight: 700, color: "#1a1a2e" },
-  cardSub: { fontSize: "12px", color: "#6b7280" },
-  cardFooter: { display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "8px" },
-  avatarGroup: { fontSize: "14px", display: "flex", alignItems: "center", gap: "4px" },
-  arrow: { fontSize: "16px", color: "#3B37CC" },
-  progressWrap: { display: "flex", flexDirection: "column", gap: "4px" },
-  progressBar: { background: "#e5e7eb", borderRadius: "4px", height: "6px", overflow: "hidden" },
-  progressFill: { background: "#3B37CC", height: "100%", borderRadius: "4px" },
-  resumeBtn: {
-    background: "#3B37CC", color: "#fff", padding: "8px 16px",
-    borderRadius: "8px", fontSize: "13px", fontWeight: 600, border: "none", marginTop: "4px",
+  aiToolsChip: {
+    display: "flex", alignItems: "center", gap: "8px", background: "var(--surface)",
+    border: "1px solid var(--border)", borderRadius: "12px", padding: "12px 16px",
+    fontSize: "13px", fontWeight: 600, color: "var(--text)", cursor: "pointer",
   },
-  aiTools: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "12px" },
-  toolCard: {
-    background: "#fff", borderRadius: "12px", padding: "16px",
-    textAlign: "center", border: "1px solid #e5e7eb", cursor: "pointer",
+  card: {
+    background: "var(--surface)", borderRadius: "16px", padding: "16px",
+    border: "1px solid var(--border)", boxShadow: "0 4px 20px rgba(15,23,42,0.06)",
   },
-  toolIcon: { fontSize: "24px", marginBottom: "8px" },
-  toolName: { fontSize: "13px", fontWeight: 700, color: "#1a1a2e", marginBottom: "2px" },
-  toolDesc: { fontSize: "11px", color: "#6b7280" },
-  card: { background: "#fff", borderRadius: "12px", padding: "16px", border: "1px solid #e5e7eb" },
-  calHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" },
-  calTitle: { fontWeight: 700, fontSize: "14px" },
-  calNav: { display: "flex", gap: "4px" },
-  calBtn: { background: "transparent", border: "1px solid #e5e7eb", borderRadius: "4px", padding: "2px 8px", cursor: "pointer" },
-  cardHeading: { fontSize: "15px", fontWeight: 700, marginBottom: "12px", color: "#1a1a2e" },
-  eventRow: { display: "flex", gap: "12px", marginBottom: "12px", alignItems: "flex-start" },
-  eventDate: { background: "#3B37CC", color: "#fff", borderRadius: "8px", padding: "6px 10px", textAlign: "center", minWidth: "44px" },
-  eventDay: { fontSize: "16px", fontWeight: 700 },
-  eventMonth: { fontSize: "10px", letterSpacing: "0.5px" },
-  eventTitle: { fontSize: "13px", fontWeight: 600, color: "#1a1a2e" },
-  eventTime: { fontSize: "11px", color: "#6b7280" },
-  scheduleBtn: {
-    width: "100%", padding: "8px", background: "transparent",
-    border: "1.5px solid #e5e7eb", borderRadius: "8px", fontSize: "13px",
-    fontWeight: 600, color: "#6b7280", marginTop: "4px",
+  cardHeading: { fontSize: "14px", fontWeight: 700, marginBottom: "12px", color: "var(--text)" },
+  weekStrip: { display: "flex", gap: "6px" },
+  weekDay: {
+    flex: 1, textAlign: "center", padding: "10px 0", borderRadius: "10px",
+    background: "var(--surface-alt)", color: "var(--text)",
   },
-  insightRow: { display: "flex", justifyContent: "space-between", marginBottom: "4px" },
-  insightLabel: { fontSize: "13px", color: "#374151" },
-  insightPct: { fontSize: "13px", fontWeight: 700, color: "#3B37CC" },
+  weekDayToday: { background: "var(--primary)", color: "#fff" },
+  weekDayLabel: { fontSize: "11px", fontWeight: 600, opacity: 0.8 },
+  weekDayNum: { fontSize: "15px", fontWeight: 700, marginTop: "2px" },
+  noEventsHint: { fontSize: "13px", color: "var(--text-muted)" },
+  upcomingRow: { display: "flex", alignItems: "center", gap: "8px", padding: "8px 0", borderBottom: "1px solid var(--border)" },
+  upcomingDot: { width: "7px", height: "7px", borderRadius: "50%", background: "#4F46E5", flexShrink: 0 },
+  upcomingTitle: { flex: 1, fontSize: "13px", color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  upcomingTime: { fontSize: "12px", color: "var(--text-muted)", flexShrink: 0 },
 };

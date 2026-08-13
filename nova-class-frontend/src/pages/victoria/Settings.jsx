@@ -1,15 +1,62 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Sidebar from "../../components/Sidebar";
 import { useLang } from "../../LanguageContext";
+import { useTheme } from "../../ThemeContext";
+import API from "../../services/api";
+
+// The API reports failures as { error: "..." }; anything without a response
+// never reached the server (a plain "failed" message would blame the wrong thing).
+function apiErrorText(err, fallback) {
+  if (!err.response) return "Cannot reach the server. Is the backend running?";
+  return err.response.data?.error || fallback;
+}
 
 export default function Settings() {
-  const name  = localStorage.getItem("nova_name") || "Student";
+  const [name, setName] = useState(localStorage.getItem("nova_name") || "Student");
   const [notif, setNotif]   = useState(true);
   const [saved, setSaved]   = useState(false);
+  const [error, setError]   = useState("");
+  const [deleting, setDeleting] = useState(false);
   const { lang, changeLang, t } = useLang();
+  const { theme, toggleTheme } = useTheme();
   const my = lang === "my";
+  const navigate = useNavigate();
 
-  function save() { setSaved(true); setTimeout(() => setSaved(false), 2000); }
+  async function save() {
+    setError(""); setSaved(false);
+    try {
+      const res = await API.put("/auth/me", { name: name.trim() });
+      localStorage.setItem("nova_name", res.data.name);
+      setName(res.data.name);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      setError(apiErrorText(err, my ? "သိမ်းဆည်း၍ မရပါ" : "Couldn't save changes"));
+    }
+  }
+
+  async function deleteAccount() {
+    const confirmed = window.confirm(
+      my
+        ? "အကောင့်ကို အပြီးတိုင် ဖျက်ပစ်မှာ သေချာပါသလား? ဒါကို ပြန်ပြင်လို့ မရပါ။"
+        : "Are you sure you want to permanently delete your account? This cannot be undone.",
+    );
+    if (!confirmed) return;
+
+    setError(""); setDeleting(true);
+    try {
+      await API.delete("/auth/me");
+      localStorage.removeItem("nova_token");
+      localStorage.removeItem("nova_name");
+      localStorage.removeItem("nova_role");
+      localStorage.removeItem("nova_email");
+      navigate("/login");
+    } catch (err) {
+      setError(apiErrorText(err, my ? "အကောင့် ဖျက်၍ မရပါ" : "Couldn't delete account"));
+      setDeleting(false);
+    }
+  }
 
   return (
     <div style={s.layout}>
@@ -35,7 +82,7 @@ export default function Settings() {
             </div>
             <div style={s.field}>
               <label style={s.label}>{my ? "ပြသမည့် အမည်" : "Display Name"}</label>
-              <input style={s.inp} defaultValue={name} />
+              <input style={s.inp} value={name} onChange={e => setName(e.target.value)} />
             </div>
             <div style={s.field}>
               <label style={s.label}>Email</label>
@@ -46,7 +93,7 @@ export default function Settings() {
           {/* Language */}
           <div style={s.card}>
             <h3 style={s.cardTitle}>🌐 {t("appLanguage")}</h3>
-            <p style={{ fontSize: "13px", color: "#6b7280", marginBottom: "16px" }}>{t("languageDesc")}</p>
+            <p style={{ fontSize: "13px", color: "var(--text-muted)", marginBottom: "16px" }}>{t("languageDesc")}</p>
 
             <div style={s.langRow}>
               {[
@@ -57,11 +104,11 @@ export default function Settings() {
                   onClick={() => changeLang(l.code)}
                   style={{
                     ...s.langCard,
-                    border: lang === l.code ? "2.5px solid #3B37CC" : "2px solid #e5e7eb",
-                    background: lang === l.code ? "#f0f4ff" : "#f9fafb",
+                    border: lang === l.code ? "2.5px solid var(--primary)" : "2px solid var(--border)",
+                    background: lang === l.code ? "var(--primary-tint)" : "var(--surface-alt)",
                   }}>
                   <div style={{ fontSize: "30px" }}>{l.flag}</div>
-                  <div style={{ fontSize: "14px", fontWeight: 700, color: lang === l.code ? "#3B37CC" : "#374151", marginTop: "8px" }}>{l.label}</div>
+                  <div style={{ fontSize: "14px", fontWeight: 700, color: lang === l.code ? "var(--primary)" : "var(--text-muted)", marginTop: "8px" }}>{l.label}</div>
                   {lang === l.code && <div style={s.langCheck}>✓</div>}
                 </div>
               ))}
@@ -72,10 +119,36 @@ export default function Settings() {
                 <div style={s.toggleLabel}>{my ? "အသိပေးချက်" : "Notifications"}</div>
                 <div style={s.toggleSub}>{my ? "စစ်ဆေးမှုများ အတွက် သတိပေးချက်" : "Get alerts for upcoming exams"}</div>
               </div>
-              <div style={{ ...s.toggle, background: notif ? "#3B37CC" : "#e5e7eb" }}
+              <div style={{ ...s.toggle, background: notif ? "var(--primary)" : "var(--border)" }}
                 onClick={() => setNotif(!notif)}>
                 <div style={{ ...s.toggleThumb, transform: notif ? "translateX(20px)" : "translateX(0)" }} />
               </div>
+            </div>
+          </div>
+
+          {/* Appearance */}
+          <div style={s.card}>
+            <h3 style={s.cardTitle}>🎨 {my ? "အသွင်အပြင်" : "Appearance"}</h3>
+            <p style={{ fontSize: "13px", color: "var(--text-muted)", marginBottom: "16px" }}>
+              {my ? "အလင်းရောင် သို့မဟုတ် အမှောင် mode ရွေးချယ်ပါ" : "Choose a light or dark theme"}
+            </p>
+            <div style={s.langRow}>
+              {[
+                { code: "light", icon: "☀️", label: my ? "အလင်း" : "Light" },
+                { code: "dark", icon: "🌙", label: my ? "အမှောင်" : "Dark" },
+              ].map(o => (
+                <div key={o.code}
+                  onClick={() => { if (theme !== o.code) toggleTheme(); }}
+                  style={{
+                    ...s.langCard,
+                    border: theme === o.code ? "2.5px solid var(--primary)" : "2px solid var(--border)",
+                    background: theme === o.code ? "var(--primary-tint)" : "var(--surface-alt)",
+                  }}>
+                  <div style={{ fontSize: "30px" }}>{o.icon}</div>
+                  <div style={{ fontSize: "14px", fontWeight: 700, color: theme === o.code ? "var(--primary)" : "var(--text-muted)", marginTop: "8px" }}>{o.label}</div>
+                  {theme === o.code && <div style={s.langCheck}>✓</div>}
+                </div>
+              ))}
             </div>
           </div>
 
@@ -106,12 +179,15 @@ export default function Settings() {
             </div>
             <div style={s.dangerZone}>
               <div style={s.dangerTitle}>⚠️ {my ? "အန္တရာယ်ဇုန်" : "Danger Zone"}</div>
-              <button style={s.dangerBtn}>{my ? "အကောင့် ဖျက်မည်" : "Delete Account"}</button>
+              <button style={s.dangerBtn} onClick={deleteAccount} disabled={deleting}>
+                {deleting ? (my ? "ဖျက်နေသည်..." : "Deleting...") : (my ? "အကောင့် ဖျက်မည်" : "Delete Account")}
+              </button>
             </div>
           </div>
         </div>
 
         <div style={s.saveRow}>
+          {error && <span style={s.errorMsg}>⚠️ {error}</span>}
           {saved && <span style={s.savedMsg}>✅ {my ? "သိမ်းဆည်းပြီး!" : "Settings saved!"}</span>}
           <button style={s.saveBtn} onClick={save}>{t("saveChanges")}</button>
         </div>
@@ -121,39 +197,40 @@ export default function Settings() {
 }
 
 const s = {
-  layout: { display: "flex", minHeight: "100vh", background: "#f5f5f5" },
+  layout: { display: "flex", minHeight: "100vh", background: "var(--bg)" },
   main: { marginLeft: "240px", flex: 1, padding: "24px 32px" },
   topbar: { marginBottom: "24px" },
-  title: { fontSize: "22px", fontWeight: 700, color: "#1a1a2e" },
-  sub: { fontSize: "13px", color: "#6b7280" },
+  title: { fontSize: "22px", fontWeight: 700, color: "var(--text)" },
+  sub: { fontSize: "13px", color: "var(--text-muted)" },
   grid: { display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: "20px", marginBottom: "24px" },
-  card: { background: "#fff", borderRadius: "14px", padding: "24px", border: "1px solid #e5e7eb" },
-  cardTitle: { fontSize: "16px", fontWeight: 700, marginBottom: "20px", color: "#1a1a2e" },
+  card: { background: "var(--surface)", borderRadius: "14px", padding: "24px", border: "1px solid var(--border)" },
+  cardTitle: { fontSize: "16px", fontWeight: 700, marginBottom: "20px", color: "var(--text)" },
   avatarRow: { display: "flex", alignItems: "center", gap: "16px", marginBottom: "20px" },
-  bigAvatar: { width: "56px", height: "56px", borderRadius: "50%", background: "#3B37CC", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px", fontWeight: 700 },
-  profileName: { fontSize: "18px", fontWeight: 700, color: "#1a1a2e" },
-  profileRole: { fontSize: "13px", color: "#6b7280" },
+  bigAvatar: { width: "56px", height: "56px", borderRadius: "50%", background: "var(--primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px", fontWeight: 700 },
+  profileName: { fontSize: "18px", fontWeight: 700, color: "var(--text)" },
+  profileRole: { fontSize: "13px", color: "var(--text-muted)" },
   field: { marginBottom: "16px" },
-  label: { display: "block", fontSize: "13px", fontWeight: 600, color: "#374151", marginBottom: "6px" },
-  inp: { width: "100%", padding: "10px 14px", border: "1.5px solid #e5e7eb", borderRadius: "10px", fontSize: "14px", color: "#1a1a2e", background: "#f9fafb", boxSizing: "border-box" },
+  label: { display: "block", fontSize: "13px", fontWeight: 600, color: "var(--text-muted)", marginBottom: "6px" },
+  inp: { width: "100%", padding: "10px 14px", border: "1.5px solid var(--border)", borderRadius: "10px", fontSize: "14px", color: "var(--text)", background: "var(--surface-alt)", boxSizing: "border-box" },
   langRow: { display: "flex", gap: "12px" },
   langCard: { flex: 1, borderRadius: "12px", padding: "20px 16px", textAlign: "center", cursor: "pointer", position: "relative", transition: "all 0.15s" },
-  langCheck: { position: "absolute", top: "8px", right: "10px", color: "#3B37CC", fontWeight: 800, fontSize: "14px" },
-  toggleRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderTop: "1px solid #f5f5f5" },
-  toggleLabel: { fontSize: "14px", fontWeight: 600, color: "#1a1a2e" },
-  toggleSub: { fontSize: "12px", color: "#9ca3af" },
+  langCheck: { position: "absolute", top: "8px", right: "10px", color: "var(--primary)", fontWeight: 800, fontSize: "14px" },
+  toggleRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderTop: "1px solid var(--border)" },
+  toggleLabel: { fontSize: "14px", fontWeight: 600, color: "var(--text)" },
+  toggleSub: { fontSize: "12px", color: "var(--text-faint)" },
   toggle: { width: "44px", height: "24px", borderRadius: "12px", cursor: "pointer", position: "relative", transition: "background 0.2s", flexShrink: 0 },
   toggleThumb: { position: "absolute", top: "3px", left: "3px", width: "18px", height: "18px", borderRadius: "50%", background: "#fff", transition: "transform 0.2s" },
   levelGrid: { display: "grid", gridTemplateColumns: "repeat(2,1fr)", gap: "12px" },
-  levelCard: { border: "2px solid #e5e7eb", borderRadius: "10px", padding: "16px", textAlign: "center", cursor: "pointer" },
-  levelActive: { border: "2px solid #3B37CC", background: "#ede9fe" },
-  levelNum: { fontSize: "28px", fontWeight: 800, color: "#3B37CC" },
-  levelName: { fontSize: "13px", color: "#6b7280", marginTop: "4px" },
-  levelBadge: { background: "#3B37CC", color: "#fff", borderRadius: "4px", padding: "2px 8px", fontSize: "10px", fontWeight: 700, marginTop: "6px", display: "inline-block" },
-  dangerZone: { marginTop: "20px", padding: "16px", background: "#fef2f2", borderRadius: "10px", border: "1px solid #fca5a5" },
+  levelCard: { border: "2px solid var(--border)", borderRadius: "10px", padding: "16px", textAlign: "center", cursor: "pointer" },
+  levelActive: { border: "2px solid var(--primary)", background: "var(--primary-tint)" },
+  levelNum: { fontSize: "28px", fontWeight: 800, color: "var(--primary)" },
+  levelName: { fontSize: "13px", color: "var(--text-muted)", marginTop: "4px" },
+  levelBadge: { background: "var(--primary)", color: "#fff", borderRadius: "4px", padding: "2px 8px", fontSize: "10px", fontWeight: 700, marginTop: "6px", display: "inline-block" },
+  dangerZone: { marginTop: "20px", padding: "16px", background: "rgba(239,68,68,0.08)", borderRadius: "10px", border: "1px solid rgba(239,68,68,0.35)" },
   dangerTitle: { fontSize: "13px", fontWeight: 700, color: "#dc2626", marginBottom: "8px" },
   dangerBtn: { padding: "8px 16px", background: "#ef4444", color: "#fff", border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer" },
   saveRow: { display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "16px" },
   savedMsg: { fontSize: "14px", color: "#10b981", fontWeight: 600 },
-  saveBtn: { background: "#3B37CC", color: "#fff", padding: "12px 28px", borderRadius: "10px", fontSize: "15px", fontWeight: 700, border: "none", cursor: "pointer" },
+  errorMsg: { fontSize: "14px", color: "#dc2626", fontWeight: 600 },
+  saveBtn: { background: "var(--primary)", color: "#fff", padding: "12px 28px", borderRadius: "10px", fontSize: "15px", fontWeight: 700, border: "none", cursor: "pointer" },
 };

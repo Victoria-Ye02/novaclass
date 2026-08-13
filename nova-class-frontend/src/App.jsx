@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { LanguageProvider } from "./LanguageContext";
+import { ThemeProvider } from "./ThemeContext";
 // --- Victoria's pages ---
 import Login from "./pages/victoria/Login";
 import Dashboard from "./pages/victoria/Dashboard";
@@ -9,20 +10,13 @@ import ClassDetail from "./pages/victoria/ClassDetail";
 import MaterialPreview from "./pages/victoria/MaterialPreview";
 import Settings from "./pages/victoria/Settings";
 import Exam from "./pages/victoria/Exam";
+import AdminDashboard from "./pages/victoria/AdminDashboard";
 // --- Thine's pages (add as they land in pages/thine/) ---
 // import XXX from "./pages/thine/XXX";
-import NovaAssistant from "./components/NovaAssistant";
 
 function ProtectedRoute({ children }) {
   const token = localStorage.getItem("nova_token");
   return token ? children : <Navigate to="/login" />;
-}
-
-function NovaAssistantWrapper() {
-  const loc = useLocation();
-  const token = localStorage.getItem("nova_token");
-  if (loc.pathname === "/login" || !token) return null;
-  return <NovaAssistant />;
 }
 
 // Modal-route pattern: when navigated to with { state: { backgroundLocation } },
@@ -45,6 +39,7 @@ function AppRoutes() {
         <Route path="/classroom/:id/material/:materialId" element={<ProtectedRoute><MaterialPreview /></ProtectedRoute>} />
         <Route path="/exam"     element={<ProtectedRoute><Exam /></ProtectedRoute>} />
         <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+        <Route path="/admin" element={<AdminDashboard />} />
         <Route path="*" element={<Navigate to="/" />} />
       </Routes>
 
@@ -59,11 +54,12 @@ function AppRoutes() {
 
 export default function App() {
   return (
+    <ThemeProvider>
     <LanguageProvider>
     <BrowserRouter>
-      <NovaAssistantWrapper />
       <AppRoutes />
     </BrowserRouter>
     </LanguageProvider>
+    </ThemeProvider>
   );
 }

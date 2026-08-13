@@ -65,14 +65,14 @@ export default function Classroom() {
   }
 
   return (
-    <div style={{ display: "flex", minHeight: "100vh", background: "#f8f9fa" }}>
+    <div style={{ display: "flex", minHeight: "100vh", background: "var(--bg)" }}>
       <Sidebar />
       <main style={{ marginLeft: "240px", flex: 1, padding: "32px" }}>
         {/* Header */}
         <div style={{ marginBottom: "32px", display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
-            <h1 style={{ fontSize: "24px", fontWeight: 700, color: "#1a1a2e", margin: 0 }}>Classroom</h1>
-            <p style={{ fontSize: "14px", color: "#6b7280", marginTop: "4px" }}>
+            <h1 style={{ fontSize: "24px", fontWeight: 700, color: "var(--text)", margin: 0 }}>Classroom</h1>
+            <p style={{ fontSize: "14px", color: "var(--text-muted)", marginTop: "4px" }}>
               Manage your classes and course materials
             </p>
           </div>
@@ -86,7 +86,7 @@ export default function Classroom() {
 
         {/* Class Grid */}
         {loading ? (
-          <div style={{ textAlign: "center", padding: "80px", color: "#9ca3af", fontSize: "15px" }}>
+          <div style={{ textAlign: "center", padding: "80px", color: "var(--text-faint)", fontSize: "15px" }}>
             Loading classes...
           </div>
         ) : (() => {
@@ -120,7 +120,7 @@ export default function Classroom() {
                   <div style={{
                     position: "absolute", bottom: "-20px", right: "16px",
                     width: "44px", height: "44px", borderRadius: "50%",
-                    background: "rgba(255,255,255,0.9)", border: "3px solid #fff",
+                    background: "rgba(255,255,255,0.9)", border: "3px solid var(--surface)",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     fontSize: "18px", fontWeight: 800, color: color,
                     boxShadow: "0 2px 8px rgba(0,0,0,0.15)", zIndex: 2,
@@ -131,25 +131,25 @@ export default function Classroom() {
 
                 {/* Card body */}
                 <div style={{ padding: "28px 16px 14px" }}>
-                  <div style={{ fontSize: "13px", color: "#374151", fontWeight: 500, marginBottom: "10px" }}>
+                  <div style={{ fontSize: "13px", color: "var(--text-muted)", fontWeight: 500, marginBottom: "10px" }}>
                     {cls.teacher_name || "Teacher"}
                   </div>
 
                   {/* Divider */}
-                  <div style={{ borderTop: "1px solid #f3f4f6", marginBottom: "10px" }} />
+                  <div style={{ borderTop: "1px solid var(--border)", marginBottom: "10px" }} />
 
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div style={{ display: "flex", gap: "12px" }}>
                       <div style={{ textAlign: "center" }}>
-                        <div style={{ fontSize: "16px", fontWeight: 700, color: "#1a1a2e" }}>{cls.student_count || 0}</div>
-                        <div style={{ fontSize: "10px", color: "#9ca3af" }}>Students</div>
+                        <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)" }}>{cls.student_count || 0}</div>
+                        <div style={{ fontSize: "10px", color: "var(--text-faint)" }}>Students</div>
                       </div>
                       {cls.my_role === "teacher" && cls.code && (
                         <>
-                          <div style={{ width: "1px", background: "#e5e7eb" }} />
+                          <div style={{ width: "1px", background: "var(--border)" }} />
                           <div style={{ textAlign: "center" }}>
                             <div style={{ fontSize: "13px", fontWeight: 700, color: color, letterSpacing: "2px" }}>{cls.code}</div>
-                            <div style={{ fontSize: "10px", color: "#9ca3af" }}>Class Code</div>
+                            <div style={{ fontSize: "10px", color: "var(--text-faint)" }}>Class Code</div>
                           </div>
                         </>
                       )}
@@ -194,12 +194,12 @@ export default function Classroom() {
                 <div
                   onClick={() => setModal("getstarted")}
                   style={addCard}
-                  onMouseEnter={e => e.currentTarget.style.background = "#f3f4f6"}
-                  onMouseLeave={e => e.currentTarget.style.background = "#fff"}
+                  onMouseEnter={e => e.currentTarget.style.background = "var(--surface-alt)"}
+                  onMouseLeave={e => e.currentTarget.style.background = "var(--surface)"}
                 >
-                  <div style={{ width: "52px", height: "52px", borderRadius: "50%", background: "#f3f4f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "26px", color: "#9ca3af" }}>+</div>
-                  <div style={{ fontSize: "14px", fontWeight: 600, color: "#6b7280" }}>Join or Create Class</div>
-                  <div style={{ fontSize: "12px", color: "#9ca3af" }}>Start a new learning journey</div>
+                  <div style={{ width: "52px", height: "52px", borderRadius: "50%", background: "var(--surface-alt)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "26px", color: "var(--text-faint)" }}>+</div>
+                  <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-muted)" }}>Join or Create Class</div>
+                  <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>Start a new learning journey</div>
                 </div>
               </div>
             </div>
@@ -208,7 +208,7 @@ export default function Classroom() {
 
         {classes.length === 0 && !loading && (
           <div style={{ textAlign: "center", paddingTop: "12px" }}>
-            <p style={{ fontSize: "14px", color: "#9ca3af" }}>
+            <p style={{ fontSize: "14px", color: "var(--text-faint)" }}>
               No classes yet. Click "+ Join or Create" to get started!
             </p>
           </div>
@@ -223,8 +223,8 @@ export default function Classroom() {
             {/* GET STARTED */}
             {modal === "getstarted" && (
               <div style={{ textAlign: "center" }}>
-                <h2 style={{ fontSize: "22px", fontWeight: 700, color: "#1a1a2e", margin: "0 0 8px" }}>Get Started</h2>
-                <p style={{ fontSize: "14px", color: "#6b7280", marginBottom: "32px" }}>
+                <h2 style={{ fontSize: "22px", fontWeight: 700, color: "var(--text)", margin: "0 0 8px" }}>Get Started</h2>
+                <p style={{ fontSize: "14px", color: "var(--text-muted)", marginBottom: "32px" }}>
                   Join an existing class or create your own.
                 </p>
                 <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "20px" }}>
@@ -235,7 +235,7 @@ export default function Classroom() {
                     + Create a Class
                   </button>
                 </div>
-                <button onClick={closeModal} style={{ background: "none", border: "none", color: "#9ca3af", fontSize: "14px", cursor: "pointer" }}>
+                <button onClick={closeModal} style={{ background: "none", border: "none", color: "var(--text-faint)", fontSize: "14px", cursor: "pointer" }}>
                   Cancel
                 </button>
               </div>
@@ -246,10 +246,10 @@ export default function Classroom() {
               <div>
                 <div style={{ textAlign: "center", marginBottom: "24px" }}>
                   <div style={{ fontSize: "52px", marginBottom: "10px" }}>🎓</div>
-                  <h2 style={{ fontSize: "20px", fontWeight: 700, color: "#1a1a2e", margin: "0 0 6px" }}>
+                  <h2 style={{ fontSize: "20px", fontWeight: 700, color: "var(--text)", margin: "0 0 6px" }}>
                     Join a Class
                   </h2>
-                  <p style={{ fontSize: "13px", color: "#6b7280" }}>
+                  <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>
                     Enter the class code provided by your teacher.
                   </p>
                 </div>
@@ -283,10 +283,10 @@ export default function Classroom() {
               <div>
                 <div style={{ textAlign: "center", marginBottom: "24px" }}>
                   <div style={{ fontSize: "52px", marginBottom: "10px" }}>📚</div>
-                  <h2 style={{ fontSize: "20px", fontWeight: 700, color: "#1a1a2e", margin: "0 0 6px" }}>
+                  <h2 style={{ fontSize: "20px", fontWeight: 700, color: "var(--text)", margin: "0 0 6px" }}>
                     Create a Class
                   </h2>
-                  <p style={{ fontSize: "13px", color: "#6b7280" }}>
+                  <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>
                     Set up your classroom in seconds.
                   </p>
                 </div>
@@ -353,21 +353,21 @@ const classCard = {
   borderRadius: "12px",
   overflow: "visible",
   cursor: "pointer",
-  background: "#fff",
-  border: "1px solid #e5e7eb",
+  background: "var(--surface)",
+  border: "1px solid var(--border)",
   transition: "transform 0.2s, box-shadow 0.2s",
   boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
 };
 
 const teacherAvatarStyle = {
   width: "26px", height: "26px", borderRadius: "50%",
-  background: "#e5e7eb", display: "flex", alignItems: "center",
-  justifyContent: "center", fontSize: "12px", fontWeight: 700, color: "#374151",
+  background: "var(--border)", display: "flex", alignItems: "center",
+  justifyContent: "center", fontSize: "12px", fontWeight: 700, color: "var(--text-muted)",
 };
 
 const addCard = {
   borderRadius: "12px",
-  border: "2px dashed #d1d5db",
+  border: "2px dashed var(--border)",
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
@@ -375,7 +375,7 @@ const addCard = {
   gap: "10px",
   cursor: "pointer",
   minHeight: "170px",
-  background: "#fff",
+  background: "var(--surface)",
   transition: "background 0.15s",
 };
 
@@ -387,7 +387,7 @@ const overlay = {
 };
 
 const modalBox = {
-  background: "#fff",
+  background: "var(--surface)",
   borderRadius: "16px",
   padding: "32px",
   width: "400px",
@@ -402,7 +402,7 @@ const btnPrimary = {
 };
 
 const btnOutline = {
-  background: "#fff", color: "#3B37CC",
+  background: "var(--surface)", color: "#3B37CC",
   padding: "11px 20px", borderRadius: "10px",
   fontSize: "14px", fontWeight: 600,
   border: "2px solid #3B37CC", cursor: "pointer", width: "100%",
@@ -410,11 +410,11 @@ const btnOutline = {
 
 const labelStyle = {
   display: "block", fontSize: "13px", fontWeight: 600,
-  color: "#374151", marginBottom: "6px",
+  color: "var(--text-muted)", marginBottom: "6px",
 };
 
 const inputStyle = {
   width: "100%", padding: "10px 14px", borderRadius: "8px",
-  border: "1px solid #d1d5db", fontSize: "14px", outline: "none",
-  boxSizing: "border-box",
+  border: "1px solid var(--border)", fontSize: "14px", outline: "none",
+  boxSizing: "border-box", background: "var(--surface)", color: "var(--text)",
 };

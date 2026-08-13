@@ -12,9 +12,16 @@ export default function ClassDetail() {
   const [materials, setMaterials] = useState([]);
   const [members, setMembers] = useState([]);
   const [posts, setPosts] = useState([]);
-  const [activeTab, setActiveTab] = useState("stream");
+  const _initTab = new URLSearchParams(location.search).get("tab") || "stream";
+  const [activeTab, setActiveTab] = useState(_initTab);
+
+  function goTab(tab) {
+    setActiveTab(tab);
+    navigate(`?tab=${tab}`, { replace: true });
+  }
   const [loading, setLoading] = useState(true);
   const [isTeacher, setIsTeacher] = useState(false);
+  const [myId, setMyId] = useState(null);
 
   // Stream state
   const [announcement, setAnnouncement] = useState("");
@@ -28,9 +35,20 @@ export default function ClassDetail() {
   const [uploadModal, setUploadModal] = useState(false);
   const [uploadForm, setUploadForm] = useState({ title: "", week: 1, instructions: "" });
   const [uploadFile, setUploadFile] = useState(null);
+  const [uploadExtraFiles, setUploadExtraFiles] = useState([]);
+  const [deleteAttachmentIds, setDeleteAttachmentIds] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [generatingInstructions, setGeneratingInstructions] = useState(false);
+  const [suggestedVideos, setSuggestedVideos] = useState([]);
+  const [suggestingVideos, setSuggestingVideos] = useState(false);
+  const [selectedVideoUrls, setSelectedVideoUrls] = useState(new Set());
+  const [instructionLang, setInstructionLang] = useState("en");
+  const [ytNextPageToken, setYtNextPageToken] = useState(null);
+  const [ytLanguageHint, setYtLanguageHint] = useState("English");
   const fileRef = useRef();
+  const extraFileRef = useRef();
+  const cachedInstructionText = useRef("");
 
   // AI Study Mentor state
   const [aiModal, setAiModal] = useState(null); // null | 'highlights' | 'summary' | 'quiz' | 'chat'
@@ -50,12 +68,34 @@ export default function ClassDetail() {
   // Attendance
   const [attendanceSessions, setAttendanceSessions] = useState(null);
   const [attendanceLoading, setAttendanceLoading] = useState(false);
-  const [activeSession, setActiveSession] = useState(null); // session being marked
-  const [sessionRecords, setSessionRecords] = useState({}); // { studentId: status }
+  const [activeSession, setActiveSession] = useState(null);
+  const [sessionRecords, setSessionRecords] = useState({});
   const [savingAttendance, setSavingAttendance] = useState(false);
   const [newSessionModal, setNewSessionModal] = useState(false);
   const [newSessionForm, setNewSessionForm] = useState({ title: "", session_date: new Date().toISOString().slice(0, 10) });
   const [myAttendance, setMyAttendance] = useState(null);
+  // Attendance calendar
+  const today = new Date();
+  const [calYear, setCalYear] = useState(today.getFullYear());
+  const [calMonth, setCalMonth] = useState(today.getMonth());
+  const [calSelectedDate, setCalSelectedDate] = useState(null); // "YYYY-MM-DD"
+  // Student calendar (separate state from teacher calendar)
+  const [calStudentYear, setCalStudentYear] = useState(today.getFullYear());
+  const [calStudentMonth, setCalStudentMonth] = useState(today.getMonth());
+  const [calStudentSelDate, setCalStudentSelDate] = useState(null); // "YYYY-MM-DD" for day detail
+  const [disputeModal, setDisputeModal] = useState(null); // null | {title, session_date, status}
+  const [disputeForm, setDisputeForm] = useState({ requested: "present", reason: "" });
+  const [leaveModal, setLeaveModal] = useState(null); // null | "form" | "confirm"
+  const [leaveForm, setLeaveForm] = useState({ from: new Date().toISOString().slice(0,10), to: new Date().toISOString().slice(0,10), reasonType: "medical", details: "" });
+  const [leaveHistory, setLeaveHistory] = useState([]);
+  const [newSessionTitle, setNewSessionTitle] = useState("");
+  const [attendanceMarkModal, setAttendanceMarkModal] = useState(false);
+  const [attendanceModalEditMode, setAttendanceModalEditMode] = useState(false);
+  const [originalRecords, setOriginalRecords] = useState({});
+  const [attendanceSearchQuery, setAttendanceSearchQuery] = useState("");
+  const [renamingSessionId, setRenamingSessionId] = useState(null);
+  const [renamingTitle, setRenamingTitle] = useState("");
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(null); // session id of open ⋮ menu
   // Meeting
   const [activeMeeting, setActiveMeeting] = useState(null);
   const [meetingLoading, setMeetingLoading] = useState(false);
@@ -125,6 +165,15 @@ export default function ClassDetail() {
   const [returning, setReturning] = useState({});
   const [streamStats, setStreamStats] = useState(null);
 
+  // Material edit mode (null = create, number = editing material id)
+  const [materialEditId, setMaterialEditId] = useState(null);
+
+  // Material-linked assignments
+  const [matAssignments, setMatAssignments] = useState([]);
+  const [matAssignForm, setMatAssignForm] = useState({ title: "", instructions: "", due_date: "", points: 100 });
+  const [matAssignOpen, setMatAssignOpen] = useState(false);
+  const [matAssignSaving, setMatAssignSaving] = useState(false);
+
   // Teacher-specific states
   const [streamView, setStreamView] = useState("dashboard");
   const [editingPost, setEditingPost] = useState(null);
@@ -144,7 +193,45 @@ export default function ClassDetail() {
   const { lang } = useLang();
   const myName = localStorage.getItem("nova_name") || "You";
 
-  useEffect(() => { loadAll(); }, [id]);
+  useEffect(() => {
+    loadAll().then(() => {
+      const tab = new URLSearchParams(location.search).get("tab");
+      if (tab === "attendance") { loadAttendance(); loadMeeting(); }
+      if (tab === "grades") loadGrades();
+    });
+  }, [id]);
+
+  // Push a history entry when a full-screen panel opens so the browser/trackpad
+  // back gesture closes the panel instead of leaving the page.
+  useEffect(() => {
+    const isOpen = attendanceMarkModal || assignModal;
+    if (!isOpen) return;
+    window.history.pushState({ panel: true }, "");
+    function handlePop() {
+      setAttendanceMarkModal(false);
+      setAttendanceSearchQuery("");
+      setAttendanceModalEditMode(false);
+      setAssignModal(false);
+      setAssignFiles([]);
+      setAssignForm({ title: "", instructions: "", due_date: "", points: 100 });
+    }
+    window.addEventListener("popstate", handlePop);
+    return () => window.removeEventListener("popstate", handlePop);
+  }, [attendanceMarkModal, assignModal]);
+
+  // Auto-navigate student calendar to most recent attendance month
+  useEffect(() => {
+    if (!myAttendance || !myAttendance.rows || myAttendance.rows.length === 0) return;
+    const dates = myAttendance.rows
+      .map(r => r.session_date ? r.session_date.slice(0, 10) : null)
+      .filter(Boolean)
+      .sort()
+      .reverse();
+    if (dates.length === 0) return;
+    const latest = new Date(dates[0]);
+    setCalStudentYear(latest.getFullYear());
+    setCalStudentMonth(latest.getMonth());
+  }, [myAttendance]);
 
   async function loadAll() {
     setLoading(true);
@@ -158,6 +245,7 @@ export default function ClassDetail() {
       const cls = classRes.data.class || classRes.data;
       setClassInfo(cls);
       setIsTeacher(cls.my_role === "teacher");
+      setMyId(cls.my_id);
       setMaterials(matsRes.data.materials || matsRes.data || []);
       const md = membersRes.data;
       setMembers(md.members || [
@@ -325,7 +413,7 @@ export default function ClassDetail() {
   async function openAI(action) {
     if (!selectedMat) {
       // If called from Stream tab: switch to Classwork, auto-select first material if only one
-      setActiveTab("classwork");
+      goTab("classwork");
       if (materials.length === 1) {
         setSelectedMat(materials[0]);
         setExpandedId(materials[0].id);
@@ -473,13 +561,17 @@ export default function ClassDetail() {
     } catch (err) { console.error(err); }
   }
 
-  async function openAttendanceSession(sessionId) {
+  async function openAttendanceSession(sessionId, isTaken = false) {
     try {
       const { data } = await API.get(`/classroom/attendance/${sessionId}`);
       setActiveSession(data);
       const rmap = {};
-      for (const r of data.records) rmap[r.student_id] = r.status;
+      for (const r of data.records) rmap[r.student_id] = r.status || "present";
       setSessionRecords(rmap);
+      setOriginalRecords(isTaken ? { ...rmap } : {});
+      setAttendanceSearchQuery("");
+      setAttendanceModalEditMode(!isTaken);
+      setAttendanceMarkModal(true);
     } catch (err) { console.error(err); }
   }
 
@@ -488,7 +580,7 @@ export default function ClassDetail() {
     try {
       const records = Object.entries(sessionRecords).map(([student_id, status]) => ({ student_id: Number(student_id), status }));
       await API.patch(`/classroom/attendance/${activeSession.id}/mark`, { records });
-      setActiveSession(null);
+      setAttendanceModalEditMode(false);
       loadAttendance();
     } catch (err) {
       console.error("saveAttendance error:", err);
@@ -553,10 +645,56 @@ export default function ClassDetail() {
     }
   }
 
+  function openEditMatModal() {
+    const mat = selectedMat;
+    setUploadForm({ title: mat.title, week: mat.week || 1, instructions: mat.instructions || "" });
+    setUploadFile(null);
+    setUploadExtraFiles([]);
+    setDeleteAttachmentIds([]);
+    setUploadError("");
+    // Pre-load existing YouTube videos
+    const existing = Array.isArray(mat.ai_resources) ? mat.ai_resources : [];
+    setSuggestedVideos(existing);
+    setSelectedVideoUrls(new Set(existing.map(v => v.url)));
+    setYtNextPageToken(null);
+    cachedInstructionText.current = "";
+    setMaterialEditId(mat.id);
+  }
+
+  async function loadMatAssignments(materialId) {
+    try {
+      const { data } = await API.get(`/classroom/materials/${materialId}/assignments`);
+      setMatAssignments(data || []);
+    } catch {}
+  }
+
+  async function createMatAssignment() {
+    if (!matAssignForm.title.trim()) return;
+    setMatAssignSaving(true);
+    try {
+      const fd = new FormData();
+      fd.append("title", matAssignForm.title);
+      fd.append("instructions", matAssignForm.instructions);
+      if (matAssignForm.due_date) fd.append("due_date", matAssignForm.due_date);
+      fd.append("points", matAssignForm.points);
+      fd.append("material_id", selectedMat.id);
+      const { data } = await API.post(`/classroom/classes/${id}/assignments`, fd);
+      setMatAssignments(prev => [data, ...prev]);
+      setAssignments(prev => [data, ...prev]);
+      setMatAssignForm({ title: "", instructions: "", due_date: "", points: 100 });
+      setMatAssignOpen(false);
+    } catch (err) {
+      alert(err.response?.data?.error || "Failed to create assignment.");
+    } finally {
+      setMatAssignSaving(false);
+    }
+  }
+
   async function openAssignment(assign) {
     markAssignSeen(assign.id);
     if (!isTeacher) {
       // Student → full page view
+      setSelectedMat(null);
       setAssignPage(assign);
       setAssignPageDetail(null);
       setSubmitContent(assign.my_submission?.content || "");
@@ -688,6 +826,69 @@ export default function ClassDetail() {
     }
   }
 
+  async function handleGenerateInstructions(langOverride) {
+    if (!uploadFile && !cachedInstructionText.current) return;
+    setGeneratingInstructions(true);
+    try {
+      const fd = new FormData();
+      fd.append("title", uploadForm.title);
+      fd.append("week", uploadForm.week);
+      fd.append("classId", id);
+      fd.append("lang", langOverride || instructionLang);
+      if (cachedInstructionText.current) {
+        // Fast path: skip Vision re-reading, use cached extracted text
+        fd.append("textContent", cachedInstructionText.current);
+      } else {
+        fd.append("file", uploadFile);
+      }
+      const { data } = await API.post("/classroom/materials/generate-instructions", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      if (data.textContent) cachedInstructionText.current = data.textContent;
+      if (data.instructions) setUploadForm(f => ({ ...f, instructions: data.instructions }));
+    } catch { /* silent */ } finally {
+      setGeneratingInstructions(false);
+    }
+  }
+
+  async function handleSuggestVideos(fileArg, useNextPage = false) {
+    const fileToUse = fileArg !== undefined ? fileArg : uploadFile;
+    if (!fileToUse) return;
+    setSuggestingVideos(true);
+    setSuggestedVideos([]);
+    try {
+      const fd = new FormData();
+      fd.append("title", uploadForm.title);
+      fd.append("file", fileToUse);
+      if (useNextPage && ytNextPageToken) fd.append("pageToken", ytNextPageToken);
+      if (ytLanguageHint.trim()) fd.append("languageHint", ytLanguageHint.trim());
+      const { data } = await API.post("/classroom/materials/suggest-youtube", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setSuggestedVideos(data.videos || []);
+      setYtNextPageToken(data.nextPageToken || null);
+      setSelectedVideoUrls(new Set());
+    } catch { /* silent */ } finally {
+      setSuggestingVideos(false);
+    }
+  }
+
+  function closeUploadModal() {
+    setUploadModal(false);
+    setMaterialEditId(null);
+    setUploadForm({ title: "", week: 1, instructions: "" });
+    setUploadFile(null);
+    setUploadExtraFiles([]);
+    setDeleteAttachmentIds([]);
+    setUploadError("");
+    setSuggestedVideos([]);
+    setYtNextPageToken(null);
+    setSelectedVideoUrls(new Set());
+    cachedInstructionText.current = "";
+    if (fileRef.current) fileRef.current.value = "";
+    if (extraFileRef.current) extraFileRef.current.value = "";
+  }
+
   async function handleUpload() {
     if (!uploadForm.title.trim()) return;
     setUploading(true); setUploadError("");
@@ -697,16 +898,28 @@ export default function ClassDetail() {
       fd.append("week", uploadForm.week);
       fd.append("instructions", uploadForm.instructions);
       if (uploadFile) fd.append("file", uploadFile);
-      await API.post(`/classroom/classes/${id}/materials`, fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      setUploadModal(false);
-      setUploadForm({ title: "", week: 1, instructions: "" });
-      setUploadFile(null);
-      if (fileRef.current) fileRef.current.value = "";
-      loadAll();
+      uploadExtraFiles.forEach(f => fd.append("files", f));
+      if (materialEditId && deleteAttachmentIds.length) fd.append("delete_file_ids", JSON.stringify(deleteAttachmentIds));
+      const selectedVids = suggestedVideos.filter(v => selectedVideoUrls.has(v.url));
+      fd.append("ai_resources", JSON.stringify(selectedVids));
+
+      if (materialEditId) {
+        // Edit mode — PUT existing material
+        const { data } = await API.put(`/classroom/materials/${materialEditId}`, fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        setSelectedMat(prev => ({ ...prev, ...data }));
+        setMaterials(prev => prev.map(m => m.id === materialEditId ? { ...m, ...data } : m));
+      } else {
+        // Create mode — POST new material
+        await API.post(`/classroom/classes/${id}/materials`, fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        });
+        loadAll();
+      }
+      closeUploadModal();
     } catch (err) {
-      setUploadError(err.response?.data?.message || "Upload failed.");
+      setUploadError(err.response?.data?.message || err.response?.data?.error || "Failed to save.");
     } finally {
       setUploading(false);
     }
@@ -726,7 +939,7 @@ export default function ClassDetail() {
     <div style={layout}>
       <Sidebar />
       <main style={{ marginLeft: "240px", flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <p style={{ color: "#9ca3af" }}>Loading...</p>
+        <p style={{ color: "var(--text-faint)" }}>Loading...</p>
       </main>
     </div>
   );
@@ -751,8 +964,8 @@ export default function ClassDetail() {
           <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
             <button onClick={() => navigate("/classroom")} style={backBtn}>←</button>
             <div>
-              <h1 style={{ fontSize: "18px", fontWeight: 700, color: "#1a1a2e", margin: 0 }}>{classInfo.name}</h1>
-              {classInfo.subject && <p style={{ fontSize: "12px", color: "#6b7280", margin: 0 }}>{classInfo.subject}</p>}
+              <h1 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text)", margin: 0 }}>{classInfo.name}</h1>
+              {classInfo.subject && <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>{classInfo.subject}</p>}
             </div>
           </div>
           <div style={{ display: "flex", gap: "4px" }}>
@@ -761,11 +974,10 @@ export default function ClassDetail() {
               { key: "classwork", label: "Classwork" },
               ...(isTeacher ? [{ key: "grades", label: "Grades" }] : []),
               { key: "attendance", label: "Attendance" },
-              { key: "resources", label: "Resources" },
               ...(isTeacher ? [{ key: "people", label: "People" }] : []),
             ].map(tab => (
               <button key={tab.key} onClick={() => {
-                setActiveTab(tab.key);
+                goTab(tab.key);
                 if (tab.key === "stream") setStreamView("dashboard");
                 if (tab.key === "grades" && !gradesData) loadGrades();
                 if (tab.key === "attendance" && !attendanceSessions && !myAttendance) loadAttendance();
@@ -777,14 +989,14 @@ export default function ClassDetail() {
           </div>
         </div>
 
-        <div style={{ flex: 1, padding: "28px 32px", background: "#f8f9fa" }}>
+        <div style={{ flex: 1, padding: "28px 32px", background: "var(--bg)" }}>
 
           {/* ── STREAM TAB ── */}
           {activeTab === "stream" && streamView === "announcements" && (
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
-                <button onClick={() => setStreamView("dashboard")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "14px", color: "#6b7280", display: "flex", alignItems: "center", gap: "4px" }}>← Back</button>
-                <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#1a1a2e", margin: 0 }}>📢 Announcements</h3>
+                <button onClick={() => setStreamView("dashboard")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "14px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px" }}>← Back</button>
+                <h3 style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)", margin: 0 }}>📢 Announcements</h3>
               </div>
               {isTeacher && (
                 <div style={{ ...announceCard, marginBottom: "16px" }}>
@@ -800,7 +1012,7 @@ export default function ClassDetail() {
                 </div>
               )}
               {posts.length === 0
-                ? <div style={{ textAlign: "center", padding: "48px 0", color: "#9ca3af" }}><div style={{ fontSize: "32px", marginBottom: "8px" }}>📢</div><p>No announcements yet.</p></div>
+                ? <div style={{ textAlign: "center", padding: "48px 0", color: "var(--text-faint)" }}><div style={{ fontSize: "32px", marginBottom: "8px" }}>📢</div><p>No announcements yet.</p></div>
                 : posts.map(post => (
                   <PostCard key={post.id} post={post} myName={myName} isTeacher={isTeacher}
                     onEdit={p => setEditingPost({ id: p.id, content: p.content })}
@@ -858,7 +1070,7 @@ export default function ClassDetail() {
                       date={new Date(post.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                       actions={isTeacher ? (
                         <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
-                          <button onClick={e => { e.stopPropagation(); setEditingPost({ id: post.id, content: post.content }); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#9ca3af", fontSize: "13px", padding: "0 3px" }}>✏️</button>
+                          <button onClick={e => { e.stopPropagation(); setEditingPost({ id: post.id, content: post.content }); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: "13px", padding: "0 3px" }}>✏️</button>
                           <button onClick={e => { e.stopPropagation(); handleDeletePost(post.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: "13px", padding: "0 3px" }}>🗑️</button>
                         </div>
                       ) : null}
@@ -870,7 +1082,7 @@ export default function ClassDetail() {
                 {/* Material section */}
                 <StreamSection
                   icon="📁" title="Material"
-                  onMore={() => setActiveTab("classwork")}
+                  onMore={() => goTab("classwork")}
                   empty={materials.length === 0}
                   emptyMsg="No materials uploaded yet."
                 >
@@ -879,7 +1091,7 @@ export default function ClassDetail() {
                       key={mat.id}
                       label={mat.title}
                       date={new Date(mat.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                      onClick={() => { setActiveTab("classwork"); setClassworkTab("lessons"); }}
+                      onClick={() => { goTab("classwork"); setClassworkTab("lessons"); }}
                     />
                   ))}
                 </StreamSection>
@@ -887,7 +1099,7 @@ export default function ClassDetail() {
                 {/* Assignments section */}
                 <StreamSection
                   icon="✏️" title="Assignments"
-                  onMore={() => { setActiveTab("classwork"); setClassworkTab("assignments"); }}
+                  onMore={() => { goTab("classwork"); setClassworkTab("assignments"); }}
                   empty={assignments.filter(a => !a.is_draft).length === 0}
                   emptyMsg="No assignments yet."
                 >
@@ -900,8 +1112,8 @@ export default function ClassDetail() {
                         key={a.id}
                         label={a.title}
                         badge={status}
-                        badgeColor={status === "Finished" ? "#6b7280" : "#3B37CC"}
-                        onClick={() => { setActiveTab("classwork"); setClassworkTab("assignments"); }}
+                        badgeColor={status === "Finished" ? "var(--text-muted)" : "#3B37CC"}
+                        onClick={() => { goTab("classwork"); setClassworkTab("assignments"); }}
                       />
                     );
                   })}
@@ -913,24 +1125,24 @@ export default function ClassDetail() {
 
                 {/* Submission Status */}
                 <div style={sideCard}>
-                  <div style={{ fontSize: "13px", fontWeight: 700, color: "#1a1a2e", marginBottom: "14px", textAlign: "center" }}>
+                  <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)", marginBottom: "14px", textAlign: "center" }}>
                     Submission Status
                   </div>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div style={{ textAlign: "center" }}>
-                      <div style={{ fontSize: "11px", color: "#6b7280", marginBottom: "4px" }}>Activity</div>
+                      <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>Activity</div>
                       <div style={{ fontSize: "28px", fontWeight: 800, color: "#3B37CC" }}>{streamStats?.totalAssignments ?? "—"}</div>
-                      <div style={{ fontSize: "11px", color: "#6b7280" }}>case</div>
+                      <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>case</div>
                     </div>
                     {/* Donut chart */}
                     <div style={{ position: "relative", width: "80px", height: "80px" }}>
                       <svg viewBox="0 0 36 36" style={{ width: "80px", height: "80px", transform: "rotate(-90deg)" }}>
-                        <circle cx="18" cy="18" r="15.9" fill="none" stroke="#e5e7eb" strokeWidth="3.5" />
+                        <circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--border)" strokeWidth="3.5" />
                         <circle cx="18" cy="18" r="15.9" fill="none" stroke="#3B37CC" strokeWidth="3.5"
                           strokeDasharray={`${streamStats?.submissionRate ?? 0} ${100 - (streamStats?.submissionRate ?? 0)}`}
                           strokeLinecap="round" />
                       </svg>
-                      <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: "14px", fontWeight: 800, color: "#1a1a2e" }}>
+                      <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", fontSize: "14px", fontWeight: 800, color: "var(--text)" }}>
                         {streamStats?.submissionRate ?? 0}%
                       </div>
                     </div>
@@ -940,11 +1152,11 @@ export default function ClassDetail() {
                 {/* Important (latest announcement) */}
                 {posts.length > 0 && (
                   <div style={sideCard}>
-                    <div style={{ fontSize: "13px", fontWeight: 700, color: "#1a1a2e", marginBottom: "10px" }}>Important</div>
+                    <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)", marginBottom: "10px" }}>Important</div>
                     {posts.slice(0, 2).map(p => (
-                      <div key={p.id} style={{ display: "flex", gap: "8px", alignItems: "flex-start", padding: "6px 0", borderBottom: "1px solid #f3f4f6" }}>
+                      <div key={p.id} style={{ display: "flex", gap: "8px", alignItems: "flex-start", padding: "6px 0", borderBottom: "1px solid var(--surface-alt)" }}>
                         <span style={{ fontSize: "13px" }}>⭐</span>
-                        <span style={{ fontSize: "12px", color: "#374151", lineHeight: 1.4 }}>{p.content?.slice(0, 55)}{p.content?.length > 55 ? "…" : ""}</span>
+                        <span style={{ fontSize: "12px", color: "var(--text-muted)", lineHeight: 1.4 }}>{p.content?.slice(0, 55)}{p.content?.length > 55 ? "…" : ""}</span>
                       </div>
                     ))}
                   </div>
@@ -952,20 +1164,20 @@ export default function ClassDetail() {
 
                 {/* Class code */}
                 {classInfo.code && (
-                  <div style={{ background: "#fff", border: "2px dashed #d1d5db", borderRadius: "12px", padding: "14px", textAlign: "center" }}>
-                    <div style={{ fontSize: "10px", fontWeight: 700, color: "#9ca3af", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "1px" }}>Class Code</div>
+                  <div style={{ background: "var(--surface)", border: "2px dashed var(--border)", borderRadius: "12px", padding: "14px", textAlign: "center" }}>
+                    <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-faint)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "1px" }}>Class Code</div>
                     <div style={{ fontSize: "22px", fontWeight: 800, color: "#3B37CC", letterSpacing: "4px" }}>{classInfo.code}</div>
-                    <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "4px" }}>Share with students</div>
+                    <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "4px" }}>Share with students</div>
                   </div>
                 )}
 
                 {/* New Posts */}
                 <div style={sideCard}>
-                  <div style={{ fontSize: "13px", fontWeight: 700, color: "#1a1a2e", marginBottom: "8px" }}>New Posts</div>
+                  <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)", marginBottom: "8px" }}>New Posts</div>
                   {posts.length === 0
-                    ? <div style={{ fontSize: "12px", color: "#9ca3af" }}>No Data.</div>
+                    ? <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>No Data.</div>
                     : posts.slice(0, 2).map(p => (
-                      <div key={p.id} style={{ fontSize: "12px", color: "#374151", padding: "4px 0", borderBottom: "1px solid #f3f4f6" }}>
+                      <div key={p.id} style={{ fontSize: "12px", color: "var(--text-muted)", padding: "4px 0", borderBottom: "1px solid var(--surface-alt)" }}>
                         {p.content?.slice(0, 40)}{p.content?.length > 40 ? "…" : ""}
                       </div>
                     ))
@@ -981,241 +1193,275 @@ export default function ClassDetail() {
               {/* Left: material list */}
               <div>
 
-                {/* Sub-tabs */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
-                  <div style={{ display: "flex", background: "#f3f4f6", borderRadius: "10px", padding: "4px", gap: "4px" }}>
-                    {(() => {
-                      const unreadAssign = assignments.filter(a => !seenAssignIds.has(a.id)).length;
-                      const unreadMat = materials.filter(m => !seenMatIds.has(m.id)).length;
-                      return [
-                        { key: "assignments", label: "📝 Assignments", total: assignments.length, unread: unreadAssign },
-                        { key: "lessons",     label: "📚 Lessons",     total: materials.length,   unread: unreadMat },
-                      ].map(t => (
-                        <button key={t.key} onClick={() => setClassworkTab(t.key)} style={{
-                          padding: "8px 18px", borderRadius: "8px", border: "none", cursor: "pointer",
-                          fontSize: "13px", fontWeight: 700, transition: "all 0.15s",
-                          background: classworkTab === t.key ? "#fff" : "transparent",
-                          color: classworkTab === t.key ? "#3B37CC" : "#6b7280",
-                          boxShadow: classworkTab === t.key ? "0 1px 4px rgba(0,0,0,0.1)" : "none",
-                          position: "relative",
-                        }}>
-                          {t.label}
-                          {t.unread > 0 ? (
-                            <span style={{ marginLeft: "6px", background: "#ef4444", color: "#fff", borderRadius: "20px", padding: "1px 7px", fontSize: "11px", fontWeight: 800, animation: "pulse 1.5s infinite" }}>
-                              {t.unread} new
-                            </span>
-                          ) : (
-                            <span style={{ marginLeft: "6px", background: classworkTab === t.key ? "#3B37CC" : "#d1d5db", color: classworkTab === t.key ? "#fff" : "#6b7280", borderRadius: "20px", padding: "1px 7px", fontSize: "11px" }}>
-                              {t.total}
-                            </span>
-                          )}
-                        </button>
-                      ));
-                    })()}
-                  </div>
-                  {/* Action button */}
-                  {isTeacher && classworkTab === "assignments" && (
-                    <button onClick={() => setAssignModal(true)} style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "8px 16px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
-                      + Create Assignment
+                {/* Teacher action buttons */}
+                {isTeacher && (
+                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginBottom: "20px" }}>
+                    <button onClick={() => setAssignModal(true)} style={{ background: "var(--surface)", color: "#3B37CC", border: "1.5px solid #3B37CC", borderRadius: "8px", padding: "8px 16px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
+                      + Assignment
                     </button>
-                  )}
-                  {isTeacher && classworkTab === "lessons" && (
                     <button onClick={() => setUploadModal(true)} style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "8px 16px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
-                      + New Material
+                      + Material
                     </button>
-                  )}
-                </div>
+                  </div>
+                )}
 
-                {/* Assignments tab */}
-                {classworkTab === "assignments" && <div style={{ marginBottom: "28px" }}>
+                {/* Student full-page assignment view */}
+                {assignPage && !isTeacher ? (
+                  <div style={{ background: "#f8f9fa", minHeight: "calc(100vh - 120px)", margin: "-8px -8px 0", padding: "0" }}>
+                    {/* Top bar */}
+                    <div style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "12px 24px", display: "flex", alignItems: "center", gap: "12px" }}>
+                      <button onClick={() => { setAssignPage(null); setAssignPageDetail(null); setEditing(false); setAiCheck(null); }}
+                        style={{ background: "none", border: "none", cursor: "pointer", color: "#5f6368", fontSize: "20px", display: "flex", alignItems: "center", padding: "4px", borderRadius: "50%" }}>←</button>
+                      <div style={{ width: "36px", height: "36px", background: "#1a73e8", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ fontSize: "18px" }}>📝</span>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: "16px", fontWeight: 600, color: "#202124" }}>{assignPage.title}</div>
+                        <div style={{ fontSize: "12px", color: "#5f6368" }}>{classInfo?.name}</div>
+                      </div>
+                    </div>
 
-                  {/* Student full-page assignment view */}
-                  {assignPage && !isTeacher ? (
-                    <div>
-                      {/* Back button */}
-                      <button onClick={() => { setAssignPage(null); setAssignPageDetail(null); setEditing(false); setAiCheck(null); }} style={{ background: "none", border: "none", color: "#3B37CC", fontSize: "13px", fontWeight: 700, cursor: "pointer", marginBottom: "16px", display: "flex", alignItems: "center", gap: "6px" }}>
-                        ← Back to Assignments
-                      </button>
+                    {/* Two-column body */}
+                    <div style={{ display: "flex", gap: "20px", padding: "24px", maxWidth: "1100px", margin: "0 auto", alignItems: "flex-start" }}>
 
-                      {/* Assignment info table */}
-                      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", overflow: "hidden", marginBottom: "20px" }}>
-                        <div style={{ background: "#3B37CC", padding: "16px 20px" }}>
-                          <div style={{ fontSize: "18px", fontWeight: 700, color: "#fff" }}>{assignPage.title}</div>
-                          <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.8)", marginTop: "4px" }}>{classInfo.name}</div>
-                        </div>
-                        {[
-                          { label: "Due Date", value: assignPage.due_date ? formatDate(assignPage.due_date) : "No due date" },
-                          { label: "Points", value: assignPage.points ? `${assignPage.points} pts` : "Not graded" },
-                          { label: "Status", value: (() => {
-                            const sub = assignPage.my_submission || assignPageDetail?.my_submission;
-                            if (!sub) return <span style={{ color: "#f59e0b", fontWeight: 700 }}>Not submitted</span>;
-                            if (sub.status === "graded") return <span style={{ color: "#22c55e", fontWeight: 700 }}>✓ Graded ({sub.grade}/{assignPage.points})</span>;
-                            if (sub.status === "returned") return <span style={{ color: "#3B37CC", fontWeight: 700 }}>↩ Returned</span>;
-                            if (sub.status === "late") return <span style={{ color: "#ef4444", fontWeight: 700 }}>⚠ Late Submission</span>;
-                            return <span style={{ color: "#3B37CC", fontWeight: 700 }}>✓ Turned In</span>;
-                          })() },
-                          { label: "Edit Allowed", value: assignPage.due_date ? (new Date() < new Date(assignPage.due_date) ? <span style={{ color: "#22c55e" }}>Yes (before due date)</span> : <span style={{ color: "#ef4444" }}>No (past due date)</span>) : "Yes" },
-                        ].map(row => (
-                          <div key={row.label} style={{ display: "flex", borderBottom: "1px solid #f3f4f6", padding: "12px 20px" }}>
-                            <div style={{ width: "140px", fontSize: "13px", fontWeight: 700, color: "#6b7280", flexShrink: 0 }}>{row.label}</div>
-                            <div style={{ fontSize: "13px", color: "#1a1a2e" }}>{row.value}</div>
+                      {/* LEFT — main content */}
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {/* Assignment header */}
+                        <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #e0e0e0", padding: "24px 28px", marginBottom: "16px" }}>
+                          <div style={{ fontSize: "22px", fontWeight: 400, color: "#202124", marginBottom: "8px" }}>{assignPage.title}</div>
+                          <div style={{ display: "flex", gap: "16px", alignItems: "center", fontSize: "13px", color: "#5f6368", marginBottom: "4px" }}>
+                            <span>{classInfo?.name}</span>
+                            <span>·</span>
+                            <span>{assignPage.due_date ? `Due ${formatDate(assignPage.due_date)}` : "No due date"}</span>
+                            <span>·</span>
+                            <span>{assignPage.points ? `${assignPage.points} points` : "Not graded"}</span>
                           </div>
-                        ))}
-                        {assignPage.instructions && (
-                          <div style={{ display: "flex", padding: "12px 20px" }}>
-                            <div style={{ width: "140px", fontSize: "13px", fontWeight: 700, color: "#6b7280", flexShrink: 0 }}>Instructions</div>
-                            <div style={{ fontSize: "13px", color: "#374151", lineHeight: 1.6 }}>{assignPage.instructions}</div>
-                          </div>
-                        )}
-                        {(assignPageDetail?.files || assignPage.files)?.length > 0 && (
-                          <div style={{ display: "flex", padding: "12px 20px", borderTop: "1px solid #f3f4f6" }}>
-                            <div style={{ width: "140px", fontSize: "13px", fontWeight: 700, color: "#6b7280", flexShrink: 0 }}>Attachments</div>
-                            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                          <hr style={{ border: "none", borderTop: "1px solid #e0e0e0", margin: "16px 0" }} />
+                          {assignPage.instructions ? (
+                            <div style={{ fontSize: "14px", color: "#202124", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{assignPage.instructions}</div>
+                          ) : (
+                            <div style={{ fontSize: "14px", color: "#9aa0a6" }}>No instructions provided.</div>
+                          )}
+
+                          {/* Teacher files */}
+                          {(assignPageDetail?.files || assignPage.files)?.length > 0 && (
+                            <div style={{ marginTop: "20px", display: "flex", flexWrap: "wrap", gap: "10px" }}>
                               {(assignPageDetail?.files || assignPage.files).map(f => (
                                 <a key={f.id} href={`http://localhost:5001/uploads/${f.file_path}`} target="_blank" rel="noreferrer"
-                                  style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#3B37CC", fontWeight: 600, background: "#f0f4ff", padding: "5px 12px", borderRadius: "8px", textDecoration: "none", border: "1px solid #a5b4fc", width: "fit-content" }}>
-                                  📄 {f.file_name}
+                                  style={{ display: "flex", alignItems: "center", gap: "10px", background: "#f8f9fa", border: "1px solid #e0e0e0", borderRadius: "8px", padding: "10px 14px", textDecoration: "none", minWidth: "200px" }}>
+                                  <div style={{ width: "36px", height: "36px", background: "#4285f4", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                    <span style={{ fontSize: "18px" }}>📄</span>
+                                  </div>
+                                  <div>
+                                    <div style={{ fontSize: "13px", fontWeight: 500, color: "#202124", maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.file_name}</div>
+                                    <div style={{ fontSize: "11px", color: "#5f6368" }}>PDF</div>
+                                  </div>
                                 </a>
                               ))}
                             </div>
+                          )}
+                        </div>
+
+                        {/* Class comments */}
+                        <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #e0e0e0", padding: "20px 24px" }}>
+                          <div style={{ fontSize: "14px", fontWeight: 500, color: "#202124", marginBottom: "14px" }}>Class comments</div>
+                          {comments.length === 0
+                            ? <div style={{ fontSize: "13px", color: "#9aa0a6" }}>No class comments yet.</div>
+                            : comments.map(c => (
+                              <div key={c.id} style={{ display: "flex", gap: "10px", marginBottom: "14px" }}>
+                                <div style={{ width: "32px", height: "32px", background: "#3B37CC", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "13px", fontWeight: 700, color: "#fff" }}>
+                                  {c.author_name?.[0]?.toUpperCase()}
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ fontSize: "12px", fontWeight: 600, color: "#202124" }}>{c.author_name}</div>
+                                  <div style={{ fontSize: "13px", color: "#374151", marginTop: "2px" }}>
+                                    <CommentContent comment={c} isMine={c.author_id === myId}
+                                      onUpdate={updated => setComments(prev => prev.map(x => x.id === c.id ? updated : x))}
+                                      onDelete={() => setComments(prev => prev.filter(x => x.id !== c.id))} />
+                                  </div>
+                                </div>
+                              </div>
+                            ))
+                          }
+                          <div style={{ display: "flex", gap: "10px", marginTop: "12px", alignItems: "center" }}>
+                            <div style={{ width: "32px", height: "32px", background: "#3B37CC", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "13px", fontWeight: 700, color: "#fff" }}>
+                              {members.find(m => !m.is_teacher)?.name?.[0]?.toUpperCase() || "S"}
+                            </div>
+                            <input placeholder="Add class comment..." value={commentInput} onChange={e => setCommentInput(e.target.value)}
+                              onKeyDown={e => e.key === "Enter" && sendComment(assignPage.id)}
+                              style={{ flex: 1, border: "none", borderBottom: "1px solid #e0e0e0", outline: "none", fontSize: "14px", padding: "6px 0", color: "#202124", background: "transparent" }} />
+                            <button onClick={() => sendComment(assignPage.id)} disabled={commentSending || !commentInput.trim()}
+                              style={{ background: "none", border: "none", cursor: commentInput.trim() ? "pointer" : "default", color: commentInput.trim() ? "#1a73e8" : "#9aa0a6", fontSize: "20px", padding: "4px" }}>➤</button>
                           </div>
-                        )}
+                        </div>
                       </div>
 
-                      {/* Submit section */}
-                      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", padding: "20px", marginBottom: "16px" }}>
-                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#374151", marginBottom: "14px" }}>Submit</div>
-
+                      {/* RIGHT — Your work panel */}
+                      <div style={{ width: "300px", flexShrink: 0, position: "sticky", top: "20px", display: "flex", flexDirection: "column", gap: "12px" }}>
                         {(() => {
                           const sub = assignPage.my_submission || assignPageDetail?.my_submission;
                           const pastDue = assignPage.due_date && new Date() > new Date(assignPage.due_date);
                           const canEdit = !pastDue || !sub;
 
-                          if (sub && !editing) {
-                            // Already submitted — show submission + edit button
-                            return (
-                              <div>
-                                <div style={{ background: sub.status === "graded" ? "#f0fdf4" : "#f0f4ff", border: `1px solid ${sub.status === "graded" ? "#86efac" : "#a5b4fc"}`, borderRadius: "10px", padding: "16px", marginBottom: "12px" }}>
-                                  {sub.status === "graded" ? (
-                                    <div style={{ textAlign: "center" }}>
-                                      <div style={{ fontSize: "32px", fontWeight: 800, color: "#15803d" }}>{sub.grade}<span style={{ fontSize: "16px", color: "#6b7280" }}>/{assignPage.points}</span></div>
-                                      <div style={{ fontSize: "13px", color: "#166534", marginTop: "4px" }}>Graded ✓</div>
-                                      {sub.grade_comment && <div style={{ fontSize: "13px", color: "#374151", marginTop: "8px", fontStyle: "italic" }}>"{sub.grade_comment}"</div>}
-                                    </div>
-                                  ) : (
-                                    <div>
-                                      <div style={{ fontSize: "13px", fontWeight: 600, color: "#3B37CC", marginBottom: "8px" }}>✓ Turned In {sub.status === "late" ? "(Late)" : ""}</div>
-                                      {sub.content && <p style={{ fontSize: "13px", color: "#374151", margin: "0 0 6px" }}>{sub.content}</p>}
-                                      {sub.file_path && <div style={{ fontSize: "12px", color: "#6b7280" }}>📎 File attached</div>}
+                          const statusLabel = (() => {
+                            if (!sub) return { text: "Assigned", color: "#1a73e8", bg: "#e8f0fe" };
+                            if (sub.status === "graded") return { text: "Graded", color: "#137333", bg: "#e6f4ea" };
+                            if (sub.status === "returned") return { text: "Returned", color: "#b45309", bg: "#fef3c7" };
+                            if (sub.status === "late") return { text: "Late", color: "#c5221f", bg: "#fce8e6" };
+                            return { text: "Turned in", color: "#137333", bg: "#e6f4ea" };
+                          })();
+
+                          return (
+                            <>
+                              {/* Your work card */}
+                              <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #e0e0e0", overflow: "hidden" }}>
+                                <div style={{ padding: "14px 18px", borderBottom: "1px solid #f1f3f4", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                  <span style={{ fontSize: "14px", fontWeight: 600, color: "#202124" }}>Your work</span>
+                                  <span style={{ fontSize: "12px", fontWeight: 600, color: statusLabel.color, background: statusLabel.bg, padding: "3px 10px", borderRadius: "12px" }}>{statusLabel.text}</span>
+                                </div>
+
+                                <div style={{ padding: "16px 18px" }}>
+                                  {/* Graded display */}
+                                  {sub?.status === "graded" && (
+                                    <div style={{ textAlign: "center", marginBottom: "16px", padding: "12px", background: "#e6f4ea", borderRadius: "8px" }}>
+                                      <div style={{ fontSize: "28px", fontWeight: 700, color: "#137333" }}>{sub.grade}<span style={{ fontSize: "14px", color: "#5f6368" }}>/{assignPage.points}</span></div>
+                                      {sub.grade_comment && <div style={{ fontSize: "12px", color: "#374151", marginTop: "6px", fontStyle: "italic" }}>"{sub.grade_comment}"</div>}
                                     </div>
                                   )}
-                                </div>
-                                {canEdit && sub.status !== "graded" && (
-                                  <button onClick={() => { setEditing(true); setSubmitContent(sub.content || ""); setAiCheck(null); }} style={{ background: "#f3f4f6", border: "1px solid #d1d5db", borderRadius: "8px", padding: "8px 16px", fontSize: "13px", fontWeight: 700, cursor: "pointer", color: "#374151" }}>
-                                    ✏️ Edit Submission
-                                  </button>
-                                )}
-                                {pastDue && sub.status !== "graded" && (
-                                  <div style={{ fontSize: "12px", color: "#9ca3af", marginTop: "8px" }}>Submission period is expired. Editing not allowed.</div>
-                                )}
-                              </div>
-                            );
-                          }
 
-                          if (!canEdit && !sub) {
-                            return <div style={{ textAlign: "center", padding: "20px", color: "#9ca3af", fontSize: "13px" }}>Submission period is expired.</div>;
-                          }
-
-                          // Submit / Edit form
-                          return (
-                            <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-                              <textarea
-                                value={submitContent}
-                                onChange={e => { setSubmitContent(e.target.value); setAiCheck(null); }}
-                                placeholder="Write your answer here..."
-                                style={{ ...inp, height: "140px", resize: "vertical" }}
-                              />
-                              <div>
-                                <label style={{ fontSize: "12px", color: "#6b7280", marginBottom: "4px", display: "block" }}>Attach file (optional)</label>
-                                <input type="file" ref={submitFileRef} onChange={e => setSubmitFile(e.target.files[0])} style={{ fontSize: "13px" }} />
-                              </div>
-
-                              {/* AI Check */}
-                              <div>
-                                <button onClick={checkWithAI} disabled={aiCheck?.loading} style={{ background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 18px", fontSize: "13px", fontWeight: 700, cursor: "pointer", opacity: aiCheck?.loading ? 0.7 : 1, width: "100%" }}>
-                                  {aiCheck?.loading
-                                    ? (lang === "en" ? "🤖 Checking..." : "🤖 စစ်ဆေးနေသည်...")
-                                    : (lang === "en" ? "🤖 Check with AI before submitting" : "🤖 တင်မဆက်ခင် AI နဲ့ စစ်ဆေးပါ")}
-                                </button>
-                                {aiCheck?.result && (
-                                  <div style={{ marginTop: "12px", borderRadius: "12px", overflow: "hidden", border: `2px solid ${aiCheck.result.isComplete ? "#22c55e" : "#f59e0b"}` }}>
-                                    {/* Header */}
-                                    <div style={{ background: aiCheck.result.isComplete ? "#22c55e" : "#f59e0b", padding: "10px 16px", display: "flex", alignItems: "center", gap: "10px" }}>
-                                      <span style={{ fontSize: "20px" }}>{aiCheck.result.isComplete ? "✅" : "⚠️"}</span>
-                                      <div>
-                                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#fff" }}>
-                                          {aiCheck.result.isComplete
-                                            ? (lang === "en" ? "Complete Submission" : "ပြည့်စုံသောတင်သွင်းမှု")
-                                            : (lang === "en" ? "Incomplete" : "မပြည့်စုံသေးပါ")}
+                                  {/* Submitted file */}
+                                  {sub && !editing && (
+                                    <div style={{ marginBottom: "12px" }}>
+                                      {sub.content && (
+                                        <div style={{ background: "#f8f9fa", border: "1px solid #e0e0e0", borderRadius: "8px", padding: "10px 14px", marginBottom: "8px", fontSize: "13px", color: "#202124" }}>
+                                          {sub.content}
                                         </div>
-                                        {aiCheck.result.score !== null && aiCheck.result.score !== undefined && (
-                                          <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.9)" }}>{lang === "en" ? "Match" : "ကိုက်ညီမှု"}: {aiCheck.result.score}%</div>
-                                        )}
-                                      </div>
+                                      )}
+                                      {sub.file_path && (
+                                        <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "#f8f9fa", border: "1px solid #e0e0e0", borderRadius: "8px", padding: "10px 14px" }}>
+                                          <span style={{ fontSize: "18px" }}>📎</span>
+                                          <span style={{ fontSize: "13px", color: "#202124", fontWeight: 500 }}>File attached</span>
+                                        </div>
+                                      )}
                                     </div>
-                                    {/* Missing items */}
-                                    {aiCheck.result.missing?.length > 0 && (
-                                      <div style={{ background: "#fff8ed", padding: "12px 16px", borderBottom: "1px solid #fde68a" }}>
-                                        <div style={{ fontSize: "12px", fontWeight: 700, color: "#92400e", marginBottom: "6px" }}>{lang === "en" ? "Missing items" : "မပြည့်စုံသောအချက်များ"}</div>
-                                        {aiCheck.result.missing.map((m, i) => (
-                                          <div key={i} style={{ fontSize: "13px", color: "#78350f", marginBottom: "3px" }}>• {m}</div>
-                                        ))}
-                                      </div>
-                                    )}
-                                    {/* Feedback */}
-                                    <div style={{ background: "#fff", padding: "12px 16px" }}>
-                                      <div style={{ fontSize: "13px", color: "#374151", lineHeight: 1.7 }}>{aiCheck.result.feedback}</div>
+                                  )}
+
+                                  {/* Form when editing or not yet submitted */}
+                                  {(editing || (!sub && canEdit)) && (
+                                    <div style={{ display: "flex", flexDirection: "column", gap: "10px", marginBottom: "12px" }}>
+                                      <textarea
+                                        value={submitContent}
+                                        onChange={e => { setSubmitContent(e.target.value); setAiCheck(null); }}
+                                        placeholder="Write your answer here..."
+                                        style={{ width: "100%", border: "1px solid #e0e0e0", borderRadius: "8px", padding: "10px 12px", fontSize: "13px", resize: "vertical", minHeight: "100px", outline: "none", boxSizing: "border-box", color: "#202124", fontFamily: "inherit" }}
+                                      />
+                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", background: "#f8f9fa", border: "1px solid #e0e0e0", borderRadius: "8px", padding: "10px 14px", cursor: "pointer" }}>
+                                        <span style={{ fontSize: "16px" }}>📎</span>
+                                        <span style={{ fontSize: "13px", color: "#1a73e8", fontWeight: 500 }}>{submitFile ? submitFile.name : "Attach file"}</span>
+                                        <input type="file" ref={submitFileRef} onChange={e => setSubmitFile(e.target.files[0])} style={{ display: "none" }} />
+                                      </label>
                                     </div>
-                                  </div>
-                                )}
+                                  )}
+
+                                  {/* Past due + no submission */}
+                                  {!canEdit && !sub && (
+                                    <div style={{ fontSize: "13px", color: "#9aa0a6", marginBottom: "12px", textAlign: "center" }}>Submission period expired.</div>
+                                  )}
+
+                                  {/* AI check */}
+                                  {(editing || (!sub && canEdit)) && (
+                                    <div style={{ marginBottom: "10px" }}>
+                                      <button onClick={checkWithAI} disabled={aiCheck?.loading}
+                                        style={{ width: "100%", background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", border: "none", borderRadius: "8px", padding: "9px", fontSize: "12px", fontWeight: 600, cursor: "pointer", opacity: aiCheck?.loading ? 0.7 : 1 }}>
+                                        {aiCheck?.loading ? "🤖 Checking..." : "🤖 Check with AI"}
+                                      </button>
+                                      {aiCheck?.result && (
+                                        <div style={{ marginTop: "8px", borderRadius: "8px", overflow: "hidden", border: `2px solid ${aiCheck.result.isComplete ? "#22c55e" : "#f59e0b"}` }}>
+                                          <div style={{ background: aiCheck.result.isComplete ? "#22c55e" : "#f59e0b", padding: "8px 12px", display: "flex", alignItems: "center", gap: "8px" }}>
+                                            <span>{aiCheck.result.isComplete ? "✅" : "⚠️"}</span>
+                                            <div style={{ fontSize: "12px", fontWeight: 700, color: "#fff" }}>
+                                              {aiCheck.result.isComplete ? "Ready to submit" : "Incomplete"}
+                                              {aiCheck.result.score != null && ` · ${aiCheck.result.score}%`}
+                                            </div>
+                                          </div>
+                                          {aiCheck.result.missing?.length > 0 && (
+                                            <div style={{ background: "#fff8ed", padding: "8px 12px" }}>
+                                              {aiCheck.result.missing.map((m, i) => <div key={i} style={{ fontSize: "12px", color: "#78350f" }}>• {m}</div>)}
+                                            </div>
+                                          )}
+                                          <div style={{ background: "#fff", padding: "8px 12px" }}>
+                                            <div style={{ fontSize: "12px", color: "#374151", lineHeight: 1.6 }}>{aiCheck.result.feedback}</div>
+                                          </div>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+
+                                  {/* Action buttons */}
+                                  {sub && !editing && sub.status !== "graded" && canEdit && (
+                                    <button onClick={() => { setEditing(true); setSubmitContent(sub.content || ""); setAiCheck(null); }}
+                                      style={{ width: "100%", background: "#fff", color: "#1a73e8", border: "1px solid #1a73e8", borderRadius: "20px", padding: "9px", fontSize: "13px", fontWeight: 600, cursor: "pointer", marginBottom: "8px" }}>
+                                      Unsubmit
+                                    </button>
+                                  )}
+                                  {editing && (
+                                    <button onClick={() => setEditing(false)}
+                                      style={{ width: "100%", background: "#fff", color: "#5f6368", border: "1px solid #e0e0e0", borderRadius: "20px", padding: "9px", fontSize: "13px", fontWeight: 600, cursor: "pointer", marginBottom: "8px" }}>
+                                      Cancel
+                                    </button>
+                                  )}
+                                  {(editing || (!sub && canEdit)) && (
+                                    <button onClick={submitAssignment} disabled={submitting || (!submitContent.trim() && !submitFile)}
+                                      style={{ width: "100%", background: submitting || (!submitContent.trim() && !submitFile) ? "#c5cae9" : "#1a73e8", color: "#fff", border: "none", borderRadius: "20px", padding: "10px", fontSize: "13px", fontWeight: 700, cursor: submitting || (!submitContent.trim() && !submitFile) ? "not-allowed" : "pointer" }}>
+                                      {submitting ? "Turning in..." : editing ? "Save" : "Turn in"}
+                                    </button>
+                                  )}
+                                </div>
                               </div>
 
-                              <div style={{ display: "flex", gap: "10px" }}>
-                                {editing && <button onClick={() => setEditing(false)} style={{ ...btnOutline, flex: 1 }}>Cancel</button>}
-                                <button onClick={submitAssignment} disabled={submitting || (!submitContent.trim() && !submitFile)} style={{ ...btnPrimary, flex: 1, opacity: (submitting || (!submitContent.trim() && !submitFile)) ? 0.6 : 1 }}>
-                                  {submitting ? "Submitting..." : editing ? "💾 Save Changes" : "✅ Turn In"}
-                                </button>
+                              {/* Private comments */}
+                              <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #e0e0e0", padding: "16px 18px" }}>
+                                <div style={{ fontSize: "13px", fontWeight: 600, color: "#202124", marginBottom: "12px" }}>Private comments</div>
+                                {comments.length === 0
+                                  ? <div style={{ fontSize: "13px", color: "#9aa0a6", marginBottom: "10px" }}>No private comments.</div>
+                                  : comments.map(c => (
+                                    <div key={c.id} style={{ marginBottom: "10px" }}>
+                                      <div style={{ fontSize: "11px", fontWeight: 600, color: "#5f6368" }}>{c.author_name}</div>
+                                      <div style={{ fontSize: "13px", color: "#202124", marginTop: "2px" }}>
+                                        <CommentContent comment={c} isMine={c.author_id === myId}
+                                          onUpdate={updated => setComments(prev => prev.map(x => x.id === c.id ? updated : x))}
+                                          onDelete={() => setComments(prev => prev.filter(x => x.id !== c.id))} />
+                                      </div>
+                                    </div>
+                                  ))
+                                }
+                                <div style={{ display: "flex", gap: "8px", alignItems: "center", borderTop: "1px solid #f1f3f4", paddingTop: "10px" }}>
+                                  <input placeholder={`Add private comment to teacher...`} value={commentInput} onChange={e => setCommentInput(e.target.value)}
+                                    onKeyDown={e => e.key === "Enter" && sendComment(assignPage.id)}
+                                    style={{ flex: 1, border: "none", borderBottom: "1px solid #e0e0e0", outline: "none", fontSize: "13px", padding: "4px 0", color: "#202124", background: "transparent" }} />
+                                  <button onClick={() => sendComment(assignPage.id)} disabled={commentSending || !commentInput.trim()}
+                                    style={{ background: "none", border: "none", cursor: commentInput.trim() ? "pointer" : "default", color: commentInput.trim() ? "#1a73e8" : "#9aa0a6", fontSize: "18px" }}>➤</button>
+                                </div>
                               </div>
-                            </div>
+                            </>
                           );
                         })()}
                       </div>
+                    </div>
+                  </div>
+                ) : null}
 
-                      {/* Private Comments */}
-                      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", padding: "20px" }}>
-                        <div style={{ fontSize: "14px", fontWeight: 700, color: "#374151", marginBottom: "12px" }}>🔒 Private Comments</div>
-                        {comments.length === 0 ? <p style={{ fontSize: "13px", color: "#9ca3af" }}>No comments yet.</p> : comments.map(c => (
-                          <div key={c.id} style={{ background: "#f8f9fa", borderRadius: "8px", padding: "10px 14px", marginBottom: "8px" }}>
-                            <div style={{ fontSize: "11px", fontWeight: 700, color: "#6b7280", marginBottom: "4px" }}>{c.author_name}</div>
-                            <div style={{ fontSize: "13px", color: "#374151" }}>{c.content}</div>
-                          </div>
-                        ))}
-                        <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
-                          <input placeholder="Add private comment to teacher..." value={commentInput} onChange={e => setCommentInput(e.target.value)} onKeyDown={e => e.key === "Enter" && sendComment(assignPage.id)} style={{ ...inp, flex: 1 }} />
-                          <button onClick={() => sendComment(assignPage.id)} disabled={commentSending} style={{ ...btnPrimary, width: "auto", padding: "10px 16px" }}>{commentSending ? "..." : "Send"}</button>
-                        </div>
-                      </div>
+                {/* ── Assignments list (unified classwork) ── */}
+                {!assignPage && !selectedMat && (
+                <div style={{ marginBottom: "28px" }}>
+                  {assignments.length === 0 ? (
+                    <div style={{ background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: "10px", padding: "24px", textAlign: "center", color: "var(--text-faint)", fontSize: "13px" }}>
+                      {isTeacher ? 'Click "+ Assignment" to add one.' : "No assignments yet."}
                     </div>
                   ) : (
-                  /* Assignment table list */
-                  assignments.length === 0 ? (
-                    <div style={{ background: "#fff", border: "1px dashed #d1d5db", borderRadius: "10px", padding: "24px", textAlign: "center", color: "#9ca3af", fontSize: "13px" }}>
-                      {isTeacher ? 'Click "+ Create Assignment" to add one.' : "No assignments yet."}
-                    </div>
-                  ) : (
-                    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", overflow: "hidden" }}>
+                    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", overflow: "hidden" }}>
                       {/* Table header */}
-                      <div style={{ display: "grid", gridTemplateColumns: "32px 1fr 100px 80px 80px 130px", gap: "0", background: "#f8f9fa", borderBottom: "1px solid #e5e7eb", padding: "10px 16px", fontSize: "11px", fontWeight: 700, color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "32px 1fr 100px 80px 80px 130px", gap: "0", background: "var(--bg)", borderBottom: "1px solid var(--border)", padding: "10px 16px", fontSize: "11px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
                         <div>No</div>
                         <div>Title</div>
                         <div style={{ textAlign: "center" }}>Status</div>
@@ -1230,7 +1476,7 @@ export default function ClassDetail() {
                         return topics.map(topic => (
                           <div key={topic || "__none__"}>
                             {topic && (
-                              <div style={{ background: "#f0f4ff", padding: "6px 16px", fontSize: "12px", fontWeight: 700, color: "#3B37CC", borderBottom: "1px solid #e0e7ff" }}>
+                              <div style={{ background: "var(--primary-tint)", padding: "6px 16px", fontSize: "12px", fontWeight: 700, color: "#3B37CC", borderBottom: "1px solid #e0e7ff" }}>
                                 📂 {topic}
                               </div>
                             )}
@@ -1242,40 +1488,40 @@ export default function ClassDetail() {
                               const isUnread = !seenAssignIds.has(a.id);
                               return (
                                 <div key={a.id} onClick={() => openAssignment(a)}
-                                  style={{ display: "grid", gridTemplateColumns: "32px 1fr 100px 80px 80px 150px", gap: "0", padding: "12px 16px", borderBottom: "1px solid #f3f4f6", cursor: "pointer", alignItems: "center", transition: "background 0.1s", background: isUnread ? "#fefbff" : "transparent" }}
-                                  onMouseEnter={e => e.currentTarget.style.background = "#f8f9fa"}
+                                  style={{ display: "grid", gridTemplateColumns: "32px 1fr 100px 80px 80px 150px", gap: "0", padding: "12px 16px", borderBottom: "1px solid var(--surface-alt)", cursor: "pointer", alignItems: "center", transition: "background 0.1s", background: isUnread ? "#fefbff" : "transparent" }}
+                                  onMouseEnter={e => e.currentTarget.style.background = "var(--bg)"}
                                   onMouseLeave={e => e.currentTarget.style.background = isUnread ? "#fefbff" : "transparent"}
                                 >
                                   <div style={{ position: "relative" }}>
-                                    <div style={{ fontSize: "12px", color: "#9ca3af" }}>{idx + 1}</div>
+                                    <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{idx + 1}</div>
                                     {isUnread && <span style={{ position: "absolute", top: "-2px", right: "-2px", width: "7px", height: "7px", borderRadius: "50%", background: "#ef4444", display: "block" }} />}
                                   </div>
                                   <div>
-                                    <div style={{ fontSize: "13px", fontWeight: isUnread ? 700 : 600, color: "#1a1a2e", display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                                    <div style={{ fontSize: "13px", fontWeight: isUnread ? 700 : 600, color: "var(--text)", display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
                                       {a.title}
                                       {isUnread && !a.is_draft && <span style={{ fontSize: "10px", fontWeight: 800, color: "#ef4444", background: "#fef2f2", padding: "1px 6px", borderRadius: "10px" }}>NEW</span>}
                                       {a.is_draft && <span style={{ fontSize: "10px", fontWeight: 700, color: "#92400e", background: "#fef3c7", padding: "1px 6px", borderRadius: "10px" }}>DRAFT</span>}
                                     </div>
-                                    {isTeacher && <div style={{ fontSize: "11px", color: "#9ca3af" }}>{a.turned_in_count || 0} turned in</div>}
+                                    {isTeacher && <div style={{ fontSize: "11px", color: "var(--text-faint)" }}>{a.turned_in_count || 0} turned in</div>}
                                   </div>
                                   <div style={{ textAlign: "center" }}>
-                                    <span style={{ fontSize: "11px", fontWeight: 700, color: inProgress ? "#22c55e" : "#9ca3af", background: inProgress ? "#f0fdf4" : "#f3f4f6", padding: "3px 8px", borderRadius: "20px" }}>
+                                    <span style={{ fontSize: "11px", fontWeight: 700, color: inProgress ? "#22c55e" : "var(--text-faint)", background: inProgress ? "#f0fdf4" : "var(--surface-alt)", padding: "3px 8px", borderRadius: "20px" }}>
                                       {inProgress ? "In Progress" : "Finished"}
                                     </span>
                                   </div>
                                   <div style={{ textAlign: "center", fontSize: "18px" }}>
                                     {isTeacher
-                                      ? <span style={{ fontSize: "12px", color: "#6b7280" }}>{a.turned_in_count || 0}</span>
+                                      ? <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>{a.turned_in_count || 0}</span>
                                       : submitted ? <span style={{ color: sub.status === "graded" ? "#22c55e" : "#3B37CC" }}>✓</span>
-                                      : <span style={{ color: "#d1d5db" }}>—</span>}
+                                      : <span style={{ color: "var(--border)" }}>—</span>}
                                   </div>
-                                  <div style={{ textAlign: "center", fontSize: "12px", color: "#6b7280" }}>{a.points}</div>
-                                  <div style={{ textAlign: "right", fontSize: "12px", color: pastDue ? "#9ca3af" : "#374151", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "4px", flexWrap: "wrap" }}>
+                                  <div style={{ textAlign: "center", fontSize: "12px", color: "var(--text-muted)" }}>{a.points}</div>
+                                  <div style={{ textAlign: "right", fontSize: "12px", color: pastDue ? "var(--text-faint)" : "var(--text-muted)", display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "4px", flexWrap: "wrap" }}>
                                     <span>{a.due_date ? formatDate(a.due_date) : "—"}</span>
                                     {isTeacher && (
                                       <div style={{ display: "flex", gap: "3px" }}>
-                                        <button onClick={e => { e.stopPropagation(); setTopicModal({ type: "assignment", id: a.id, current: a.topic || "" }); setTopicInput(a.topic || ""); }} style={{ fontSize: "10px", padding: "2px 6px", background: "#f3f4f6", color: "#6b7280", border: "none", borderRadius: "6px", cursor: "pointer" }} title="Set topic">📂</button>
-                                        <button onClick={e => { e.stopPropagation(); openSubmissionStats(a.id); }} style={{ fontSize: "10px", padding: "2px 6px", background: "#f0f4ff", color: "#3B37CC", border: "none", borderRadius: "6px", cursor: "pointer" }} title="Submission stats">📊</button>
+                                        <button onClick={e => { e.stopPropagation(); setTopicModal({ type: "assignment", id: a.id, current: a.topic || "" }); setTopicInput(a.topic || ""); }} style={{ fontSize: "10px", padding: "2px 6px", background: "var(--surface-alt)", color: "var(--text-muted)", border: "none", borderRadius: "6px", cursor: "pointer" }} title="Set topic">📂</button>
+                                        <button onClick={e => { e.stopPropagation(); openSubmissionStats(a.id); }} style={{ fontSize: "10px", padding: "2px 6px", background: "var(--primary-tint)", color: "#3B37CC", border: "none", borderRadius: "6px", cursor: "pointer" }} title="Submission stats">📊</button>
                                         {a.is_draft && <button onClick={e => { e.stopPropagation(); publishDraft(a.id); }} style={{ fontSize: "10px", fontWeight: 700, color: "#fff", background: "#3B37CC", border: "none", padding: "2px 8px", borderRadius: "10px", cursor: "pointer" }}>Publish</button>}
                                       </div>
                                     )}
@@ -1287,151 +1533,424 @@ export default function ClassDetail() {
                         ));
                       })()}
                     </div>
-                  )
                   )}
-                </div>}
+                </div>
+                )}
 
-                {/* Lessons tab */}
-                {classworkTab === "lessons" && (
+                {/* ── Materials section (unified classwork) ── */}
+                {!assignPage && (
                 <div>
                 {selectedMat ? (
-                  /* ── Lesson detail (full page) ── */
+                  /* ── Material detail (full page) ── */
                   <div>
                     <button
                       onClick={() => { setSelectedMat(null); setAiModal(null); setAiResult(null); setChatHistory([]); }}
-                      style={{ display: "flex", alignItems: "center", gap: "8px", background: "none", border: "none", color: "#6b7280", fontSize: "13px", fontWeight: 600, cursor: "pointer", padding: "0 0 16px" }}
+                      style={{ display: "flex", alignItems: "center", gap: "8px", background: "none", border: "none", color: "var(--text-muted)", fontSize: "13px", fontWeight: 600, cursor: "pointer", padding: "0 0 16px" }}
                     >
-                      ← Back to Lessons
+                      ← Back to Classwork
                     </button>
-                    <div style={banner}>
+                    <div style={{ ...banner, display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
                       <div>
                         <div style={{ fontSize: "18px", fontWeight: 700, color: "#fff" }}>{selectedMat.title}</div>
                         <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.8)", marginTop: "4px" }}>
                           Week {selectedMat.week || 1} · Posted {formatDate(selectedMat.created_at)}
                         </div>
                       </div>
+                      {isTeacher && materialEditId !== selectedMat.id && (
+                        <button onClick={openEditMatModal}
+                          style={{ background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.35)", color: "#fff", borderRadius: "8px", padding: "5px 14px", fontSize: "12px", fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+                          ✏️ Edit
+                        </button>
+                      )}
                     </div>
+                    {materialEditId === selectedMat.id ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "14px", marginBottom: "20px" }}>
+                        <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "16px 20px" }}>
+                          <label style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.5px", display: "block", marginBottom: "6px" }}>Title</label>
+                          <input value={uploadForm.title} onChange={e => setUploadForm(f => ({ ...f, title: e.target.value }))}
+                            style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 12px", fontSize: "15px", fontWeight: 600, color: "var(--text)", boxSizing: "border-box", background: "var(--surface)" }} />
+                          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "10px" }}>
+                            <span style={{ fontSize: "12px", color: "var(--text-faint)", fontWeight: 600 }}>WEEK</span>
+                            <input type="number" min="1" max="20" value={uploadForm.week}
+                              onChange={e => setUploadForm(f => ({ ...f, week: e.target.value }))}
+                              style={{ width: "56px", border: "1px solid var(--border)", borderRadius: "6px", padding: "4px 8px", fontSize: "13px", fontWeight: 600, color: "#3B37CC", textAlign: "center", outline: "none" }} />
+                          </div>
+                        </div>
+
+                        <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "16px 20px" }}>
+                          <label style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.5px", display: "block", marginBottom: "6px" }}>Instructions</label>
+                          <textarea value={uploadForm.instructions} onChange={e => setUploadForm(f => ({ ...f, instructions: e.target.value }))}
+                            rows={3} placeholder="Add instructions for your students..."
+                            style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "10px 12px", fontSize: "13px", color: "var(--text)", resize: "vertical", boxSizing: "border-box", background: "var(--surface)", fontFamily: "inherit" }} />
+                        </div>
+
+                        <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "16px 20px" }}>
+                          <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", display: "block", marginBottom: "10px" }}>Attach PDF (optional)</span>
+                          {uploadFile ? (
+                            <div style={{ display: "flex", alignItems: "center", gap: "12px", background: "#f8f9ff", border: "1px solid #c7d2fe", borderRadius: "10px", padding: "10px 14px" }}>
+                              <span style={{ fontSize: "20px" }}>📑</span>
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>{uploadFile.name}</div>
+                                <div style={{ fontSize: "11px", color: "var(--text-faint)" }}>{(uploadFile.size / 1024).toFixed(0)} KB</div>
+                              </div>
+                              <button onClick={() => { setUploadFile(null); if (fileRef.current) fileRef.current.value = ""; }}
+                                style={{ background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", fontSize: "16px" }}>✕</button>
+                            </div>
+                          ) : (
+                            <label style={{ display: "flex", alignItems: "center", justifyContent: "center", border: "2px dashed #c7d2fe", borderRadius: "10px", padding: "16px", cursor: "pointer", color: "var(--text-muted)", gap: "8px" }}>
+                              <span style={{ fontSize: "13px", fontWeight: 600 }}>📎 Click to replace the attached PDF</span>
+                              <input type="file" accept="application/pdf" ref={fileRef} onChange={e => {
+                                const f = e.target.files[0];
+                                if (!f) return;
+                                setUploadFile(f);
+                              }} style={{ display: "none" }} />
+                            </label>
+                          )}
+                        </div>
+
+                        <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "16px 20px" }}>
+                          <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", display: "block", marginBottom: "10px" }}>Additional attachments (optional)</span>
+
+                          {selectedMat.files?.length > 0 && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
+                              {selectedMat.files.map(f => (
+                                <div key={f.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: deleteAttachmentIds.includes(f.id) ? "var(--text-faint)" : "var(--text-muted)", background: deleteAttachmentIds.includes(f.id) ? "#fef2f2" : "var(--surface-alt)", padding: "8px 12px", borderRadius: "8px", border: `1px solid ${deleteAttachmentIds.includes(f.id) ? "#fca5a5" : "var(--border)"}`, textDecoration: deleteAttachmentIds.includes(f.id) ? "line-through" : "none" }}>
+                                  <span>📄 {f.file_name}</span>
+                                  <button type="button" onClick={() => setDeleteAttachmentIds(prev => prev.includes(f.id) ? prev.filter(x => x !== f.id) : [...prev, f.id])}
+                                    style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 700, fontSize: "12px", color: deleteAttachmentIds.includes(f.id) ? "#22c55e" : "#ef4444" }}>
+                                    {deleteAttachmentIds.includes(f.id) ? "↩ Restore" : "× Remove"}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          {uploadExtraFiles.length > 0 && (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
+                              {uploadExtraFiles.map((f, i) => (
+                                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: "var(--text)", background: "#f8f9ff", padding: "8px 12px", borderRadius: "8px", border: "1px solid #c7d2fe" }}>
+                                  <span>📎 {f.name}</span>
+                                  <button type="button" onClick={() => setUploadExtraFiles(prev => prev.filter((_, idx) => idx !== i))}
+                                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: "14px" }}>✕</button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+
+                          <input ref={extraFileRef} type="file" multiple style={{ display: "none" }}
+                            onChange={e => {
+                              const picked = Array.from(e.target.files);
+                              setUploadExtraFiles(prev => [...prev, ...picked]);
+                              e.target.value = "";
+                            }} />
+                          <button type="button" onClick={() => extraFileRef.current?.click()}
+                            style={{ fontSize: "13px", color: "#3B37CC", background: "var(--primary-tint)", border: "1px solid #a5b4fc", borderRadius: "8px", padding: "7px 14px", cursor: "pointer", fontWeight: 600 }}>
+                            + Add files
+                          </button>
+                        </div>
+
+                        {uploadError && (
+                          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px", padding: "10px 14px", color: "#dc2626", fontSize: "13px" }}>
+                            {uploadError}
+                          </div>
+                        )}
+
+                        <div style={{ display: "flex", gap: "10px" }}>
+                          <button onClick={handleUpload} disabled={uploading || !uploadForm.title.trim()}
+                            style={{ background: uploading || !uploadForm.title.trim() ? "#c7d2fe" : "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 20px", fontSize: "13px", fontWeight: 700, cursor: uploading || !uploadForm.title.trim() ? "not-allowed" : "pointer" }}>
+                            {uploading ? "Saving..." : "Save Changes"}
+                          </button>
+                          <button onClick={closeUploadModal}
+                            style={{ background: "var(--surface-alt)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "8px", padding: "9px 20px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                    <>
                     {selectedMat.instructions && (
-                      <p style={{ fontSize: "13px", color: "#374151", lineHeight: 1.6, marginBottom: "20px" }}>{selectedMat.instructions}</p>
+                      <p style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6, marginBottom: "20px" }}>{selectedMat.instructions}</p>
                     )}
-                    <div style={{ marginBottom: "10px", fontSize: "11px", fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "1px" }}>
+                    <div style={{ marginBottom: "10px", fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "1px" }}>
                       Reference Materials
                     </div>
                     {selectedMat.file_url ? (() => {
                       const fileName = selectedMat.file_name || selectedMat.title;
                       const ext = (selectedMat.file_url.split(".").pop() || "").toLowerCase();
+                      const isPdf = ext === "pdf";
                       const kind = {
-                        pdf: { icon: "📕", label: "PDF Document" },
-                        docx: { icon: "📘", label: "Word Document" },
-                        pptx: { icon: "📙", label: "PowerPoint" },
-                        png: { icon: "🖼️", label: "Image" }, jpg: { icon: "🖼️", label: "Image" },
-                        jpeg: { icon: "🖼️", label: "Image" }, webp: { icon: "🖼️", label: "Image" }, gif: { icon: "🖼️", label: "Image" },
-                      }[ext] || { icon: "📄", label: "File" };
+                        pdf: { label: "PDF" },
+                        docx: { label: "Word" },
+                        pptx: { label: "PowerPoint" },
+                        png: { label: "Image" }, jpg: { label: "Image" },
+                        jpeg: { label: "Image" }, webp: { label: "Image" }, gif: { label: "Image" },
+                      }[ext] || { label: "File" };
                       const openPreview = () => navigate(`/classroom/${id}/material/${selectedMat.id}`, { state: { backgroundLocation: location } });
+                      const thumbUrl = isPdf ? `http://localhost:5001${selectedMat.file_url}` : null;
                       return (
                         <div
                           onClick={openPreview}
                           role="button" tabIndex={0}
                           onKeyDown={e => e.key === "Enter" && openPreview()}
-                          style={{ ...fileChip, maxWidth: "420px", cursor: "pointer" }}
+                          style={{ display: "flex", border: "1px solid var(--border)", borderRadius: "12px", overflow: "hidden", maxWidth: "460px", cursor: "pointer", background: "var(--surface)", transition: "box-shadow 0.15s" }}
+                          onMouseEnter={e => e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.08)"}
+                          onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}
                         >
-                          <span style={{ fontSize: "18px" }}>{kind.icon}</span>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ fontSize: "13px", fontWeight: 600, color: "#1a1a2e", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{fileName}</div>
-                            <div style={{ fontSize: "11px", color: "#9ca3af" }}>{kind.label}</div>
+                          <div style={{ flex: 1, padding: "14px 16px", minWidth: 0 }}>
+                            <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: "4px" }}>{fileName}</div>
+                            <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{kind.label}</div>
                           </div>
-                          <span style={{ color: "#3B37CC", fontSize: "18px" }}>›</span>
+                          <div style={{ width: "120px", flexShrink: 0, background: "var(--surface-alt)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", borderLeft: "1px solid var(--border)" }}>
+                            {isPdf ? (
+                              <object data={thumbUrl} type="application/pdf" style={{ width: "120px", height: "80px", pointerEvents: "none" }}>
+                                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "80px", gap: "4px" }}>
+                                  <span style={{ fontSize: "28px" }}>📄</span>
+                                  <span style={{ fontSize: "10px", color: "var(--text-faint)" }}>PDF</span>
+                                </div>
+                              </object>
+                            ) : (
+                              <span style={{ fontSize: "32px" }}>📄</span>
+                            )}
+                          </div>
                         </div>
                       );
                     })() : (
-                      <p style={{ fontSize: "13px", color: "#9ca3af" }}>No file attached.</p>
+                      selectedMat.files?.length > 0 ? null : (
+                        <p style={{ fontSize: "13px", color: "var(--text-faint)" }}>No file attached.</p>
+                      )
                     )}
-                  </div>
-                ) : (
-                  /* ── Lesson list ── */
-                  <>
-                    <div style={banner}>
-                      <div>
-                        <div style={{ fontSize: "18px", fontWeight: 700, color: "#fff" }}>{classInfo.name} — Lessons</div>
-                        <div style={{ fontSize: "13px", color: "rgba(255,255,255,0.8)", marginTop: "4px" }}>
-                          {isTeacher ? "Upload and manage course materials" : "Click a material to open AI Study Mentor"}
+
+                    {selectedMat.files?.length > 0 && (
+                      <div style={{ marginTop: "12px", display: "flex", flexWrap: "wrap", gap: "10px" }}>
+                        {selectedMat.files.map(f => (
+                          <a key={f.id} href={`http://localhost:5001/uploads/${f.file_path}`} target="_blank" rel="noreferrer"
+                            style={{ display: "flex", alignItems: "center", gap: "10px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "8px", padding: "10px 14px", textDecoration: "none", minWidth: "200px" }}>
+                            <span style={{ fontSize: "20px" }}>📎</span>
+                            <div style={{ fontSize: "13px", fontWeight: 500, color: "var(--text)", maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.file_name}</div>
+                          </a>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* AI suggested YouTube resources */}
+                    {selectedMat.ai_resources?.length > 0 && (
+                      <div style={{ marginTop: "24px" }}>
+                        <div style={{ marginBottom: "10px", fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "1px" }}>
+                          🎬 Related YouTube Videos
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                          {selectedMat.ai_resources.map((r, i) => (
+                            <a key={i} href={r.url} target="_blank" rel="noopener noreferrer"
+                              style={{ display: "flex", alignItems: "center", gap: "12px", background: "#f8f9ff", border: "1px solid #e0e7ff", borderRadius: "12px", overflow: "hidden", textDecoration: "none" }}>
+                              {r.thumbnail ? (
+                                <img src={r.thumbnail} alt={r.title}
+                                  style={{ width: "120px", height: "68px", objectFit: "cover", flexShrink: 0 }} />
+                              ) : (
+                                <div style={{ width: "120px", height: "68px", background: "#ff0000", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                  <span style={{ fontSize: "24px" }}>▶</span>
+                                </div>
+                              )}
+                              <div style={{ flex: 1, padding: "8px 12px 8px 0" }}>
+                                <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)", lineHeight: "1.4", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.title}</div>
+                                {r.channel && <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "4px" }}>{r.channel}</div>}
+                              </div>
+                              <span style={{ fontSize: "12px", color: "#ff0000", fontWeight: 700, paddingRight: "12px", flexShrink: 0 }}>▶ Watch</span>
+                            </a>
+                          ))}
                         </div>
                       </div>
+                    )}
+                    </>
+                    )}
+
+                    {/* ── Assignments for this material ── */}
+                    <div style={{ marginTop: "28px" }}>
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
+                        <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "1px" }}>✏️ Assignments</div>
+                        {isTeacher && (
+                          <button onClick={() => setMatAssignOpen(o => !o)}
+                            style={{ fontSize: "12px", fontWeight: 700, color: "#3B37CC", background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: "8px", padding: "4px 12px", cursor: "pointer" }}>
+                            + Add Assignment
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Teacher: inline create form */}
+                      {isTeacher && matAssignOpen && (
+                        <div style={{ background: "var(--surface)", border: "1px solid #c7d2fe", borderRadius: "12px", padding: "16px", marginBottom: "14px" }}>
+                          <input placeholder="Assignment title *" value={matAssignForm.title}
+                            onChange={e => setMatAssignForm(f => ({ ...f, title: e.target.value }))}
+                            style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 12px", fontSize: "13px", marginBottom: "10px", boxSizing: "border-box", background: "var(--surface)", color: "var(--text)" }} />
+                          <textarea placeholder="Instructions (optional)" value={matAssignForm.instructions}
+                            onChange={e => setMatAssignForm(f => ({ ...f, instructions: e.target.value }))}
+                            rows={2}
+                            style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 12px", fontSize: "13px", marginBottom: "10px", resize: "vertical", boxSizing: "border-box", background: "var(--surface)", color: "var(--text)" }} />
+                          <div style={{ display: "flex", gap: "10px", marginBottom: "12px" }}>
+                            <div style={{ flex: 1 }}>
+                              <div style={{ fontSize: "11px", color: "var(--text-faint)", marginBottom: "4px" }}>Due date</div>
+                              <input type="datetime-local" value={matAssignForm.due_date}
+                                onChange={e => setMatAssignForm(f => ({ ...f, due_date: e.target.value }))}
+                                style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "7px 10px", fontSize: "12px", boxSizing: "border-box", background: "var(--surface)", color: "var(--text)" }} />
+                            </div>
+                            <div>
+                              <div style={{ fontSize: "11px", color: "var(--text-faint)", marginBottom: "4px" }}>Points</div>
+                              <input type="number" value={matAssignForm.points} min={0} max={1000}
+                                onChange={e => setMatAssignForm(f => ({ ...f, points: e.target.value }))}
+                                style={{ width: "80px", border: "1px solid var(--border)", borderRadius: "8px", padding: "7px 10px", fontSize: "12px", boxSizing: "border-box", background: "var(--surface)", color: "var(--text)" }} />
+                            </div>
+                          </div>
+                          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
+                            <button onClick={() => setMatAssignOpen(false)}
+                              style={{ fontSize: "12px", color: "var(--text-faint)", background: "none", border: "1px solid var(--border)", borderRadius: "8px", padding: "6px 14px", cursor: "pointer" }}>Cancel</button>
+                            <button onClick={createMatAssignment} disabled={matAssignSaving || !matAssignForm.title.trim()}
+                              style={{ fontSize: "12px", fontWeight: 700, color: "#fff", background: "#3B37CC", border: "none", borderRadius: "8px", padding: "6px 16px", cursor: "pointer", opacity: matAssignSaving ? 0.6 : 1 }}>
+                              {matAssignSaving ? "Saving…" : "Create"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Assignment list */}
+                      {matAssignments.length === 0 ? (
+                        <div style={{ fontSize: "12px", color: "var(--text-faint)", padding: "10px 0" }}>
+                          {isTeacher ? "No assignments yet for this lesson. Add one above." : "No assignments for this lesson yet."}
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                          {matAssignments.map(a => {
+                            const submitted = !isTeacher && a.my_submission;
+                            return (
+                              <div key={a.id}
+                                onClick={() => openAssignment(a)}
+                                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "12px 16px", cursor: "pointer", transition: "box-shadow 0.15s" }}
+                                onMouseEnter={e => e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.08)"}
+                                onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}>
+                                <div>
+                                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>{a.title}</div>
+                                  <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "2px" }}>
+                                    {a.due_date ? `Due ${formatDate(a.due_date)}` : "No due date"} · {a.points} pts
+                                  </div>
+                                </div>
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
+                                  {isTeacher ? (
+                                    <span style={{ fontSize: "11px", color: "#3B37CC", fontWeight: 600 }}>{a.turned_in_count || 0} turned in</span>
+                                  ) : submitted ? (
+                                    <span style={{ fontSize: "11px", fontWeight: 700, color: "#16a34a", background: "#dcfce7", padding: "2px 8px", borderRadius: "10px" }}>✓ Submitted</span>
+                                  ) : (
+                                    <span style={{ fontSize: "11px", fontWeight: 700, color: "#ea580c", background: "#fff7ed", padding: "2px 8px", borderRadius: "10px" }}>Pending</span>
+                                  )}
+                                  <span style={{ fontSize: "16px", color: "var(--text-faint)" }}>›</span>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
 
+                  </div>
+                ) : (
+                  /* ── Material list ── */
+                  <>
                     {/* Hint: select a material to use AI */}
                     {aiHint && (
-                      <div style={{ background: "#f0f4ff", border: "2px solid #3B37CC", borderRadius: "10px", padding: "12px 16px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "10px" }}>
+                      <div style={{ background: "var(--primary-tint)", border: "2px solid #3B37CC", borderRadius: "10px", padding: "12px 16px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "10px" }}>
                         <span style={{ fontSize: "20px" }}>👆</span>
                         <div>
                           <div style={{ fontSize: "13px", fontWeight: 700, color: "#3B37CC" }}>Select a material below</div>
-                          <div style={{ fontSize: "12px", color: "#6b7280" }}>Click any material to activate AI Study Mentor</div>
+                          <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Click any material to activate AI Study Mentor</div>
                         </div>
-                        <button onClick={() => setAiHint(false)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: "16px" }}>×</button>
+                        <button onClick={() => setAiHint(false)} style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", fontSize: "16px" }}>×</button>
                       </div>
                     )}
 
                     {materials.length === 0 ? (
-                      <div style={{ textAlign: "center", padding: "64px 0", color: "#9ca3af" }}>
-                        {isTeacher ? 'Click "+ New Material" to add your first material.' : "No materials posted yet."}
+                      <div style={{ textAlign: "center", padding: "64px 0", color: "var(--text-faint)" }}>
+                        {isTeacher ? 'Click "+ Material" to add your first material.' : "No materials posted yet."}
                       </div>
                     ) : (
                       Object.entries(weekGroups).sort((a, b) => Number(a[0]) - Number(b[0])).map(([week, mats]) => (
                         <div key={week}>
-                          <div style={weekLabel}>Week {week}</div>
+                          <div style={weekLabel}>📚 Week {week}</div>
                           {mats.map(mat => (
-                            <div
-                              key={mat.id}
-                              onClick={async () => {
-                                setSelectedMat(mat);
-                                markMatSeen(mat.id);
-                                setAiResult(null); setChatHistory([]);
-                                // If user came from Stream tab with a pending AI action
-                                if (aiHint) {
-                                  const action = aiHint;
-                                  setAiHint(false);
-                                  setAiModal(action);
-                                  if (action !== "chat") {
-                                    setAiLoading(true);
-                                    try {
-                                      const { data } = await API.post(`/classroom/materials/${mat.id}/ai`, { action });
-                                      setAiResult(data.data);
-                                    } catch {
-                                      setAiResult({ error: "AI unavailable. Check GEMINI_API_KEY in backend .env" });
-                                    } finally {
-                                      setAiLoading(false);
+                            <div key={mat.id} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", marginBottom: "10px", overflow: "hidden" }}>
+                              {/* Material row — click to open detail */}
+                              <div
+                                onClick={async () => {
+                                  setSelectedMat(mat);
+                                  markMatSeen(mat.id);
+                                  setMatAssignments([]);
+                                  loadMatAssignments(mat.id);
+                                  setAiResult(null); setChatHistory([]);
+                                  if (aiHint) {
+                                    const action = aiHint;
+                                    setAiHint(false);
+                                    setAiModal(action);
+                                    if (action !== "chat") {
+                                      setAiLoading(true);
+                                      try {
+                                        const { data } = await API.post(`/classroom/materials/${mat.id}/ai`, { action });
+                                        setAiResult(data.data);
+                                      } catch {
+                                        setAiResult({ error: "AI unavailable. Check GROQ_API_KEY in backend .env" });
+                                      } finally {
+                                        setAiLoading(false);
+                                      }
                                     }
                                   }
-                                }
-                              }}
-                              style={{ ...matRow, background: !seenMatIds.has(mat.id) ? "#fefbff" : "#fff" }}
-                            >
-                              <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
-                                <div style={{ position: "relative" }}>
-                                  <div style={matIcon}>
-                                    <span>📄</span>
+                                }}
+                                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", cursor: "pointer", background: !seenMatIds.has(mat.id) ? "#fefbff" : "transparent" }}
+                                onMouseEnter={e => e.currentTarget.style.background = "var(--bg)"}
+                                onMouseLeave={e => e.currentTarget.style.background = !seenMatIds.has(mat.id) ? "#fefbff" : "transparent"}
+                              >
+                                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                                  <div style={{ position: "relative" }}>
+                                    <div style={matIcon}><span>📄</span></div>
+                                    {!seenMatIds.has(mat.id) && <span style={{ position: "absolute", top: "-3px", right: "-3px", width: "8px", height: "8px", borderRadius: "50%", background: "#ef4444", border: "2px solid #fff", display: "block" }} />}
                                   </div>
-                                  {!seenMatIds.has(mat.id) && <span style={{ position: "absolute", top: "-3px", right: "-3px", width: "8px", height: "8px", borderRadius: "50%", background: "#ef4444", border: "2px solid #fff", display: "block" }} />}
+                                  <div>
+                                    <div style={{ fontSize: "14px", fontWeight: !seenMatIds.has(mat.id) ? 700 : 600, color: "var(--text)", display: "flex", alignItems: "center", gap: "6px" }}>
+                                      {mat.title}
+                                      {!seenMatIds.has(mat.id) && <span style={{ fontSize: "10px", fontWeight: 800, color: "#ef4444", background: "#fef2f2", padding: "1px 6px", borderRadius: "10px" }}>NEW</span>}
+                                    </div>
+                                    <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>Posted {formatDate(mat.created_at)}</div>
+                                  </div>
                                 </div>
-                                <div>
-                                  <div style={{ fontSize: "14px", fontWeight: !seenMatIds.has(mat.id) ? 700 : 600, color: "#1a1a2e", display: "flex", alignItems: "center", gap: "6px" }}>
-                                    {mat.title}
-                                    {!seenMatIds.has(mat.id) && <span style={{ fontSize: "10px", fontWeight: 800, color: "#ef4444", background: "#fef2f2", padding: "1px 6px", borderRadius: "10px" }}>NEW</span>}
-                                  </div>
-                                  <div style={{ fontSize: "12px", color: "#9ca3af" }}>Posted {formatDate(mat.created_at)}</div>
+                                <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                                  {mat.topic && <span style={{ fontSize: "11px", background: "var(--primary-tint)", color: "#3B37CC", padding: "2px 8px", borderRadius: "10px", fontWeight: 600 }}>📂 {mat.topic}</span>}
+                                  {isTeacher && (
+                                    <button onClick={e => { e.stopPropagation(); setTopicModal({ type: "material", id: mat.id, current: mat.topic || "" }); setTopicInput(mat.topic || ""); }}
+                                      style={{ fontSize: "11px", padding: "2px 7px", background: "var(--surface-alt)", color: "var(--text-muted)", border: "none", borderRadius: "6px", cursor: "pointer" }}>
+                                      📂 Topic
+                                    </button>
+                                  )}
+                                  <span style={{ color: "var(--text-faint)", fontSize: "12px" }}>›</span>
                                 </div>
                               </div>
-                              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                                {mat.topic && <span style={{ fontSize: "11px", background: "#f0f4ff", color: "#3B37CC", padding: "2px 8px", borderRadius: "10px", fontWeight: 600 }}>📂 {mat.topic}</span>}
-                                {isTeacher && (
-                                  <button onClick={e => { e.stopPropagation(); setTopicModal({ type: "material", id: mat.id, current: mat.topic || "" }); setTopicInput(mat.topic || ""); }}
-                                    style={{ fontSize: "11px", padding: "2px 7px", background: "#f3f4f6", color: "#6b7280", border: "none", borderRadius: "6px", cursor: "pointer" }}>
-                                    📂 Topic
-                                  </button>
-                                )}
-                                <span style={{ fontSize: "12px", color: "#9ca3af" }}>No due date</span>
-                                <span style={{ color: "#9ca3af", fontSize: "12px" }}>›</span>
-                              </div>
+                              {/* YouTube resource thumbnails — compact strip */}
+                              {mat.ai_resources?.length > 0 && (
+                                <div style={{ borderTop: "1px solid var(--surface-alt)", padding: "10px 16px", background: "#fafbff" }}>
+                                  <div style={{ fontSize: "11px", color: "var(--text-faint)", fontWeight: 700, marginBottom: "8px" }}>🎬 Related Videos</div>
+                                  <div style={{ display: "flex", gap: "8px", overflowX: "auto" }}>
+                                    {mat.ai_resources.map((r, i) => (
+                                      <a key={i} href={r.url} target="_blank" rel="noopener noreferrer"
+                                        onClick={e => e.stopPropagation()}
+                                        style={{ display: "flex", flexDirection: "column", flexShrink: 0, width: "140px", textDecoration: "none", borderRadius: "8px", overflow: "hidden", border: "1px solid #e0e7ff" }}>
+                                        {r.thumbnail ? (
+                                          <img src={r.thumbnail} alt={r.title} style={{ width: "140px", height: "79px", objectFit: "cover" }} />
+                                        ) : (
+                                          <div style={{ width: "140px", height: "79px", background: "#ff0000", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                            <span style={{ fontSize: "20px", color: "#fff" }}>▶</span>
+                                          </div>
+                                        )}
+                                        <div style={{ padding: "4px 6px", background: "var(--surface)" }}>
+                                          <div style={{ fontSize: "10px", fontWeight: 600, color: "var(--text)", lineHeight: "1.3", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.title}</div>
+                                        </div>
+                                      </a>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -1446,19 +1965,19 @@ export default function ClassDetail() {
               )}
             </div>
 
-            {/* Right: AI Study Mentor panel — students only, lessons tab */}
-            {selectedMat && !isTeacher && classworkTab === "lessons" && (
+            {/* Right: AI Study Mentor panel — students only */}
+            {selectedMat && !isTeacher && (
               <div style={aiMentorPanel}>
                 {/* Header */}
                 <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "6px" }}>
                   <div style={aiAvatarStyle}>🤖</div>
                   <div>
-                    <div style={{ fontSize: "15px", fontWeight: 700, color: "#1a1a2e" }}>AI Study Mentor</div>
+                    <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)" }}>AI Study Mentor</div>
                     <div style={{ fontSize: "12px", color: "#22c55e", fontWeight: 600 }}>● ACTIVE NOW</div>
                   </div>
-                  <button onClick={() => setSelectedMat(null)} style={{ marginLeft: "auto", background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: "18px" }}>×</button>
+                  <button onClick={() => setSelectedMat(null)} style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", fontSize: "18px" }}>×</button>
                 </div>
-                <div style={{ fontSize: "11px", fontWeight: 700, color: "#9ca3af", letterSpacing: "1px", margin: "16px 0 10px", textTransform: "uppercase" }}>
+                <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", letterSpacing: "1px", margin: "16px 0 10px", textTransform: "uppercase" }}>
                   Recommended Tools
                 </div>
 
@@ -1472,11 +1991,11 @@ export default function ClassDetail() {
                   <div
                     key={f.key}
                     onClick={() => openAI(f.key)}
-                    style={{ ...aiFeatureCard, border: aiModal === f.key ? "2px solid #3B37CC" : "1px solid #e5e7eb", background: aiModal === f.key ? "#f0f4ff" : "#fff" }}
+                    style={{ ...aiFeatureCard, border: aiModal === f.key ? "2px solid #3B37CC" : "1px solid var(--border)", background: aiModal === f.key ? "var(--primary-tint)" : "#fff" }}
                   >
                     <div style={{ fontSize: "22px", marginBottom: "6px" }}>{f.icon}</div>
-                    <div style={{ fontSize: "14px", fontWeight: 700, color: "#1a1a2e", marginBottom: "4px" }}>{f.title}</div>
-                    <div style={{ fontSize: "12px", color: "#6b7280", lineHeight: 1.5 }}>{f.desc}</div>
+                    <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)", marginBottom: "4px" }}>{f.title}</div>
+                    <div style={{ fontSize: "12px", color: "var(--text-muted)", lineHeight: 1.5 }}>{f.desc}</div>
                   </div>
                 ))}
               </div>
@@ -1488,9 +2007,9 @@ export default function ClassDetail() {
           {activeTab === "grades" && (
             <div>
               {gradesLoading ? (
-                <div style={{ textAlign: "center", padding: "60px", color: "#9ca3af" }}>Loading grades...</div>
+                <div style={{ textAlign: "center", padding: "60px", color: "var(--text-faint)" }}>Loading grades...</div>
               ) : !gradesData ? (
-                <div style={{ textAlign: "center", padding: "60px", color: "#9ca3af" }}>No grade data yet.</div>
+                <div style={{ textAlign: "center", padding: "60px", color: "var(--text-faint)" }}>No grade data yet.</div>
               ) : gradesData.role === "student" ? (
                 /* ── Student Grades View ── */
                 <div style={{ maxWidth: "680px" }}>
@@ -1512,19 +2031,19 @@ export default function ClassDetail() {
 
                   {/* Assignment rows */}
                   {gradesData.rows.length === 0 ? (
-                    <p style={{ color: "#9ca3af", textAlign: "center", padding: "24px" }}>No assignments yet.</p>
+                    <p style={{ color: "var(--text-faint)", textAlign: "center", padding: "24px" }}>No assignments yet.</p>
                   ) : gradesData.rows.map(row => {
                     const pct = row.grade !== null ? Math.round((row.grade / row.points) * 100) : null;
-                    const color = row.status === "graded" ? (pct >= 75 ? "#22c55e" : pct >= 50 ? "#f59e0b" : "#ef4444") : row.status === "turned_in" || row.status === "late" ? "#3B37CC" : "#9ca3af";
+                    const color = row.status === "graded" ? (pct >= 75 ? "#22c55e" : pct >= 50 ? "#f59e0b" : "#ef4444") : row.status === "turned_in" || row.status === "late" ? "#3B37CC" : "var(--text-faint)";
                     return (
-                      <div key={row.assignment_id} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", padding: "16px 20px", marginBottom: "8px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div key={row.assignment_id} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px", marginBottom: "8px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                           <div style={{ width: "40px", height: "40px", borderRadius: "10px", background: color + "15", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px" }}>
                             {row.status === "graded" ? "✅" : row.status === "turned_in" ? "📤" : row.status === "late" ? "⏰" : "📝"}
                           </div>
                           <div>
-                            <div style={{ fontSize: "14px", fontWeight: 600, color: "#1a1a2e" }}>{row.title}</div>
-                            <div style={{ fontSize: "12px", color: "#9ca3af" }}>
+                            <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{row.title}</div>
+                            <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>
                               {row.due_date ? `Due ${formatDate(row.due_date)}` : "No due date"}
                               {row.grade_comment && ` • "${row.grade_comment}"`}
                             </div>
@@ -1533,7 +2052,7 @@ export default function ClassDetail() {
                         <div style={{ textAlign: "right" }}>
                           {row.grade !== null ? (
                             <>
-                              <div style={{ fontSize: "18px", fontWeight: 800, color }}>{row.grade}<span style={{ fontSize: "13px", color: "#9ca3af", fontWeight: 400 }}>/{row.points}</span></div>
+                              <div style={{ fontSize: "18px", fontWeight: 800, color }}>{row.grade}<span style={{ fontSize: "13px", color: "var(--text-faint)", fontWeight: 400 }}>/{row.points}</span></div>
                               <div style={{ fontSize: "11px", color }}>{pct}%</div>
                             </>
                           ) : (
@@ -1568,18 +2087,18 @@ export default function ClassDetail() {
                   </div>
 
                   {gradesData.rows.length === 0 ? (
-                    <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px" }}>No students enrolled yet.</p>
+                    <p style={{ color: "var(--text-faint)", textAlign: "center", padding: "32px" }}>No students enrolled yet.</p>
                   ) : (
-                    <div style={{ overflowX: "auto", borderRadius: "12px", border: "1px solid #e5e7eb", background: "#fff" }}>
+                    <div style={{ overflowX: "auto", borderRadius: "12px", border: "1px solid var(--border)", background: "var(--surface)" }}>
                       <table style={{ borderCollapse: "collapse", tableLayout: "fixed", width: "100%", minWidth: `${200 + gradesData.rows.length * 100}px` }}>
                         <thead>
-                          <tr style={{ background: "#f8f9fa" }}>
+                          <tr style={{ background: "var(--bg)" }}>
                             {/* Sticky assignment column */}
-                            <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: 700, color: "#374151", borderBottom: "1px solid #e5e7eb", borderRight: "2px solid #e5e7eb", width: "200px", position: "sticky", left: 0, background: "#f8f9fa", zIndex: 2 }}>
+                            <th style={{ padding: "12px 16px", textAlign: "left", fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", borderBottom: "1px solid var(--border)", borderRight: "2px solid var(--border)", width: "200px", position: "sticky", left: 0, background: "var(--bg)", zIndex: 2 }}>
                               Assignment
                             </th>
                             {gradesData.rows.map(row => (
-                              <th key={row.student_id} style={{ padding: "10px 8px", textAlign: "center", fontSize: "12px", fontWeight: 700, color: "#374151", borderBottom: "1px solid #e5e7eb", minWidth: "90px" }}>
+                              <th key={row.student_id} style={{ padding: "10px 8px", textAlign: "center", fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", borderBottom: "1px solid var(--border)", minWidth: "90px" }}>
                                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
                                   <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "#3B37CC", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", fontWeight: 700 }}>
                                     {row.name[0].toUpperCase()}
@@ -1594,24 +2113,24 @@ export default function ClassDetail() {
                           {gradesData.assignments.map((a, i) => (
                             <tr key={a.id} style={{ background: i % 2 === 0 ? "#fff" : "#fafafa" }}>
                               {/* Sticky assignment name */}
-                              <td style={{ padding: "12px 16px", borderBottom: "1px solid #f3f4f6", borderRight: "2px solid #e5e7eb", position: "sticky", left: 0, background: i % 2 === 0 ? "#fff" : "#fafafa", zIndex: 1 }}>
-                                <div style={{ fontSize: "13px", fontWeight: 600, color: "#1a1a2e", marginBottom: "2px" }}>{a.title}</div>
-                                <div style={{ fontSize: "11px", color: "#9ca3af" }}>{a.points} pts{a.due_date ? ` · Due ${new Date(a.due_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}</div>
+                              <td style={{ padding: "12px 16px", borderBottom: "1px solid var(--surface-alt)", borderRight: "2px solid var(--border)", position: "sticky", left: 0, background: i % 2 === 0 ? "#fff" : "#fafafa", zIndex: 1 }}>
+                                <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)", marginBottom: "2px" }}>{a.title}</div>
+                                <div style={{ fontSize: "11px", color: "var(--text-faint)" }}>{a.points} pts{a.due_date ? ` · Due ${new Date(a.due_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}</div>
                               </td>
                               {gradesData.rows.map(row => {
                                 const g = row.grades.find(g => g.assignment_id === a.id);
                                 const pct = g?.grade !== null && g?.grade !== undefined ? Math.round((g.grade / a.points) * 100) : null;
                                 const bg = !g || g.grade === null ? "transparent" : pct >= 75 ? "#f0fdf4" : pct >= 50 ? "#fefce8" : "#fef2f2";
-                                const col = !g || g.grade === null ? "#d1d5db" : pct >= 75 ? "#15803d" : pct >= 50 ? "#92400e" : "#dc2626";
+                                const col = !g || g.grade === null ? "var(--border)" : pct >= 75 ? "#15803d" : pct >= 50 ? "#92400e" : "#dc2626";
                                 return (
-                                  <td key={row.student_id} style={{ padding: "12px 8px", textAlign: "center", borderBottom: "1px solid #f3f4f6", background: bg }}>
+                                  <td key={row.student_id} style={{ padding: "12px 8px", textAlign: "center", borderBottom: "1px solid var(--surface-alt)", background: bg }}>
                                     {g?.grade !== null && g?.grade !== undefined ? (
                                       <div>
                                         <div style={{ fontSize: "14px", fontWeight: 700, color: col }}>{g.grade}<span style={{ fontSize: "10px", color: col, opacity: 0.6 }}>/{a.points}</span></div>
                                         <div style={{ fontSize: "10px", color: col, opacity: 0.8 }}>{pct}%</div>
                                       </div>
                                     ) : (
-                                      <span style={{ fontSize: "15px", color: g?.status === "turned_in" || g?.status === "late" ? "#3B37CC" : "#e5e7eb" }}>
+                                      <span style={{ fontSize: "15px", color: g?.status === "turned_in" || g?.status === "late" ? "#3B37CC" : "var(--border)" }}>
                                         {g?.status === "turned_in" ? "✓" : g?.status === "late" ? "⏰" : "—"}
                                       </span>
                                     )}
@@ -1621,8 +2140,8 @@ export default function ClassDetail() {
                             </tr>
                           ))}
                           {/* Overall row */}
-                          <tr style={{ background: "#f0f4ff", borderTop: "2px solid #a5b4fc" }}>
-                            <td style={{ padding: "12px 16px", borderRight: "2px solid #e5e7eb", position: "sticky", left: 0, background: "#f0f4ff", zIndex: 1 }}>
+                          <tr style={{ background: "var(--primary-tint)", borderTop: "2px solid #a5b4fc" }}>
+                            <td style={{ padding: "12px 16px", borderRight: "2px solid var(--border)", position: "sticky", left: 0, background: "var(--primary-tint)", zIndex: 1 }}>
                               <span style={{ fontSize: "13px", fontWeight: 700, color: "#3B37CC" }}>Overall</span>
                             </td>
                             {gradesData.rows.map(row => (
@@ -1631,7 +2150,7 @@ export default function ClassDetail() {
                                   <span style={{ fontSize: "14px", fontWeight: 800, color: row.percentage >= 75 ? "#15803d" : row.percentage >= 50 ? "#92400e" : "#dc2626" }}>
                                     {row.percentage}%
                                   </span>
-                                ) : <span style={{ color: "#d1d5db" }}>—</span>}
+                                ) : <span style={{ color: "var(--border)" }}>—</span>}
                               </td>
                             ))}
                           </tr>
@@ -1658,7 +2177,7 @@ export default function ClassDetail() {
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: "8px" }}>
-                    <a href={activeMeeting.room_url} target="_blank" rel="noopener noreferrer" style={{ background: "#fff", color: "#3B37CC", border: "none", borderRadius: "8px", padding: "8px 18px", fontWeight: 700, fontSize: "13px", cursor: "pointer", textDecoration: "none" }}>
+                    <a href={activeMeeting.room_url} target="_blank" rel="noopener noreferrer" style={{ background: "var(--surface)", color: "#3B37CC", border: "none", borderRadius: "8px", padding: "8px 18px", fontWeight: 700, fontSize: "13px", cursor: "pointer", textDecoration: "none" }}>
                       {lang === "en" ? "Join Meeting" : "ဝင်မည်"}
                     </a>
                     {isTeacher && (
@@ -1669,10 +2188,10 @@ export default function ClassDetail() {
                   </div>
                 </div>
               ) : isTeacher && (
-                <div style={{ background: "#f8f9fa", borderRadius: "12px", padding: "16px 20px", marginBottom: "20px", display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px dashed #d1d5db" }}>
+                <div style={{ background: "var(--bg)", borderRadius: "12px", padding: "16px 20px", marginBottom: "20px", display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px dashed var(--border)" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                     <span style={{ fontSize: "20px" }}>📹</span>
-                    <span style={{ fontSize: "14px", color: "#6b7280" }}>{lang === "en" ? "No active meeting" : "လက်ရှိ Meeting မရှိသေးပါ"}</span>
+                    <span style={{ fontSize: "14px", color: "var(--text-muted)" }}>{lang === "en" ? "No active meeting" : "လက်ရှိ Meeting မရှိသေးပါ"}</span>
                   </div>
                   <button onClick={startMeeting} disabled={meetingLoading} style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "8px 18px", fontWeight: 700, fontSize: "13px", cursor: "pointer" }}>
                     {meetingLoading ? "..." : lang === "en" ? "▶ Start Meeting" : "▶ Meeting စတင်မည်"}
@@ -1682,144 +2201,571 @@ export default function ClassDetail() {
 
               {/* Attendance section */}
               {attendanceLoading ? (
-                <div style={{ textAlign: "center", padding: "40px", color: "#9ca3af" }}>Loading...</div>
+                <div style={{ textAlign: "center", padding: "40px", color: "var(--text-faint)" }}>Loading...</div>
               ) : isTeacher ? (
-                <div>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-                    <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 700, color: "#1a1a2e" }}>{lang === "en" ? "Attendance Sessions" : "တက်ရောက်မှု မှတ်တမ်း"}</h3>
-                    <button onClick={() => setNewSessionModal(true)} style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "8px 16px", fontWeight: 700, fontSize: "13px", cursor: "pointer" }}>
-                      + {lang === "en" ? "New Session" : "Session အသစ်"}
-                    </button>
-                  </div>
-
-                  {/* Active session marking UI */}
-                  {activeSession && (
-                    <div style={{ background: "#fff", borderRadius: "12px", border: "2px solid #3B37CC", padding: "20px", marginBottom: "20px" }}>
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-                        <div>
-                          <div style={{ fontSize: "15px", fontWeight: 700, color: "#1a1a2e" }}>{activeSession.title}</div>
-                          <div style={{ fontSize: "12px", color: "#9ca3af" }}>{new Date(activeSession.session_date).toLocaleDateString("en-US", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</div>
-                        </div>
-                        <div style={{ display: "flex", gap: "8px" }}>
-                          <button onClick={() => setActiveSession(null)} style={{ background: "#f3f4f6", color: "#374151", border: "none", borderRadius: "8px", padding: "8px 14px", fontWeight: 600, fontSize: "13px", cursor: "pointer" }}>
-                            {lang === "en" ? "Cancel" : "မလုပ်တော့ပါ"}
-                          </button>
-                          <button onClick={saveAttendance} disabled={savingAttendance} style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "8px 16px", fontWeight: 700, fontSize: "13px", cursor: "pointer" }}>
-                            {savingAttendance ? "..." : lang === "en" ? "Save" : "သိမ်းမည်"}
-                          </button>
-                        </div>
+                (() => {
+                  const sessionByDate = {};
+                  (attendanceSessions || []).forEach(s => {
+                    const d = s.session_date?.slice(0, 10);
+                    if (d) sessionByDate[d] = s;
+                  });
+                  const firstDay = new Date(calYear, calMonth, 1).getDay();
+                  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+                  const monthLabel = new Date(calYear, calMonth, 1).toLocaleDateString("en-US", { month: "long", year: "numeric" });
+                  const todayStr = today.toISOString().slice(0, 10);
+                  const selectedSession = calSelectedDate ? sessionByDate[calSelectedDate] : null;
+                  const totalSessions = (attendanceSessions || []).length;
+                  const totalPresent = (attendanceSessions || []).reduce((a, s) => a + (Number(s.present) || 0), 0);
+                  const totalStudents = (attendanceSessions || []).reduce((a, s) => a + (Number(s.total) || 0), 0);
+                  const avgRate = totalStudents > 0 ? Math.round((totalPresent / totalStudents) * 100) : null;
+                  const pendingCount = (attendanceSessions || []).filter(s => !s.total || Number(s.total) === 0).length;
+                  return (
+                    <div>
+                      {/* Stats row */}
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "14px", marginBottom: "24px" }}>
+                        {[
+                          { num: totalSessions, lbl: lang === "en" ? "Total Sessions" : "စုစုပေါင်း Session" },
+                          { num: avgRate !== null ? avgRate + "%" : "—", lbl: lang === "en" ? "Avg Attendance" : "ပျမ်းမျှ တက်ရောက်မှု", color: avgRate !== null ? (avgRate >= 75 ? "#0F9D6E" : "#E1483F") : undefined },
+                          { num: pendingCount, lbl: lang === "en" ? "Pending" : "မမှတ်ရသေးသော", color: pendingCount > 0 ? "#D97706" : undefined },
+                        ].map(({ num, lbl, color }) => (
+                          <div key={lbl} style={{ background: "#EEF0FF", borderRadius: "16px", padding: "16px 18px" }}>
+                            <div style={{ fontSize: "22px", fontWeight: 700, color: color || "var(--text)" }}>{num}</div>
+                            <div style={{ fontSize: "12px", color: "#6B6B85", marginTop: "2px" }}>{lbl}</div>
+                          </div>
+                        ))}
                       </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                        {activeSession.records.map(r => {
-                          const st = sessionRecords[r.student_id] || "absent";
-                          return (
-                            <div key={r.student_id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderRadius: "8px", background: "#f8f9fa" }}>
-                              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                                <div style={{ width: "30px", height: "30px", borderRadius: "50%", background: "#3B37CC", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: "13px" }}>
-                                  {r.name[0].toUpperCase()}
+
+                      {/* Attendance — Calendar + Right Panel */}
+                      <div style={{ display: "grid", gridTemplateColumns: "210px 1fr", gap: "16px", alignItems: "start" }}>
+
+                        {/* Left: Mini calendar */}
+                        <div style={{ background: "var(--surface)", borderRadius: "16px", border: "1px solid var(--border)", padding: "14px 16px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                            <button onClick={() => { const d = new Date(calYear, calMonth - 1, 1); setCalYear(d.getFullYear()); setCalMonth(d.getMonth()); }}
+                              style={{ width: "22px", height: "22px", borderRadius: "6px", border: "none", background: "rgba(11,11,30,0.05)", color: "#6B6B85", cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
+                            <span style={{ fontSize: "11.5px", fontWeight: 700, color: "var(--text)" }}>{monthLabel}</span>
+                            <button onClick={() => { const d = new Date(calYear, calMonth + 1, 1); setCalYear(d.getFullYear()); setCalMonth(d.getMonth()); }}
+                              style={{ width: "22px", height: "22px", borderRadius: "6px", border: "none", background: "rgba(11,11,30,0.05)", color: "#6B6B85", cursor: "pointer", fontSize: "13px", display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", marginBottom: "3px" }}>
+                            {["S","M","T","W","T","F","S"].map((d, i) => (
+                              <div key={i} style={{ textAlign: "center", fontSize: "8.5px", color: "#A6A6BF", fontWeight: 600, padding: "1px 0" }}>{d}</div>
+                            ))}
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: "3px" }}>
+                            {Array.from({ length: firstDay }).map((_, i) => <div key={"e" + i} />)}
+                            {Array.from({ length: daysInMonth }).map((_, i) => {
+                              const day = i + 1;
+                              const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                              const session = sessionByDate[dateStr];
+                              const isSelected = calSelectedDate === dateStr;
+                              const isToday = dateStr === todayStr;
+                              const isWeekend = [0, 6].includes(new Date(calYear, calMonth, day).getDay());
+                              const hasSavedRecords = session && Number(session.total) > 0;
+                              const cellBg = isSelected ? "#3B37CC"
+                                : session ? (hasSavedRecords ? "#22c55e" : "#f59e0b")
+                                : isToday ? "#EEF0FF" : "transparent";
+                              const cellColor = isSelected ? "#fff"
+                                : session ? "#fff"
+                                : isWeekend ? "#A6A6BF" : "var(--text)";
+                              return (
+                                <div key={day} onClick={() => {
+                                  setCalSelectedDate(dateStr);
+                                  if (!session) {
+                                    setNewSessionTitle(classInfo?.name ? `${classInfo.name} — ${new Date(dateStr + "T00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : dateStr);
+                                  }
+                                }} style={{ aspectRatio: "1", borderRadius: "7px", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "10px", fontWeight: session ? 700 : 400, cursor: "pointer", background: cellBg, color: cellColor }}>
+                                  {day}
                                 </div>
-                                <div>
-                                  <div style={{ fontSize: "13px", fontWeight: 600, color: "#1a1a2e" }}>{r.name}</div>
-                                  <div style={{ fontSize: "11px", color: "#9ca3af" }}>{r.email}</div>
-                                </div>
+                              );
+                            })}
+                          </div>
+                          <div style={{ display: "flex", gap: "10px", marginTop: "12px", fontSize: "9.5px", color: "#6B6B85", flexWrap: "wrap" }}>
+                            {[["#22c55e", lang === "en" ? "Taken" : "မှတ်ပြီး"], ["#f59e0b", lang === "en" ? "Pending" : "မမှတ်ရသေး"]].map(([c, label]) => (
+                              <span key={label} style={{ display: "flex", alignItems: "center", gap: "4px" }}>
+                                <span style={{ width: "10px", height: "10px", borderRadius: "3px", background: c, display: "inline-block" }} />{label}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Right: All sessions list */}
+                        <div style={{ background: "var(--surface)", borderRadius: "18px", border: "1px solid var(--border)", display: "flex", flexDirection: "column", minHeight: "280px", maxHeight: "520px" }}>
+
+                          {/* Create strip — shown when a blank date is selected */}
+                          {calSelectedDate && !selectedSession && (
+                            <div style={{ padding: "16px 18px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+                              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text)", marginBottom: "8px" }}>
+                                {new Date(calSelectedDate + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", day: "numeric", month: "long" })}
+                                <span style={{ fontSize: "11px", fontWeight: 400, color: "#A6A6BF", marginLeft: "8px" }}>
+                                  {lang === "en" ? "· No session yet" : "· Session မရှိသေး"}
+                                </span>
                               </div>
-                              <div style={{ display: "flex", gap: "6px" }}>
-                                {[["present", "✓", "#16a34a", "#f0fdf4"], ["late", "⏰", "#d97706", "#fefce8"], ["absent", "✗", "#dc2626", "#fef2f2"]].map(([val, icon, col, bg]) => (
-                                  <button key={val} onClick={() => setSessionRecords(prev => ({ ...prev, [r.student_id]: val }))}
-                                    style={{ background: st === val ? bg : "#fff", color: st === val ? col : "#9ca3af", border: `1.5px solid ${st === val ? col : "#e5e7eb"}`, borderRadius: "6px", padding: "5px 10px", fontWeight: 700, fontSize: "12px", cursor: "pointer" }}>
-                                    {icon} {lang === "en" ? val.charAt(0).toUpperCase() + val.slice(1) : val === "present" ? "တက်" : val === "late" ? "နောက်ကျ" : "မတက်"}
-                                  </button>
-                                ))}
+                              <div style={{ display: "flex", gap: "8px" }}>
+                                <input value={newSessionTitle} onChange={e => setNewSessionTitle(e.target.value)}
+                                  placeholder={lang === "en" ? "Session title…" : "Session ခေါင်းစဉ်…"}
+                                  onKeyDown={async e => {
+                                    if (e.key === "Enter" && newSessionTitle.trim()) {
+                                      try {
+                                        const { data } = await API.post(`/classroom/classes/${id}/attendance`, { title: newSessionTitle.trim(), session_date: calSelectedDate });
+                                        setAttendanceSessions(prev => [data, ...(prev || [])]);
+                                        setNewSessionTitle("");
+                                      } catch (err) { console.error(err); }
+                                    }
+                                  }}
+                                  style={{ flex: 1, padding: "9px 13px", borderRadius: "10px", border: "1.5px solid var(--border)", fontSize: "13px", color: "var(--text)", background: "var(--bg)", outline: "none", boxSizing: "border-box" }} />
+                                <button onClick={async () => {
+                                  if (!newSessionTitle.trim()) return;
+                                  try {
+                                    const { data } = await API.post(`/classroom/classes/${id}/attendance`, { title: newSessionTitle.trim(), session_date: calSelectedDate });
+                                    setAttendanceSessions(prev => [data, ...(prev || [])]);
+                                    setNewSessionTitle("");
+                                  } catch (err) { console.error(err); }
+                                }} style={{ padding: "9px 18px", borderRadius: "10px", border: "none", background: "#0B0B1E", color: "#fff", fontWeight: 700, fontSize: "13px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                                  {lang === "en" ? "+ Create" : "+ ဖန်တီး"}
+                                </button>
                               </div>
                             </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
+                          )}
 
-                  {/* Sessions list */}
-                  {!attendanceSessions || attendanceSessions.length === 0 ? (
-                    <p style={{ color: "#9ca3af", textAlign: "center", padding: "32px" }}>{lang === "en" ? "No sessions yet." : "Session မရှိသေးပါ။"}</p>
-                  ) : (
-                    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                      {attendanceSessions.map(s => (
-                        <div key={s.id} style={{ background: "#fff", borderRadius: "12px", border: "1px solid #e5e7eb", padding: "14px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                          <div>
-                            <div style={{ fontSize: "14px", fontWeight: 700, color: "#1a1a2e" }}>{s.title}</div>
-                            <div style={{ fontSize: "12px", color: "#9ca3af", marginTop: "2px" }}>
-                              {new Date(s.session_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
-                              {s.total > 0 && <span style={{ marginLeft: "10px", color: "#16a34a" }}>✓ {s.present || 0}</span>}
-                              {s.total > 0 && <span style={{ marginLeft: "6px", color: "#d97706" }}>⏰ {s.late || 0}</span>}
-                              {s.total > 0 && <span style={{ marginLeft: "6px", color: "#dc2626" }}>✗ {s.absent || 0}</span>}
-                            </div>
+                          {/* Header row */}
+                          <div style={{ padding: "14px 18px 8px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                            <span style={{ fontSize: "12px", fontWeight: 700, color: "#6B6B85", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                              {lang === "en" ? "All Sessions" : "Session အားလုံး"}
+                            </span>
+                            <span style={{ fontSize: "11px", color: "#A6A6BF" }}>{(attendanceSessions || []).length}</span>
                           </div>
-                          <div style={{ display: "flex", gap: "8px" }}>
-                            <button onClick={() => openAttendanceSession(s.id)} style={{ background: "#f0f4ff", color: "#3B37CC", border: "none", borderRadius: "8px", padding: "7px 14px", fontWeight: 600, fontSize: "12px", cursor: "pointer" }}>
-                              {lang === "en" ? "Edit" : "ပြင်မည်"}
-                            </button>
-                            <button onClick={() => deleteAttendanceSession(s.id)} style={{ background: "#fff0f0", color: "#dc2626", border: "none", borderRadius: "8px", padding: "7px 14px", fontWeight: 600, fontSize: "12px", cursor: "pointer" }}>
-                              {lang === "en" ? "Delete" : "ဖျက်မည်"}
-                            </button>
+
+                          {/* Scrollable list — grouped by week */}
+                          <div style={{ flex: 1, overflowY: "auto", padding: "2px 10px 12px" }} onClick={() => setSessionMenuOpen(null)}>
+                            {(attendanceSessions || []).length === 0 ? (
+                              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "180px", color: "#A6A6BF" }}>
+                                <div style={{ fontSize: "26px", marginBottom: "8px" }}>📋</div>
+                                <div style={{ fontSize: "13px", fontWeight: 600 }}>{lang === "en" ? "No sessions yet" : "Session မရှိသေးပါ"}</div>
+                                <div style={{ fontSize: "11px", marginTop: "4px" }}>{lang === "en" ? "Pick a date on the calendar to create one" : "Calendar မှ နေ့ရက် ရွေး ဖန်တီးပါ"}</div>
+                              </div>
+                            ) : (() => {
+                              // Group sessions by ISO week (Mon–Sun)
+                              const sorted = [...(attendanceSessions || [])].sort((a, b) => new Date(b.session_date) - new Date(a.session_date));
+                              const weeks = {};
+                              sorted.forEach(s => {
+                                const d = new Date((s.session_date || "").slice(0, 10) + "T00:00:00");
+                                const dow = d.getDay() === 0 ? 7 : d.getDay();
+                                const mon = new Date(d); mon.setDate(d.getDate() - dow + 1);
+                                const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+                                const wk = mon.toISOString().slice(0, 10);
+                                if (!weeks[wk]) weeks[wk] = { mon, sun, sessions: [] };
+                                weeks[wk].sessions.push(s);
+                              });
+                              return Object.entries(weeks).sort(([a], [b]) => b.localeCompare(a)).map(([wk, { mon, sun, sessions: wSessions }], wi) => {
+                                const fmt = d => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+                                return (
+                                  <div key={wk} style={{ marginBottom: "6px" }}>
+                                    {/* Week section header */}
+                                    <div style={{ display: "flex", alignItems: "center", gap: "8px", padding: "8px 10px 4px" }}>
+                                      <span style={{ fontSize: "10px", fontWeight: 700, color: "#A6A6BF", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                                        {fmt(mon)} – {fmt(sun)}
+                                      </span>
+                                      <div style={{ flex: 1, height: "1px", background: "var(--border)" }} />
+                                      <span style={{ fontSize: "10px", color: "#A6A6BF" }}>{wSessions.length}</span>
+                                    </div>
+
+                                    {wSessions.map(s => {
+                                      const isHighlighted = calSelectedDate && s.session_date?.slice(0, 10) === calSelectedDate;
+                                      const isRenaming = renamingSessionId === s.id;
+                                      const menuOpen = sessionMenuOpen === s.id;
+                                      return (
+                                        <div key={s.id} style={{ position: "relative" }}>
+                                          {isRenaming ? (
+                                            /* Inline rename row */
+                                            <div style={{ display: "flex", gap: "6px", padding: "8px 10px", borderRadius: "12px", background: "#EEF0FF", border: "1px solid rgba(91,95,233,0.2)", marginBottom: "2px" }}>
+                                              <input autoFocus value={renamingTitle} onChange={e => setRenamingTitle(e.target.value)}
+                                                onKeyDown={async e => {
+                                                  if (e.key === "Enter") {
+                                                    if (renamingTitle.trim()) {
+                                                      try { await API.patch(`/classroom/attendance/${s.id}`, { title: renamingTitle.trim() }); setAttendanceSessions(prev => prev.map(x => x.id === s.id ? { ...x, title: renamingTitle.trim() } : x)); } catch {}
+                                                    }
+                                                    setRenamingSessionId(null);
+                                                  }
+                                                  if (e.key === "Escape") setRenamingSessionId(null);
+                                                }}
+                                                style={{ flex: 1, border: "none", background: "transparent", outline: "none", fontSize: "13px", fontWeight: 600, color: "var(--text)" }} />
+                                              <button onClick={async () => {
+                                                if (renamingTitle.trim()) {
+                                                  try { await API.patch(`/classroom/attendance/${s.id}`, { title: renamingTitle.trim() }); setAttendanceSessions(prev => prev.map(x => x.id === s.id ? { ...x, title: renamingTitle.trim() } : x)); } catch {}
+                                                }
+                                                setRenamingSessionId(null);
+                                              }} style={{ fontSize: "11px", fontWeight: 700, color: "#5B5FE9", background: "transparent", border: "none", cursor: "pointer", padding: "0 4px" }}>
+                                                {lang === "en" ? "Save" : "သိမ်း"}
+                                              </button>
+                                              <button onClick={() => setRenamingSessionId(null)} style={{ fontSize: "11px", color: "#A6A6BF", background: "transparent", border: "none", cursor: "pointer", padding: "0 2px" }}>✕</button>
+                                            </div>
+                                          ) : (
+                                            <div onClick={() => openAttendanceSession(s.id, Number(s.total) > 0)}
+                                              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 10px", borderRadius: "12px", cursor: "pointer", transition: "background 0.12s", marginBottom: "2px",
+                                                background: isHighlighted ? "#EEF0FF" : "transparent",
+                                                border: isHighlighted ? "1px solid rgba(91,95,233,0.18)" : "1px solid transparent" }}
+                                              onMouseEnter={e => { if (!isHighlighted) e.currentTarget.style.background = "#F7F7FC"; }}
+                                              onMouseLeave={e => { e.currentTarget.style.background = isHighlighted ? "#EEF0FF" : "transparent"; }}>
+                                              <div style={{ minWidth: 0, flex: 1 }}>
+                                                <div style={{ fontSize: "10.5px", color: isHighlighted ? "#5B5FE9" : "#A6A6BF", marginBottom: "2px", fontWeight: isHighlighted ? 700 : 400 }}>
+                                                  {s.session_date ? new Date(s.session_date.slice(0, 10) + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : ""}
+                                                </div>
+                                                <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.title}</div>
+                                                <div style={{ fontSize: "11px", color: "#6B6B85", marginTop: "1px" }}>
+                                                  {Number(s.total) > 0 ? `${s.present || 0} present · ${s.late || 0} late · ${s.absent || 0} absent` : (lang === "en" ? "Not yet marked" : "မှတ်မရသေး")}
+                                                </div>
+                                              </div>
+                                              <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0, marginLeft: "8px" }}>
+                                                <span style={{ fontSize: "10px", fontWeight: 700, padding: "3px 8px", borderRadius: "999px",
+                                                  background: Number(s.total) > 0 ? "#E6F7EF" : "#FFF3E0",
+                                                  color: Number(s.total) > 0 ? "#0F9D6E" : "#D97706" }}>
+                                                  {Number(s.total) > 0 ? (lang === "en" ? "Taken ✓" : "မှတ်ပြီး") : (lang === "en" ? "Pending" : "မမှတ်ရသေး")}
+                                                </span>
+                                                {/* ⋮ menu button */}
+                                                <button onClick={e => { e.stopPropagation(); setSessionMenuOpen(menuOpen ? null : s.id); }}
+                                                  style={{ width: "24px", height: "24px", borderRadius: "6px", border: "none", background: menuOpen ? "rgba(11,11,30,0.08)" : "transparent", color: "#A6A6BF", cursor: "pointer", fontSize: "14px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                                  ⋮
+                                                </button>
+                                              </div>
+                                            </div>
+                                          )}
+
+                                          {/* Dropdown menu */}
+                                          {menuOpen && !isRenaming && (
+                                            <div onClick={e => e.stopPropagation()}
+                                              style={{ position: "absolute", right: "8px", top: "100%", zIndex: 50, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", boxShadow: "0 8px 24px rgba(11,11,30,0.12)", minWidth: "140px", overflow: "hidden" }}>
+                                              <button onClick={() => { setRenamingSessionId(s.id); setRenamingTitle(s.title); setSessionMenuOpen(null); }}
+                                                style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%", padding: "10px 14px", border: "none", background: "transparent", color: "var(--text)", fontSize: "13px", fontWeight: 600, cursor: "pointer", textAlign: "left" }}
+                                                onMouseEnter={e => e.currentTarget.style.background = "var(--bg)"}
+                                                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                                                ✏️ {lang === "en" ? "Rename" : "ခေါင်းစဉ်ပြင်"}
+                                              </button>
+                                              <div style={{ height: "1px", background: "var(--border)", margin: "0 10px" }} />
+                                              <button onClick={async () => {
+                                                setSessionMenuOpen(null);
+                                                await deleteAttendanceSession(s.id);
+                                                if (calSelectedDate === s.session_date?.slice(0, 10)) setCalSelectedDate(null);
+                                              }}
+                                                style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%", padding: "10px 14px", border: "none", background: "transparent", color: "#E1483F", fontSize: "13px", fontWeight: 600, cursor: "pointer", textAlign: "left" }}
+                                                onMouseEnter={e => e.currentTarget.style.background = "#FFF0F0"}
+                                                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                                                🗑 {lang === "en" ? "Delete" : "ဖျက်မည်"}
+                                              </button>
+                                            </div>
+                                          )}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              });
+                            })()}
                           </div>
                         </div>
-                      ))}
+                      </div>
                     </div>
-                  )}
-                </div>
+                  );
+                })()
               ) : (
                 /* Student view */
                 <div>
-                  {myAttendance && (
-                    <div>
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "12px", marginBottom: "24px" }}>
-                        {[
-                          { label: lang === "en" ? "Attendance Rate" : "တက်ရောက်မှုနှုန်း", value: myAttendance.rate !== null ? `${myAttendance.rate}%` : "—", color: myAttendance.rate >= 75 ? "#16a34a" : "#dc2626" },
-                          { label: lang === "en" ? "Present" : "တက်ရောက်", value: myAttendance.present, color: "#16a34a" },
-                          { label: lang === "en" ? "Late" : "နောက်ကျ", value: myAttendance.late, color: "#d97706" },
-                          { label: lang === "en" ? "Absent" : "မတက်", value: myAttendance.absent, color: "#dc2626" },
-                        ].map(stat => (
-                          <div key={stat.label} style={{ background: "#fff", borderRadius: "12px", border: "1px solid #e5e7eb", padding: "14px", textAlign: "center" }}>
-                            <div style={{ fontSize: "22px", fontWeight: 800, color: stat.color }}>{stat.value}</div>
-                            <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "4px" }}>{stat.label}</div>
-                          </div>
-                        ))}
-                      </div>
-                      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                        {myAttendance.rows.map((r, i) => (
-                          <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#fff", borderRadius: "10px", border: "1px solid #e5e7eb", padding: "12px 16px" }}>
+                  {myAttendance && (() => {
+                    const dateMap = {};
+                    myAttendance.rows.forEach(r => {
+                      const d = r.session_date ? r.session_date.slice(0, 10) : null;
+                      if (d && !dateMap[d]) dateMap[d] = r.status;
+                    });
+                    const firstDay = new Date(calStudentYear, calStudentMonth, 1).getDay();
+                    const daysInMonth = new Date(calStudentYear, calStudentMonth + 1, 0).getDate();
+                    const monthName = new Date(calStudentYear, calStudentMonth, 1).toLocaleString("en-US", { month: "long", year: "numeric" });
+                    const dayRows = calStudentSelDate ? myAttendance.rows.filter(r => r.session_date && r.session_date.slice(0, 10) === calStudentSelDate) : [];
+                    const recent = myAttendance.rows.slice(0, 6);
+                    const rate = myAttendance.rate ?? 0;
+                    const r34 = 34, circ = 2 * Math.PI * r34;
+                    const filled = (rate / 100) * circ;
+                    const todayStr = new Date().toISOString().slice(0, 10);
+                    const statusLabel = s => s === "present" ? (lang === "en" ? "Present" : "တက်ရောက်") : s === "late" ? (lang === "en" ? "Late" : "နောက်ကျ") : s === "absent" ? (lang === "en" ? "Absent" : "မတက်") : "—";
+                    const statusColor = s => s === "present" ? "#16a34a" : s === "late" ? "#d97706" : s === "absent" ? "#dc2626" : "var(--text-faint)";
+                    const statusBg = s => s === "present" ? "#dcfce7" : s === "late" ? "#fff3e0" : "#fee2e2";
+                    return (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+
+                        {/* Warning banner — only when < 85% */}
+                        {myAttendance.rate !== null && myAttendance.rate < 85 && (
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "14px", padding: "14px 18px" }}>
                             <div>
-                              <div style={{ fontSize: "13px", fontWeight: 600, color: "#1a1a2e" }}>{r.title}</div>
-                              <div style={{ fontSize: "11px", color: "#9ca3af" }}>{new Date(r.session_date).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</div>
+                              <div style={{ fontSize: "13px", fontWeight: 700, color: "#dc2626" }}>⚠ {lang === "en" ? "Attendance below requirement" : "တက်ရောက်မှုနှုန်း လိုအပ်ချက်အောက်"}</div>
+                              <div style={{ fontSize: "11px", color: "#991b1b", marginTop: "3px" }}>{lang === "en" ? `Your attendance is at ${rate}%, below the 85% minimum.` : `တက်ရောက်မှုနှုန်း ${rate}% ဖြစ်ပြီး 85% လိုအပ်ချက်အောက်ဖြစ်နေသည်။`}</div>
                             </div>
-                            <span style={{ fontSize: "13px", fontWeight: 700, color: r.status === "present" ? "#16a34a" : r.status === "late" ? "#d97706" : r.status === "absent" ? "#dc2626" : "#9ca3af", background: r.status === "present" ? "#f0fdf4" : r.status === "late" ? "#fefce8" : r.status === "absent" ? "#fef2f2" : "#f3f4f6", borderRadius: "6px", padding: "4px 10px" }}>
-                              {r.status === "present" ? (lang === "en" ? "Present" : "တက်ရောက်") : r.status === "late" ? (lang === "en" ? "Late" : "နောက်ကျ") : r.status === "absent" ? (lang === "en" ? "Absent" : "မတက်") : "—"}
-                            </span>
+                            <button style={{ background: "#dc2626", color: "#fff", border: "none", padding: "8px 14px", borderRadius: "9px", fontSize: "11.5px", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", marginLeft: "14px" }}>
+                              {lang === "en" ? "View details" : "အသေးစိတ်"}
+                            </button>
                           </div>
-                        ))}
+                        )}
+
+                        {/* Entry card */}
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#EEF0FF", borderRadius: "14px", padding: "16px 20px" }}>
+                          <div>
+                            <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)" }}>{lang === "en" ? "Can't make it to class?" : "ကျောင်းမတက်နိုင်ဘူးလား?"}</div>
+                            <div style={{ fontSize: "11.5px", color: "var(--text-faint)", marginTop: "2px" }}>{lang === "en" ? "Let your teacher know in advance and avoid an unexplained absence" : "ကြိုတင် အကြောင်းကြားပြီး ရှင်းမပြသော ပျက်ကွက်ကို ရှောင်ပါ"}</div>
+                          </div>
+                          <button onClick={() => { setLeaveModal("form"); setLeaveForm({ from: new Date().toISOString().slice(0,10), to: new Date().toISOString().slice(0,10), reasonType: "medical", details: "" }); }}
+                            style={{ background: "#0F172A", color: "#fff", border: "none", borderRadius: "9px", padding: "10px 18px", fontSize: "12px", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", marginLeft: "16px" }}>
+                            {lang === "en" ? "Request leave" : "ကြိုတင်တောင်းဆိုမည်"}
+                          </button>
+                        </div>
+
+                        {/* Ring card + Stat strip */}
+                        <div style={{ display: "flex", gap: "14px" }}>
+                          {/* Ring */}
+                          <div style={{ width: "200px", flexShrink: 0, background: "linear-gradient(150deg,#4F46E5,#818CF8)", borderRadius: "16px", padding: "18px 16px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: "8px" }}>
+                            <svg width="80" height="80" viewBox="0 0 76 76">
+                              <circle cx="38" cy="38" r={r34} fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="8"/>
+                              <circle cx="38" cy="38" r={r34} fill="none" stroke="#fff" strokeWidth="8"
+                                strokeDasharray={`${filled} ${circ}`} strokeLinecap="round" transform="rotate(-90 38 38)"/>
+                              <text x="38" y="35" textAnchor="middle" fill="#fff" fontSize="15" fontWeight="800" fontFamily="Inter,sans-serif">{myAttendance.rate !== null ? `${rate}%` : "—"}</text>
+                              <text x="38" y="47" textAnchor="middle" fill="rgba(255,255,255,0.7)" fontSize="7" fontFamily="Inter,sans-serif">OVERALL</text>
+                            </svg>
+                            <div style={{ fontSize: "11px", fontWeight: 600, color: "#fff" }}>
+                              {myAttendance.rate === null ? "—" : rate >= 85 ? (lang === "en" ? "Above 85% requirement" : "85% လိုအပ်ချက် ပြည့်") : (lang === "en" ? "Below requirement" : "လိုအပ်ချက်အောက်")}
+                            </div>
+                          </div>
+                          {/* Stat strip */}
+                          <div style={{ flex: 1, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", display: "flex", alignItems: "center" }}>
+                            {[
+                              { dot: "#16a34a", value: myAttendance.present, label: lang === "en" ? "Present days" : "တက်ရောက်" },
+                              { dot: "#d97706", value: myAttendance.late,    label: lang === "en" ? "Late days"    : "နောက်ကျ"   },
+                              { dot: "#dc2626", value: myAttendance.absent,  label: lang === "en" ? "Absent days"  : "မတက်"      },
+                            ].map((s, i) => (
+                              <div key={i} style={{ flex: 1, padding: "18px 20px", display: "flex", alignItems: "center", gap: "12px", borderLeft: i > 0 ? "1px solid var(--border)" : "none" }}>
+                                <span style={{ width: "9px", height: "9px", borderRadius: "50%", background: s.dot, flexShrink: 0 }} />
+                                <div>
+                                  <div style={{ fontSize: "20px", fontWeight: 700, color: "var(--text)", lineHeight: 1 }}>{s.value}</div>
+                                  <div style={{ fontSize: "10.5px", color: "var(--text-faint)", marginTop: "3px" }}>{s.label}</div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Calendar + History */}
+                        <div style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "14px" }}>
+                          {/* Calendar card */}
+                          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", padding: "18px 20px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                              <span onClick={() => { if (calStudentMonth === 0) { setCalStudentYear(y => y - 1); setCalStudentMonth(11); } else setCalStudentMonth(m => m - 1); }} style={{ cursor: "pointer", color: "var(--text-faint)", fontSize: "16px", padding: "4px 8px", userSelect: "none" }}>‹</span>
+                              <span style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text)" }}>{monthName}</span>
+                              <span onClick={() => { if (calStudentMonth === 11) { setCalStudentYear(y => y + 1); setCalStudentMonth(0); } else setCalStudentMonth(m => m + 1); }} style={{ cursor: "pointer", color: "var(--text-faint)", fontSize: "16px", padding: "4px 8px", userSelect: "none" }}>›</span>
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 36px)", justifyContent: "center", marginBottom: "6px" }}>
+                              {["S","M","T","W","T","F","S"].map((d, i) => <span key={i} style={{ fontSize: "10.5px", color: "var(--text-faint)", textAlign: "center" }}>{d}</span>)}
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 36px)", gap: "4px", justifyContent: "center" }}>
+                              {Array.from({ length: firstDay }).map((_, i) => <div key={`e${i}`} style={{ width: "36px", height: "36px" }} />)}
+                              {Array.from({ length: daysInMonth }).map((_, i) => {
+                                const day = i + 1;
+                                const ds = `${calStudentYear}-${String(calStudentMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                                const st = dateMap[ds];
+                                const isSel = calStudentSelDate === ds;
+                                const isToday = ds === todayStr;
+                                return (
+                                  <div key={day} onClick={() => st ? setCalStudentSelDate(isSel ? null : ds) : null} style={{
+                                    width: "36px", height: "36px", borderRadius: "8px", fontSize: "12px", display: "flex", alignItems: "center", justifyContent: "center",
+                                    cursor: st ? "pointer" : "default", fontWeight: st ? 700 : 500,
+                                    background: isSel ? "#4F46E5" : st === "present" ? "#22c55e" : st === "late" ? "#f59e0b" : st === "absent" ? "#ef4444" : isToday ? "#EEF0FF" : "#F8F9FB",
+                                    color: (isSel || st) ? "#fff" : isToday ? "#4F46E5" : "var(--text)",
+                                    border: isToday && !st && !isSel ? "1.5px solid #4F46E5" : "none",
+                                  }}>{day}</div>
+                                );
+                              })}
+                            </div>
+                            <div style={{ display: "flex", gap: "16px", marginTop: "14px" }}>
+                              {[["#22c55e", lang === "en" ? "Present" : "တက်ရောက်"], ["#f59e0b", lang === "en" ? "Late" : "နောက်ကျ"], ["#ef4444", lang === "en" ? "Absent" : "မတက်"]].map(([c, l], i) => (
+                                <span key={i} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", color: "var(--text)", fontWeight: 500 }}>
+                                  <span style={{ width: "13px", height: "13px", borderRadius: "4px", background: c, flexShrink: 0 }} />{l}
+                                </span>
+                              ))}
+                            </div>
+                            {/* Day detail popover — inside the calendar card */}
+                            {calStudentSelDate && dayRows.length > 0 && (
+                              <div style={{ marginTop: "14px", border: "1px solid var(--border)", borderRadius: "12px", padding: "12px 14px", background: "var(--bg)" }}>
+                                <div style={{ fontSize: "11.5px", fontWeight: 700, color: "var(--text)", marginBottom: "6px" }}>
+                                  {new Date(calStudentSelDate + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+                                </div>
+                                {dayRows.map((r, i) => (
+                                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "11.5px", padding: "5px 0", borderBottom: i < dayRows.length - 1 ? "1px solid var(--border)" : "none" }}>
+                                    <span style={{ color: "var(--text)", fontWeight: 500 }}>{r.title}</span>
+                                    <span style={{ fontSize: "9.5px", fontWeight: 700, padding: "2px 9px", borderRadius: "999px", background: statusBg(r.status), color: statusColor(r.status) }}>{statusLabel(r.status)}</span>
+                                  </div>
+                                ))}
+                                <button onClick={() => { const r = dayRows[0]; setDisputeModal({ title: r.title, session_date: calStudentSelDate, status: r.status }); setDisputeForm({ requested: "present", reason: "" }); }}
+                                  style={{ marginTop: "8px", background: "none", border: "none", padding: 0, fontSize: "10.5px", fontWeight: 600, color: "#4F46E5", cursor: "pointer" }}>
+                                  {lang === "en" ? "This looks wrong? Request a review →" : "မမှန်ဘူးလား? ပြင်ဆင်တောင်းဆိုမည် →"}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Recent history card */}
+                          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", padding: "18px 20px" }}>
+                            <div style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text)", marginBottom: "4px" }}>{lang === "en" ? "Recent history" : "မကြာမီ မှတ်တမ်းများ"}</div>
+                            {recent.length === 0 && <div style={{ textAlign: "center", padding: "24px 0", fontSize: "11.5px", color: "var(--text-faint)" }}>{lang === "en" ? "No sessions yet" : "session မရှိသေးပါ"}</div>}
+                            {recent.map((r, i) => (
+                              <div key={i} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 0", borderBottom: i < recent.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer" }}
+                                onClick={() => { setDisputeModal({ title: r.title, session_date: r.session_date ? r.session_date.slice(0,10) : "", status: r.status }); setDisputeForm({ requested: "present", reason: "" }); }}>
+                                <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: statusColor(r.status), flexShrink: 0 }} />
+                                <div style={{ flex: 1 }}>
+                                  <span style={{ fontSize: "12.5px", color: "var(--text)", fontWeight: 600 }}>{statusLabel(r.status)}</span>
+                                  <span style={{ fontSize: "12.5px", color: "var(--text)" }}> — {r.title}</span>
+                                </div>
+                                <div style={{ fontSize: "10px", color: "var(--text-faint)", display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+                                  {r.session_date && new Date(r.session_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                                  <span style={{ color: "#4F46E5", fontWeight: 600 }}>Review</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* ── Dispute modal ── */}
+                        {disputeModal && (
+                          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
+                            <div style={{ background: "var(--surface)", borderRadius: "16px", width: "400px", overflow: "hidden", boxShadow: "0 24px 60px rgba(15,23,42,0.2)" }}>
+                              <div style={{ padding: "16px 20px 12px", borderBottom: "1px solid var(--border)" }}>
+                                <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)" }}>{lang === "en" ? "Request a review" : "ပြင်ဆင်တောင်းဆိုမည်"}</div>
+                                <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "3px" }}>{disputeModal.title}{disputeModal.session_date && ` — ${new Date(disputeModal.session_date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}`}</div>
+                              </div>
+                              <div style={{ padding: "16px 20px" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fef2f2", borderRadius: "9px", padding: "9px 13px", marginBottom: "14px" }}>
+                                  <span style={{ fontSize: "11px", color: "var(--text-faint)" }}>{lang === "en" ? "Currently marked as" : "လက်ရှိ မှတ်တမ်း"}</span>
+                                  <span style={{ fontSize: "10px", fontWeight: 700, padding: "3px 10px", borderRadius: "999px", background: statusBg(disputeModal.status), color: statusColor(disputeModal.status) }}>{statusLabel(disputeModal.status)}</span>
+                                </div>
+                                <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "6px", color: "var(--text-muted)" }}>{lang === "en" ? "What should this be?" : "မည်သို့ ဖြစ်သင့်သနည်း?"}</label>
+                                <select value={disputeForm.requested} onChange={e => setDisputeForm(p => ({ ...p, requested: e.target.value }))}
+                                  style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)", marginBottom: "12px" }}>
+                                  <option value="present">{lang === "en" ? "Present" : "တက်ရောက်"}</option>
+                                  <option value="excused">{lang === "en" ? "Excused absence" : "ခွင့်ရ မတက်ရောက်"}</option>
+                                </select>
+                                <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "6px", color: "var(--text-muted)" }}>{lang === "en" ? "Explain (visible to teacher)" : "ရှင်းပြမည် (ဆရာမြင်သည်)"}</label>
+                                <textarea value={disputeForm.reason} onChange={e => setDisputeForm(p => ({ ...p, reason: e.target.value }))}
+                                  placeholder={lang === "en" ? "e.g. I was on time, roll call may have missed me" : "ဥပမာ — ကျွန်တော်/ကျွန်မ အချိန်မီ တက်ခဲ့သည်"}
+                                  style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)", height: "60px", resize: "none", boxSizing: "border-box" }} />
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", padding: "14px 20px", borderTop: "1px solid var(--border)" }}>
+                                <button onClick={() => setDisputeModal(null)} style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Cancel" : "မလုပ်တော့"}</button>
+                                <button onClick={() => setDisputeModal(null)} style={{ background: "#0f172a", color: "#fff", border: "none", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Send request" : "တောင်းဆိုမည်"}</button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* ── My leave requests history ── */}
+                        {leaveHistory.length > 0 && (
+                          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", padding: "18px 20px" }}>
+                            <div style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text)", marginBottom: "4px" }}>{lang === "en" ? "My leave requests" : "ကျွန်တော်/ကျွန်မ ကြိုတင်တောင်းဆိုချက်များ"}</div>
+                            {leaveHistory.map((req, i) => {
+                              const icons = { medical: "🩺", family: "👪", travel: "✈️", other: "📝" };
+                              const reasonLabels = { medical: lang === "en" ? "Medical" : "ကျန်းမာရေး", family: lang === "en" ? "Family event" : "မိသားစု", travel: lang === "en" ? "Travel" : "ခရီးသွား", other: lang === "en" ? "Other" : "အခြား" };
+                              return (
+                                <div key={i} style={{ display: "flex", alignItems: "center", gap: "14px", padding: "13px 0", borderBottom: i < leaveHistory.length - 1 ? "1px solid var(--border)" : "none" }}>
+                                  <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "#EEF0FF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "16px", flexShrink: 0 }}>{icons[req.reasonType] || "📝"}</div>
+                                  <div style={{ flex: 1 }}>
+                                    <div style={{ fontSize: "12.5px", fontWeight: 600, color: "var(--text)" }}>{reasonLabels[req.reasonType]} — {classInfo?.name || ""}</div>
+                                    <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "1px" }}>{req.from === req.to ? new Date(req.from + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : `${new Date(req.from + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(req.to + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</div>
+                                  </div>
+                                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                                    <span style={{ fontSize: "10px", fontWeight: 700, padding: "4px 10px", borderRadius: "999px", background: "#fff3e0", color: "#b45309" }}>{lang === "en" ? "Pending" : "စောင့်ဆိုင်း"}</span>
+                                    <div style={{ fontSize: "10px", color: "var(--text-faint)", marginTop: "3px" }}>{lang === "en" ? "Sent today" : "ယနေ့ပေးပို့"}</div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* ── Leave request modal (form) ── */}
+                        {leaveModal === "form" && (
+                          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
+                            <div style={{ background: "var(--surface)", borderRadius: "16px", width: "420px", overflow: "hidden", boxShadow: "0 24px 60px rgba(15,23,42,0.2)" }}>
+                              <div style={{ padding: "16px 20px 12px", borderBottom: "1px solid var(--border)" }}>
+                                <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)" }}>{lang === "en" ? "Request leave" : "ကြိုတင်တောင်းဆိုမည်"}</div>
+                                <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "3px" }}>{lang === "en" ? "Let your teacher know in advance" : "ဆရာ/ဆရာမကို ကြိုတင် အကြောင်းကြားပါ"}</div>
+                              </div>
+                              <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: "12px" }}>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                                  <div>
+                                    <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "From" : "မှ"}</label>
+                                    <input type="date" value={leaveForm.from} onChange={e => setLeaveForm(p => ({ ...p, from: e.target.value, to: e.target.value > p.to ? e.target.value : p.to }))}
+                                      style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 10px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)", boxSizing: "border-box" }} />
+                                  </div>
+                                  <div>
+                                    <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "To" : "အထိ"}</label>
+                                    <input type="date" value={leaveForm.to} min={leaveForm.from} onChange={e => setLeaveForm(p => ({ ...p, to: e.target.value }))}
+                                      style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 10px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)", boxSizing: "border-box" }} />
+                                  </div>
+                                </div>
+                                <div>
+                                  <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "Reason" : "အကြောင်းရင်း"}</label>
+                                  <select value={leaveForm.reasonType} onChange={e => setLeaveForm(p => ({ ...p, reasonType: e.target.value }))}
+                                    style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)" }}>
+                                    <option value="medical">{lang === "en" ? "Medical" : "ကျန်းမာရေး"}</option>
+                                    <option value="family">{lang === "en" ? "Family event" : "မိသားစုကိစ္စ"}</option>
+                                    <option value="travel">{lang === "en" ? "Travel" : "ခရီးသွား"}</option>
+                                    <option value="other">{lang === "en" ? "Other" : "အခြား"}</option>
+                                  </select>
+                                </div>
+                                <div>
+                                  <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "Add details (visible to teacher)" : "အသေးစိတ် ထည့်ပါ (ဆရာမြင်မည်)"}</label>
+                                  <textarea value={leaveForm.details} onChange={e => setLeaveForm(p => ({ ...p, details: e.target.value }))}
+                                    placeholder={lang === "en" ? "e.g. Doctor appointment at 9am" : "ဥပမာ — နံနက် ၉ နာရီ ဆေးပြမည်"}
+                                    style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)", height: "60px", resize: "none", boxSizing: "border-box" }} />
+                                </div>
+                              </div>
+                              <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", padding: "14px 20px", borderTop: "1px solid var(--border)" }}>
+                                <button onClick={() => setLeaveModal(null)} style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Cancel" : "မလုပ်တော့"}</button>
+                                <button onClick={() => { setLeaveHistory(h => [...h, { ...leaveForm }]); setLeaveModal("confirm"); }}
+                                  style={{ background: "#0F172A", color: "#fff", border: "none", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Submit request" : "တောင်းဆိုမည်"}</button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* ── Leave request confirmation ── */}
+                        {leaveModal === "confirm" && (
+                          <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
+                            <div style={{ background: "var(--surface)", borderRadius: "16px", width: "360px", overflow: "hidden", boxShadow: "0 24px 60px rgba(15,23,42,0.2)", padding: "34px 24px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: "12px" }}>
+                              <div style={{ width: "52px", height: "52px", borderRadius: "50%", background: "#dcfce7", color: "#16a34a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "22px" }}>✓</div>
+                              <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)" }}>{lang === "en" ? "Request sent" : "တောင်းဆိုချက် ပေးပို့ပြီး"}</div>
+                              <div style={{ fontSize: "12px", color: "var(--text-faint)", maxWidth: "270px" }}>{lang === "en" ? "Your teacher will review this request. You'll be notified once it's approved or declined." : "ဆရာ/ဆရာမ စစ်ဆေးပြီး အတည်ပြုချက် သို့မဟုတ် ငြင်းပယ်ချက် ပြန်ကြားပါမည်။"}</div>
+                              <button onClick={() => setLeaveModal(null)} style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 20px", fontSize: "12px", fontWeight: 600, cursor: "pointer", marginTop: "4px" }}>{lang === "en" ? "Done" : "ပြီးပြီ"}</button>
+                            </div>
+                          </div>
+                        )}
+
                       </div>
-                    </div>
-                  )}
+                    );
+                  })()}
                 </div>
               )}
 
               {/* New Session Modal */}
               {newSessionModal && (
                 <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
-                  <div style={{ background: "#fff", borderRadius: "16px", padding: "28px", width: "400px" }}>
+                  <div style={{ background: "var(--surface)", borderRadius: "16px", padding: "28px", width: "400px" }}>
                     <h3 style={{ margin: "0 0 20px", fontSize: "16px", fontWeight: 700 }}>{lang === "en" ? "New Attendance Session" : "Session အသစ် ဖန်တီးမည်"}</h3>
                     <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
                       <div>
-                        <label style={{ fontSize: "12px", fontWeight: 600, color: "#374151", display: "block", marginBottom: "6px" }}>{lang === "en" ? "Title" : "ခေါင်းစဉ်"}</label>
-                        <input value={newSessionForm.title} onChange={e => setNewSessionForm(p => ({ ...p, title: e.target.value }))} placeholder={lang === "en" ? "e.g. Week 3 Class" : "ဥပမာ Week 3 သင်ကြားချိန်"} style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1.5px solid #e5e7eb", fontSize: "14px", boxSizing: "border-box" }} />
+                        <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "6px" }}>{lang === "en" ? "Title" : "ခေါင်းစဉ်"}</label>
+                        <input value={newSessionForm.title} onChange={e => setNewSessionForm(p => ({ ...p, title: e.target.value }))} placeholder={lang === "en" ? "e.g. Week 3 Class" : "ဥပမာ Week 3 သင်ကြားချိန်"} style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1.5px solid var(--border)", fontSize: "14px", boxSizing: "border-box" }} />
                       </div>
                       <div>
-                        <label style={{ fontSize: "12px", fontWeight: 600, color: "#374151", display: "block", marginBottom: "6px" }}>{lang === "en" ? "Date" : "နေ့စွဲ"}</label>
-                        <input type="date" value={newSessionForm.session_date} onChange={e => setNewSessionForm(p => ({ ...p, session_date: e.target.value }))} style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1.5px solid #e5e7eb", fontSize: "14px", boxSizing: "border-box" }} />
+                        <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "6px" }}>{lang === "en" ? "Date" : "နေ့စွဲ"}</label>
+                        <input type="date" value={newSessionForm.session_date} onChange={e => setNewSessionForm(p => ({ ...p, session_date: e.target.value }))} style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1.5px solid var(--border)", fontSize: "14px", boxSizing: "border-box" }} />
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: "10px", marginTop: "20px", justifyContent: "flex-end" }}>
-                      <button onClick={() => setNewSessionModal(false)} style={{ background: "#f3f4f6", color: "#374151", border: "none", borderRadius: "8px", padding: "9px 18px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Cancel" : "မလုပ်တော့ပါ"}</button>
+                      <button onClick={() => setNewSessionModal(false)} style={{ background: "var(--surface-alt)", color: "var(--text-muted)", border: "none", borderRadius: "8px", padding: "9px 18px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Cancel" : "မလုပ်တော့ပါ"}</button>
                       <button onClick={createAttendanceSession} style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 18px", fontWeight: 700, cursor: "pointer" }}>{lang === "en" ? "Create" : "ဖန်တီးမည်"}</button>
                     </div>
                   </div>
@@ -1828,58 +2774,164 @@ export default function ClassDetail() {
             </div>
           )}
 
-          {/* ── RESOURCES TAB ── */}
-          {activeTab === "resources" && (
-            <div style={{ maxWidth: "720px" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
-                <div>
-                  <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#1a1a2e", margin: "0 0 4px" }}>Resources</h2>
-                  <p style={{ fontSize: "13px", color: "#9ca3af", margin: 0 }}>Links and files shared by the teacher</p>
-                </div>
-                {isTeacher && (
-                  <button onClick={() => setResourceModal(true)} style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "10px", padding: "10px 20px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
-                    + Add Resource
-                  </button>
-                )}
-              </div>
+          {/* ── ATTENDANCE FULL-PAGE PANEL ── */}
+          {attendanceMarkModal && activeSession && (() => {
+            const statusColors = { present: "#0F9D6E", late: "#D97706", absent: "#E1483F" };
+            const statusBg = { present: "#E6F7EF", late: "#FFF8E6", absent: "#FFF0F0" };
+            const isSavedSession = Object.keys(originalRecords).length > 0;
+            const filteredRecords = activeSession.records.filter(r =>
+              !attendanceSearchQuery || r.name.toLowerCase().includes(attendanceSearchQuery.toLowerCase())
+            );
+            const presentCount = Object.values(sessionRecords).filter(v => v === "present").length;
+            const lateCount = Object.values(sessionRecords).filter(v => v === "late").length;
+            const absentCount = Object.values(sessionRecords).filter(v => v === "absent").length;
+            const changedCount = Object.keys(sessionRecords).filter(sid => originalRecords[sid] && sessionRecords[sid] !== originalRecords[sid]).length;
+            return (
+              <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "var(--bg)", display: "flex", flexDirection: "column" }}>
 
-              {resources.length === 0 ? (
-                <div style={{ textAlign: "center", padding: "64px", color: "#9ca3af" }}>
-                  <div style={{ fontSize: "48px", marginBottom: "12px" }}>📂</div>
-                  <p>{isTeacher ? "Add links or files for your students." : "No resources shared yet."}</p>
-                </div>
-              ) : (
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                  {resources.map(r => (
-                    <div key={r.id} style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", padding: "16px 18px", display: "flex", alignItems: "flex-start", gap: "12px" }}>
-                      <div style={{ width: "40px", height: "40px", borderRadius: "10px", background: r.type === "file" ? "#fef3c7" : "#f0f4ff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px", flexShrink: 0 }}>
-                        {r.type === "file" ? "📄" : "🔗"}
+                {/* ── Top bar ── */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 28px", height: "62px", background: "var(--surface)", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "14px" }}>
+                    <button onClick={() => window.history.back()}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: "22px", lineHeight: 1, padding: "4px", borderRadius: "50%", display: "flex", alignItems: "center" }}>←</button>
+                    <div>
+                      <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)" }}>{activeSession.title}</div>
+                      <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>
+                        {activeSession.session_date
+                          ? new Date(activeSession.session_date.slice(0, 10) + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
+                          : ""}
+                        {" · "}{activeSession.records?.length || 0} {lang === "en" ? "students" : "ကျောင်းသား"}
                       </div>
-                      <div style={{ flex: 1, overflow: "hidden" }}>
-                        <div style={{ fontSize: "14px", fontWeight: 600, color: "#1a1a2e", marginBottom: "2px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.title}</div>
-                        <div style={{ fontSize: "11px", color: "#9ca3af", marginBottom: "8px" }}>Added by {r.added_by_name} • {formatDate(r.created_at)}</div>
-                        {r.type === "link" ? (
-                          <a href={r.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: "12px", color: "#3B37CC", fontWeight: 600, textDecoration: "none" }}>
-                            Open Link →
-                          </a>
-                        ) : (
-                          <a href={`http://localhost:5001${r.file_url}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: "12px", color: "#3B37CC", fontWeight: 600, textDecoration: "none" }}>
-                            Download ↓
-                          </a>
-                        )}
-                      </div>
-                      {isTeacher && (
-                        <button onClick={() => deleteResource(r.id)} style={{ background: "none", border: "none", cursor: "pointer", color: "#e5e7eb", fontSize: "16px", padding: "0", flexShrink: 0 }}
-                          onMouseEnter={e => e.target.style.color = "#ef4444"}
-                          onMouseLeave={e => e.target.style.color = "#e5e7eb"}
-                        >×</button>
-                      )}
                     </div>
-                  ))}
+                  </div>
+                  <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                    {isSavedSession && !attendanceModalEditMode && (
+                      <button onClick={() => setAttendanceModalEditMode(true)}
+                        style={{ padding: "8px 20px", borderRadius: "8px", border: "none", background: "#0B0B1E", color: "#fff", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
+                        {lang === "en" ? "Edit" : "ပြင်မည်"}
+                      </button>
+                    )}
+                    {attendanceModalEditMode && (
+                      <>
+                        <button onClick={() => { setSessionRecords({ ...originalRecords }); setAttendanceModalEditMode(false); }}
+                          style={{ padding: "8px 18px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-muted)", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
+                          {lang === "en" ? "Cancel" : "မလုပ်တော့"}
+                        </button>
+                        <button onClick={saveAttendance} disabled={savingAttendance}
+                          style={{ padding: "8px 22px", borderRadius: "8px", border: "none", background: "#3B37CC", color: "#fff", fontSize: "13px", fontWeight: 700, cursor: savingAttendance ? "default" : "pointer" }}>
+                          {savingAttendance ? (lang === "en" ? "Saving…" : "သိမ်းနေသည်…") : lang === "en" ? "Save" : "သိမ်းမည်"}
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
-              )}
-            </div>
-          )}
+
+                {/* ── Status strip (saved session) ── */}
+                {isSavedSession && (
+                  <div style={{ padding: "10px 28px", background: attendanceModalEditMode ? "rgba(217,119,6,0.07)" : "rgba(91,95,233,0.06)", borderBottom: "1px solid var(--border)", flexShrink: 0, fontSize: "12px", fontWeight: 600, color: attendanceModalEditMode ? "#D97706" : "#5B5FE9" }}>
+                    {attendanceModalEditMode
+                      ? (lang === "en" ? "✏️ Editing — changes will update the saved record" : "✏️ ပြင်နေသည် — သိမ်းမှ record ပြောင်းမည်")
+                      : (lang === "en" ? "🔒 Viewing saved record" : "🔒 မှတ်ပြီးသော record ကြည့်နေသည်")}
+                    {attendanceModalEditMode && changedCount > 0 && (
+                      <span style={{ marginLeft: "12px", fontWeight: 400, color: "#D97706" }}>
+                        · {changedCount} {lang === "en" ? "changed" : "ပြောင်းလဲပြီ"}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* ── Toolbar (edit mode) ── */}
+                {attendanceModalEditMode && (
+                  <div style={{ padding: "12px 28px", display: "flex", gap: "10px", alignItems: "center", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+                    <div style={{ flex: 1, maxWidth: "400px", display: "flex", alignItems: "center", gap: "8px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "8px 14px" }}>
+                      <span style={{ color: "var(--text-faint)" }}>🔍</span>
+                      <input value={attendanceSearchQuery} onChange={e => setAttendanceSearchQuery(e.target.value)}
+                        placeholder={lang === "en" ? "Search student…" : "ကျောင်းသား ရှာပါ…"}
+                        style={{ border: "none", background: "transparent", outline: "none", fontSize: "13px", color: "var(--text)", width: "100%" }} />
+                    </div>
+                    <button onClick={() => { const all = {}; activeSession.records.forEach(r => { all[r.student_id] = "present"; }); setSessionRecords(all); }}
+                      style={{ fontSize: "12px", fontWeight: 600, color: "#5B5FE9", background: "#EEF0FF", border: "none", borderRadius: "10px", padding: "10px 16px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                      {lang === "en" ? "✓ Mark all present" : "✓ အားလုံး တက်ရောက်"}
+                    </button>
+                  </div>
+                )}
+
+                {/* ── Student list (scrollable) ── */}
+                <div style={{ flex: 1, overflowY: "auto" }}>
+                  <div style={{ maxWidth: "860px", margin: "0 auto", padding: "12px 20px 80px" }}>
+                    {filteredRecords.length === 0 ? (
+                      <div style={{ textAlign: "center", padding: "60px 0", color: "var(--text-faint)" }}>
+                        <div style={{ fontSize: "30px", marginBottom: "10px" }}>🔍</div>
+                        <div style={{ fontSize: "14px", fontWeight: 600 }}>
+                          {activeSession.records.length === 0
+                            ? (lang === "en" ? "No students enrolled." : "ကျောင်းသား မရှိသေးပါ")
+                            : (lang === "en" ? "No match found" : "မတွေ့ပါ")}
+                        </div>
+                      </div>
+                    ) : filteredRecords.map(r => {
+                      const st = sessionRecords[r.student_id] || "present";
+                      const isChanged = isSavedSession && attendanceModalEditMode && originalRecords[r.student_id] && sessionRecords[r.student_id] !== originalRecords[r.student_id];
+                      return (
+                        <div key={r.student_id}
+                          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "13px 16px", borderRadius: "14px", marginBottom: "4px", transition: "background 0.12s" }}
+                          onMouseEnter={e => e.currentTarget.style.background = "var(--surface)"}
+                          onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "13px" }}>
+                            <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "linear-gradient(135deg,#5B5FE9,#22D3EE)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 700, fontSize: "14px", flexShrink: 0 }}>
+                              {r.name[0].toUpperCase()}
+                            </div>
+                            <div>
+                              <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
+                                <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{r.name}</span>
+                                {isChanged && <span style={{ fontSize: "9.5px", fontWeight: 700, color: "#5B5FE9", background: "#EEF0FF", padding: "2px 7px", borderRadius: "999px" }}>{lang === "en" ? "Changed" : "ပြောင်းလဲ"}</span>}
+                              </div>
+                              <div style={{ fontSize: "11.5px", color: "var(--text-faint)" }}>{r.email}</div>
+                            </div>
+                          </div>
+                          {attendanceModalEditMode ? (
+                            <div style={{ display: "flex", background: "rgba(11,11,30,0.05)", borderRadius: "10px", padding: "3px", gap: "2px" }}>
+                              {[["present", lang === "en" ? "Present" : "တက်"], ["late", lang === "en" ? "Late" : "နောက်ကျ"], ["absent", lang === "en" ? "Absent" : "မတက်"]].map(([val, label]) => (
+                                <button key={val} onClick={() => setSessionRecords(prev => ({ ...prev, [r.student_id]: val }))}
+                                  style={{ border: "none", fontSize: "12px", fontWeight: 600, padding: "8px 16px", borderRadius: "8px", cursor: "pointer",
+                                    background: st === val ? "#fff" : "transparent",
+                                    color: st === val ? statusColors[val] : "var(--text-muted)",
+                                    boxShadow: st === val ? "0 1px 4px rgba(11,11,30,0.1)" : "none" }}>
+                                  {label}
+                                </button>
+                              ))}
+                            </div>
+                          ) : (
+                            <span style={{ fontSize: "12px", fontWeight: 700, padding: "7px 16px", borderRadius: "999px", background: statusBg[st], color: statusColors[st] }}>
+                              {st === "present" ? (lang === "en" ? "Present" : "တက်") : st === "late" ? (lang === "en" ? "Late" : "နောက်ကျ") : (lang === "en" ? "Absent" : "မတက်")}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* ── Bottom bar (fixed) ── */}
+                <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "var(--surface)", borderTop: "1px solid var(--border)", padding: "12px 28px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  {/* Summary dots */}
+                  <div style={{ display: "flex", gap: "18px", fontSize: "12.5px", color: "var(--text-muted)" }}>
+                    <span><span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#0F9D6E", display: "inline-block", marginRight: "6px" }} />{presentCount} {lang === "en" ? "Present" : "တက်"}</span>
+                    <span><span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#D97706", display: "inline-block", marginRight: "6px" }} />{lateCount} {lang === "en" ? "Late" : "နောက်ကျ"}</span>
+                    <span><span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#E1483F", display: "inline-block", marginRight: "6px" }} />{absentCount} {lang === "en" ? "Absent" : "မတက်"}</span>
+                  </div>
+                  {/* Delete */}
+                  <button onClick={async () => {
+                    await deleteAttendanceSession(activeSession.id);
+                    setAttendanceMarkModal(false);
+                    setAttendanceSearchQuery("");
+                    setAttendanceModalEditMode(false);
+                  }} style={{ fontSize: "12.5px", fontWeight: 600, color: "#E1483F", background: "transparent", border: "1px solid #E1483F", borderRadius: "8px", padding: "8px 16px", cursor: "pointer" }}>
+                    🗑 {lang === "en" ? "Delete session" : "Session ဖျက်မည်"}
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* ── PEOPLE TAB ── */}
           {activeTab === "people" && (
@@ -1893,11 +2945,11 @@ export default function ClassDetail() {
                     <div style={memberRow}>
                       <div style={{ ...memberAvatar, background: "#3B37CC" }}>{teacher.name[0].toUpperCase()}</div>
                       <div>
-                        <div style={{ fontSize: "14px", fontWeight: 600, color: "#1a1a2e" }}>{teacher.name}</div>
-                        <div style={{ fontSize: "12px", color: "#9ca3af" }}>{teacher.email}</div>
+                        <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{teacher.name}</div>
+                        <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{teacher.email}</div>
                       </div>
                     </div>
-                  ) : <p style={{ color: "#9ca3af", fontSize: "14px" }}>No teacher.</p>}
+                  ) : <p style={{ color: "var(--text-faint)", fontSize: "14px" }}>No teacher.</p>}
                 </div>
 
                 {/* Students section */}
@@ -1912,23 +2964,23 @@ export default function ClassDetail() {
                 </div>
 
                 {students.length === 0 ? (
-                  <p style={{ color: "#9ca3af", fontSize: "14px" }}>No students enrolled yet.</p>
+                  <p style={{ color: "var(--text-faint)", fontSize: "14px" }}>No students enrolled yet.</p>
                 ) : students.map(s => (
                   <div key={s.id}
                     onClick={() => openStudentStats(s)}
                     style={{
                       ...memberRow, justifyContent: "space-between", cursor: "pointer",
-                      background: selectedStudent?.id === s.id ? "#f0f4ff" : "#fff",
-                      border: selectedStudent?.id === s.id ? "1.5px solid #3B37CC" : "1px solid #e5e7eb",
+                      background: selectedStudent?.id === s.id ? "var(--primary-tint)" : "#fff",
+                      border: selectedStudent?.id === s.id ? "1.5px solid #3B37CC" : "1px solid var(--border)",
                       transition: "all 0.15s",
                     }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                      <div style={{ ...memberAvatar, background: selectedStudent?.id === s.id ? "#3B37CC" : "#e5e7eb", color: selectedStudent?.id === s.id ? "#fff" : "#374151" }}>
+                      <div style={{ ...memberAvatar, background: selectedStudent?.id === s.id ? "#3B37CC" : "var(--border)", color: selectedStudent?.id === s.id ? "#fff" : "var(--text-muted)" }}>
                         {s.name[0].toUpperCase()}
                       </div>
                       <div>
-                        <div style={{ fontSize: "14px", fontWeight: 600, color: "#1a1a2e" }}>{s.name}</div>
-                        <div style={{ fontSize: "12px", color: "#9ca3af" }}>{s.email}</div>
+                        <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{s.name}</div>
+                        <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{s.email}</div>
                       </div>
                     </div>
                     {isTeacher && (
@@ -1943,35 +2995,35 @@ export default function ClassDetail() {
 
               {/* RIGHT — student detail panel */}
               {selectedStudent && (
-                <div style={{ background: "#fff", borderRadius: "14px", border: "1px solid #e5e7eb", padding: "20px", position: "sticky", top: "20px" }}>
+                <div style={{ background: "var(--surface)", borderRadius: "14px", border: "1px solid var(--border)", padding: "20px", position: "sticky", top: "20px" }}>
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                       <div style={{ width: "44px", height: "44px", borderRadius: "50%", background: "#3B37CC", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px", fontWeight: 700 }}>
                         {selectedStudent.name[0].toUpperCase()}
                       </div>
                       <div>
-                        <div style={{ fontSize: "15px", fontWeight: 700, color: "#1a1a2e" }}>{selectedStudent.name}</div>
-                        <div style={{ fontSize: "12px", color: "#9ca3af" }}>{selectedStudent.email}</div>
+                        <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)" }}>{selectedStudent.name}</div>
+                        <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{selectedStudent.email}</div>
                       </div>
                     </div>
-                    <button onClick={() => setSelectedStudent(null)} style={{ background: "none", border: "none", fontSize: "18px", cursor: "pointer", color: "#9ca3af" }}>×</button>
+                    <button onClick={() => setSelectedStudent(null)} style={{ background: "none", border: "none", fontSize: "18px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
                   </div>
 
                   {studentStatsLoading ? (
-                    <div style={{ textAlign: "center", padding: "32px", color: "#9ca3af" }}>Loading...</div>
+                    <div style={{ textAlign: "center", padding: "32px", color: "var(--text-faint)" }}>Loading...</div>
                   ) : studentStats ? (
                     <>
                       {/* Stats row - Assignment */}
-                      <div style={{ fontSize: "11px", fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>Assignments</div>
+                      <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>Assignments</div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "16px" }}>
                         {[
                           { label: lang === "en" ? "Submission" : "တင်သွင်းမှု", value: `${studentStats.stats.submissionRate}%`, color: studentStats.stats.submissionRate >= 80 ? "#22c55e" : studentStats.stats.submissionRate >= 50 ? "#f59e0b" : "#ef4444" },
                           { label: lang === "en" ? "Submitted" : "တင်ပြီး", value: `${studentStats.stats.submittedCount}/${studentStats.stats.totalAssignments}`, color: "#3B37CC" },
-                          { label: lang === "en" ? "Avg Grade" : "ပျမ်းမျှ", value: studentStats.stats.avgGrade !== null ? `${studentStats.stats.avgGrade}%` : "—", color: "#6b7280" },
+                          { label: lang === "en" ? "Avg Grade" : "ပျမ်းမျှ", value: studentStats.stats.avgGrade !== null ? `${studentStats.stats.avgGrade}%` : "—", color: "var(--text-muted)" },
                         ].map(stat => (
-                          <div key={stat.label} style={{ background: "#f9fafb", borderRadius: "10px", padding: "10px", textAlign: "center" }}>
+                          <div key={stat.label} style={{ background: "var(--surface-alt)", borderRadius: "10px", padding: "10px", textAlign: "center" }}>
                             <div style={{ fontSize: "18px", fontWeight: 800, color: stat.color }}>{stat.value}</div>
-                            <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "2px" }}>{stat.label}</div>
+                            <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "2px" }}>{stat.label}</div>
                           </div>
                         ))}
                       </div>
@@ -1979,7 +3031,7 @@ export default function ClassDetail() {
                       {/* Stats row - Attendance */}
                       {studentStats.stats.totalSessions > 0 && (
                         <>
-                          <div style={{ fontSize: "11px", fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                          <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
                             {lang === "en" ? "Attendance" : "တက်ရောက်မှု"}
                           </div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "8px", marginBottom: "16px" }}>
@@ -1989,19 +3041,19 @@ export default function ClassDetail() {
                               { label: lang === "en" ? "Late" : "နောက်ကျ", value: studentStats.stats.lateCount, color: "#f59e0b" },
                               { label: lang === "en" ? "Absent" : "မတက်", value: studentStats.stats.absentCount, color: "#ef4444" },
                             ].map(stat => (
-                              <div key={stat.label} style={{ background: "#f9fafb", borderRadius: "10px", padding: "8px", textAlign: "center" }}>
+                              <div key={stat.label} style={{ background: "var(--surface-alt)", borderRadius: "10px", padding: "8px", textAlign: "center" }}>
                                 <div style={{ fontSize: "16px", fontWeight: 800, color: stat.color }}>{stat.value}</div>
-                                <div style={{ fontSize: "10px", color: "#9ca3af", marginTop: "2px" }}>{stat.label}</div>
+                                <div style={{ fontSize: "10px", color: "var(--text-faint)", marginTop: "2px" }}>{stat.label}</div>
                               </div>
                             ))}
                           </div>
                           {/* Attendance history mini list */}
                           <div style={{ maxHeight: "120px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "4px", marginBottom: "16px" }}>
                             {studentStats.attendance.map((r, i) => (
-                              <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", background: "#f9fafb", borderRadius: "6px" }}>
-                                <div style={{ fontSize: "12px", color: "#374151" }}>
+                              <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", background: "var(--surface-alt)", borderRadius: "6px" }}>
+                                <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
                                   <span style={{ fontWeight: 600 }}>{r.title}</span>
-                                  <span style={{ color: "#9ca3af", marginLeft: "8px" }}>{new Date(r.session_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
+                                  <span style={{ color: "var(--text-faint)", marginLeft: "8px" }}>{new Date(r.session_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
                                 </div>
                                 <span style={{ fontSize: "10px", fontWeight: 700, padding: "2px 7px", borderRadius: "10px",
                                   background: r.status === "present" ? "#f0fdf4" : r.status === "late" ? "#fefce8" : "#fef2f2",
@@ -2016,14 +3068,14 @@ export default function ClassDetail() {
                       )}
 
                       {/* Assignment list */}
-                      <div style={{ fontSize: "11px", fontWeight: 700, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
+                      <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
                         {lang === "en" ? "Assignment Detail" : "အိမ်စာ အသေးစိတ်"}
                       </div>
                       <div style={{ maxHeight: "340px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px" }}>
                         {studentStats.assignments.map(a => (
-                          <div key={a.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "#f9fafb", borderRadius: "8px", border: "1px solid #e5e7eb" }}>
+                          <div key={a.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "var(--surface-alt)", borderRadius: "8px", border: "1px solid var(--border)" }}>
                             <div>
-                              <div style={{ fontSize: "13px", fontWeight: 600, color: "#1a1a2e" }}>{a.title}</div>
+                              <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>{a.title}</div>
                               {a.submission?.grade !== null && a.submission?.grade !== undefined && (
                                 <div style={{ fontSize: "11px", color: "#3B37CC", marginTop: "2px" }}>
                                   {a.submission.grade}/{a.points} pts ({Math.round((a.submission.grade/a.points)*100)}%)
@@ -2032,7 +3084,7 @@ export default function ClassDetail() {
                             </div>
                             <span style={{
                               fontSize: "10px", fontWeight: 700, padding: "3px 8px", borderRadius: "20px", flexShrink: 0,
-                              background: a.status === "missing" ? "#fef2f2" : a.status === "graded" ? "#f0f4ff" : "#f0fdf4",
+                              background: a.status === "missing" ? "#fef2f2" : a.status === "graded" ? "var(--primary-tint)" : "#f0fdf4",
                               color: a.status === "missing" ? "#ef4444" : a.status === "graded" ? "#3B37CC" : "#22c55e",
                             }}>
                               {a.status === "missing" ? "Missing" : a.status === "graded" ? "Graded" : "Submitted"}
@@ -2054,10 +3106,10 @@ export default function ClassDetail() {
         <div style={overlayStyle} onClick={() => { setInviteModal(false); setInviteMsg(null); setInviteEmail(""); }}>
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "420px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-              <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#1a1a2e", margin: 0 }}>✉️ Invite Student</h3>
-              <button onClick={() => { setInviteModal(false); setInviteMsg(null); setInviteEmail(""); }} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "#9ca3af" }}>×</button>
+              <h3 style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)", margin: 0 }}>✉️ Invite Student</h3>
+              <button onClick={() => { setInviteModal(false); setInviteMsg(null); setInviteEmail(""); }} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
             </div>
-            <div style={{ fontSize: "13px", color: "#6b7280", marginBottom: "14px" }}>
+            <div style={{ fontSize: "13px", color: "var(--text-muted)", marginBottom: "14px" }}>
               {lang === "en" ? "Enter the student's email — they must have an account" : "ကျောင်းသားရဲ့ email ထည့်ပါ — အကောင့်ရှိပါမှ ထည့်နိုင်မည်"}
             </div>
             <input
@@ -2088,7 +3140,7 @@ export default function ClassDetail() {
       {editAssignModal && selectedAssign && (
         <div style={{ ...overlayStyle, zIndex: 1100 }} onClick={() => setEditAssignModal(false)}>
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "540px" }}>
-            <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#1a1a2e", margin: "0 0 20px" }}>✏️ Edit Assignment</h2>
+            <h2 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text)", margin: "0 0 20px" }}>✏️ Edit Assignment</h2>
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               <div>
                 <label style={lbl}>Title *</label>
@@ -2124,7 +3176,7 @@ export default function ClassDetail() {
                   <label style={lbl}>Current Attachments</label>
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                     {selectedAssign.files.map(f => (
-                      <div key={f.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: editDeleteFileIds.includes(f.id) ? "#9ca3af" : "#374151", background: editDeleteFileIds.includes(f.id) ? "#fef2f2" : "#f9fafb", padding: "4px 10px", borderRadius: "6px", border: `1px solid ${editDeleteFileIds.includes(f.id) ? "#fca5a5" : "#e5e7eb"}`, textDecoration: editDeleteFileIds.includes(f.id) ? "line-through" : "none" }}>
+                      <div key={f.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: editDeleteFileIds.includes(f.id) ? "var(--text-faint)" : "var(--text-muted)", background: editDeleteFileIds.includes(f.id) ? "#fef2f2" : "var(--surface-alt)", padding: "4px 10px", borderRadius: "6px", border: `1px solid ${editDeleteFileIds.includes(f.id) ? "#fca5a5" : "var(--border)"}`, textDecoration: editDeleteFileIds.includes(f.id) ? "line-through" : "none" }}>
                         <span>📄 {f.file_name}</span>
                         <button onClick={() => setEditDeleteFileIds(prev => prev.includes(f.id) ? prev.filter(x => x !== f.id) : [...prev, f.id])}
                           style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 700, fontSize: "12px", color: editDeleteFileIds.includes(f.id) ? "#22c55e" : "#ef4444" }}>
@@ -2138,17 +3190,17 @@ export default function ClassDetail() {
               {/* New file attachments */}
               <div>
                 <label style={lbl}>Add New Attachments</label>
-                <div style={{ border: "1.5px dashed #d1d5db", borderRadius: "10px", padding: "10px", background: "#fafafa" }}>
+                <div style={{ border: "1.5px dashed var(--border)", borderRadius: "10px", padding: "10px", background: "#fafafa" }}>
                   <input ref={editAssignFileRef} type="file" multiple style={{ display: "none" }}
                     onChange={e => setEditAssignFiles(prev => [...prev, ...Array.from(e.target.files)])} />
                   <button type="button" onClick={() => editAssignFileRef.current?.click()}
-                    style={{ fontSize: "13px", color: "#3B37CC", background: "#f0f4ff", border: "1px solid #a5b4fc", borderRadius: "8px", padding: "6px 14px", cursor: "pointer", fontWeight: 600 }}>
+                    style={{ fontSize: "13px", color: "#3B37CC", background: "var(--primary-tint)", border: "1px solid #a5b4fc", borderRadius: "8px", padding: "6px 14px", cursor: "pointer", fontWeight: 600 }}>
                     📎 Add files
                   </button>
                   {editAssignFiles.length > 0 && (
                     <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "4px" }}>
                       {editAssignFiles.map((f, i) => (
-                        <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: "#374151", background: "#fff", padding: "4px 10px", borderRadius: "6px", border: "1px solid #e5e7eb" }}>
+                        <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: "var(--text-muted)", background: "var(--surface)", padding: "4px 10px", borderRadius: "6px", border: "1px solid var(--border)" }}>
                           <span>📄 {f.name}</span>
                           <button onClick={() => setEditAssignFiles(prev => prev.filter((_, j) => j !== i))}
                             style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontWeight: 700, fontSize: "14px" }}>×</button>
@@ -2164,7 +3216,7 @@ export default function ClassDetail() {
               <button onClick={() => { setEditAssignModal(false); setEditAssignFiles([]); setEditDeleteFileIds([]); }} style={{ ...btnOutline, flex: 1 }}>Cancel</button>
               <button onClick={() => handleUpdateAssignment(true)}
                 disabled={editAssignSaving || !editAssignForm.title.trim()}
-                style={{ ...btnOutline, flex: 1, color: "#6b7280", opacity: (!editAssignForm.title.trim() || editAssignSaving) ? 0.6 : 1 }}>
+                style={{ ...btnOutline, flex: 1, color: "var(--text-muted)", opacity: (!editAssignForm.title.trim() || editAssignSaving) ? 0.6 : 1 }}>
                 📄 Save as Draft
               </button>
               <button onClick={() => handleUpdateAssignment(false)}
@@ -2182,8 +3234,8 @@ export default function ClassDetail() {
         <div style={overlayStyle} onClick={() => setEditingPost(null)}>
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "480px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-              <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#1a1a2e", margin: 0 }}>✏️ Edit Announcement</h3>
-              <button onClick={() => setEditingPost(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "#9ca3af" }}>×</button>
+              <h3 style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)", margin: 0 }}>✏️ Edit Announcement</h3>
+              <button onClick={() => setEditingPost(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
             </div>
             <textarea value={editingPost.content} onChange={e => setEditingPost(p => ({ ...p, content: e.target.value }))}
               style={{ ...inp, width: "100%", height: "120px", resize: "none", marginBottom: "14px" }} />
@@ -2200,18 +3252,18 @@ export default function ClassDetail() {
         <div style={overlayStyle} onClick={() => setSubmissionStats(null)}>
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "520px", maxHeight: "80vh", overflowY: "auto" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-              <h3 style={{ fontSize: "16px", fontWeight: 700, color: "#1a1a2e", margin: 0 }}>📊 Submission Status</h3>
-              <button onClick={() => setSubmissionStats(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "#9ca3af" }}>×</button>
+              <h3 style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)", margin: 0 }}>📊 Submission Status</h3>
+              <button onClick={() => setSubmissionStats(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
             </div>
             {submissionStats.loading ? (
-              <div style={{ textAlign: "center", padding: "32px", color: "#9ca3af" }}>Loading...</div>
+              <div style={{ textAlign: "center", padding: "32px", color: "var(--text-faint)" }}>Loading...</div>
             ) : (
               <>
                 <div style={{ display: "flex", gap: "12px", marginBottom: "16px" }}>
                   {[
                     { label: "Submitted", count: submissionStats.students?.filter(s => s.status !== "missing").length || 0, color: "#22c55e", bg: "#f0fdf4" },
                     { label: "Missing", count: submissionStats.students?.filter(s => s.status === "missing").length || 0, color: "#ef4444", bg: "#fef2f2" },
-                    { label: "Graded", count: submissionStats.students?.filter(s => s.status === "graded").length || 0, color: "#3B37CC", bg: "#f0f4ff" },
+                    { label: "Graded", count: submissionStats.students?.filter(s => s.status === "graded").length || 0, color: "#3B37CC", bg: "var(--primary-tint)" },
                   ].map(stat => (
                     <div key={stat.label} style={{ flex: 1, background: stat.bg, borderRadius: "10px", padding: "12px", textAlign: "center" }}>
                       <div style={{ fontSize: "24px", fontWeight: 800, color: stat.color }}>{stat.count}</div>
@@ -2219,24 +3271,24 @@ export default function ClassDetail() {
                     </div>
                   ))}
                 </div>
-                <div style={{ border: "1px solid #e5e7eb", borderRadius: "10px", overflow: "hidden" }}>
+                <div style={{ border: "1px solid var(--border)", borderRadius: "10px", overflow: "hidden" }}>
                   {submissionStats.students?.map(s => (
                     <div key={s.student.id}>
                       <div
                         onClick={() => s.submission && setSelectedSubmission(selectedSubmission?.id === s.submission?.id ? null : s)}
                         style={{
                           display: "flex", alignItems: "center", justifyContent: "space-between",
-                          padding: "10px 16px", borderBottom: "1px solid #f3f4f6",
+                          padding: "10px 16px", borderBottom: "1px solid var(--surface-alt)",
                           cursor: s.submission ? "pointer" : "default",
-                          background: selectedSubmission?.student?.id === s.student.id ? "#f0f4ff" : "transparent",
+                          background: selectedSubmission?.student?.id === s.student.id ? "var(--primary-tint)" : "transparent",
                         }}>
                         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                          <div style={{ width: "30px", height: "30px", borderRadius: "50%", background: "#e5e7eb", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", fontWeight: 700, color: "#374151" }}>
+                          <div style={{ width: "30px", height: "30px", borderRadius: "50%", background: "var(--border)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", fontWeight: 700, color: "var(--text-muted)" }}>
                             {s.student.name[0].toUpperCase()}
                           </div>
                           <div>
-                            <div style={{ fontSize: "14px", color: "#1a1a2e", fontWeight: 500 }}>{s.student.name}</div>
-                            {s.submission && <div style={{ fontSize: "11px", color: "#9ca3af" }}>
+                            <div style={{ fontSize: "14px", color: "var(--text)", fontWeight: 500 }}>{s.student.name}</div>
+                            {s.submission && <div style={{ fontSize: "11px", color: "var(--text-faint)" }}>
                               {new Date(s.submission.submitted_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                             </div>}
                           </div>
@@ -2247,28 +3299,28 @@ export default function ClassDetail() {
                           )}
                           <span style={{
                             fontSize: "11px", fontWeight: 700, padding: "3px 10px", borderRadius: "20px",
-                            background: s.status === "missing" ? "#fef2f2" : s.status === "graded" ? "#f0f4ff" : "#f0fdf4",
+                            background: s.status === "missing" ? "#fef2f2" : s.status === "graded" ? "var(--primary-tint)" : "#f0fdf4",
                             color: s.status === "missing" ? "#ef4444" : s.status === "graded" ? "#3B37CC" : "#22c55e",
                           }}>
                             {s.status === "missing" ? "Missing" : s.status === "graded" ? "Graded" : "Submitted"}
                           </span>
-                          {s.submission && <span style={{ fontSize: "14px", color: "#9ca3af" }}>{selectedSubmission?.student?.id === s.student.id ? "▲" : "▼"}</span>}
+                          {s.submission && <span style={{ fontSize: "14px", color: "var(--text-faint)" }}>{selectedSubmission?.student?.id === s.student.id ? "▲" : "▼"}</span>}
                         </div>
                       </div>
 
                       {/* Expanded submission detail */}
                       {selectedSubmission?.student?.id === s.student.id && s.submission && (
-                        <div style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb", padding: "14px 20px" }}>
+                        <div style={{ background: "var(--surface-alt)", borderBottom: "1px solid var(--border)", padding: "14px 20px" }}>
                           {/* Text content */}
                           {s.submission.content && (
-                            <div style={{ fontSize: "13px", color: "#374151", marginBottom: "10px", lineHeight: 1.6, background: "#fff", borderRadius: "8px", padding: "10px 12px", border: "1px solid #e5e7eb" }}>
+                            <div style={{ fontSize: "13px", color: "var(--text-muted)", marginBottom: "10px", lineHeight: 1.6, background: "var(--surface)", borderRadius: "8px", padding: "10px 12px", border: "1px solid var(--border)" }}>
                               {s.submission.content}
                             </div>
                           )}
                           {/* File */}
                           {s.submission.file_path && (
                             <a href={`http://localhost:5001/uploads/${s.submission.file_path}`} target="_blank" rel="noreferrer"
-                              style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#3B37CC", fontWeight: 600, marginBottom: "12px", background: "#f0f4ff", padding: "6px 12px", borderRadius: "8px", textDecoration: "none" }}>
+                              style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#3B37CC", fontWeight: 600, marginBottom: "12px", background: "var(--primary-tint)", padding: "6px 12px", borderRadius: "8px", textDecoration: "none" }}>
                               📎 View attached file
                             </a>
                           )}
@@ -2282,7 +3334,7 @@ export default function ClassDetail() {
                               onChange={e => setGradeInputs(g => ({ ...g, [s.submission.id]: e.target.value }))}
                               style={{ ...inp, width: "80px" }}
                             />
-                            <span style={{ fontSize: "13px", color: "#6b7280" }}>/ {submissionStats.assignment?.points || 100} pts</span>
+                            <span style={{ fontSize: "13px", color: "var(--text-muted)" }}>/ {submissionStats.assignment?.points || 100} pts</span>
                             <button
                               disabled={grading[s.submission.id]}
                               onClick={async () => {
@@ -2313,6 +3365,7 @@ export default function ClassDetail() {
                             studentId={s.student.id}
                             studentName={s.student.name}
                             myName={myName}
+                            myId={myId}
                           />
                         </div>
                       )}
@@ -2329,12 +3382,12 @@ export default function ClassDetail() {
       {topicModal && (
         <div style={overlayStyle} onClick={() => setTopicModal(null)}>
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "380px" }}>
-            <h3 style={{ fontSize: "15px", fontWeight: 700, color: "#1a1a2e", marginBottom: "14px" }}>📂 Set Topic</h3>
+            <h3 style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)", marginBottom: "14px" }}>📂 Set Topic</h3>
             <input value={topicInput} onChange={e => setTopicInput(e.target.value)}
               placeholder="e.g. Chapter 1, Week 2, HTML Basics..."
               style={{ ...inp, width: "100%", marginBottom: "14px" }} autoFocus
               onKeyDown={e => e.key === "Enter" && saveTopic()} />
-            <div style={{ fontSize: "12px", color: "#9ca3af", marginBottom: "14px" }}>{lang === "en" ? "Leave blank and Save to remove the topic" : "Topic ကို ဖယ်ရှားဖို့ blank ထားပြီး Save နှိပ်ပါ"}</div>
+            <div style={{ fontSize: "12px", color: "var(--text-faint)", marginBottom: "14px" }}>{lang === "en" ? "Leave blank and Save to remove the topic" : "Topic ကို ဖယ်ရှားဖို့ blank ထားပြီး Save နှိပ်ပါ"}</div>
             <div style={{ display: "flex", gap: "10px" }}>
               <button onClick={() => setTopicModal(null)} style={{ ...btnOutline, flex: 1 }}>Cancel</button>
               <button onClick={saveTopic} style={{ ...btnPrimary, flex: 1 }}>Save</button>
@@ -2348,14 +3401,14 @@ export default function ClassDetail() {
         <div style={overlayStyle} onClick={() => setAiModal(null)}>
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "540px", maxHeight: "80vh", overflowY: "auto" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
-              <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#1a1a2e", margin: 0 }}>
+              <h2 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text)", margin: 0 }}>
                 {aiModal === "highlights" ? "✏️ Smart Highlighting" : aiModal === "summary" ? "📋 Auto-Summary" : "❓ Practice Quiz"}
               </h2>
-              <button onClick={() => setAiModal(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "#9ca3af" }}>×</button>
+              <button onClick={() => setAiModal(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
             </div>
 
             {aiLoading ? (
-              <div style={{ textAlign: "center", padding: "40px", color: "#9ca3af" }}>
+              <div style={{ textAlign: "center", padding: "40px", color: "var(--text-faint)" }}>
                 <div style={{ fontSize: "32px", marginBottom: "12px" }}>🤖</div>
                 <p>AI is analyzing the material...</p>
               </div>
@@ -2370,7 +3423,7 @@ export default function ClassDetail() {
                     <div style={{ fontWeight: 700, color: "#92400e", fontSize: "14px", marginBottom: "4px" }}>
                       🔑 {item.term}
                     </div>
-                    <div style={{ fontSize: "13px", color: "#374151", lineHeight: 1.6 }}>{item.explanation}</div>
+                    <div style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6 }}>{item.explanation}</div>
                   </div>
                 ))}
               </div>
@@ -2381,7 +3434,7 @@ export default function ClassDetail() {
                     <div style={{ width: "24px", height: "24px", borderRadius: "50%", background: "#3B37CC", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", fontWeight: 700, flexShrink: 0, marginTop: "2px" }}>
                       {i + 1}
                     </div>
-                    <p style={{ fontSize: "14px", color: "#374151", lineHeight: 1.6, margin: 0 }}>{point}</p>
+                    <p style={{ fontSize: "14px", color: "var(--text-muted)", lineHeight: 1.6, margin: 0 }}>{point}</p>
                   </div>
                 ))}
               </div>
@@ -2400,7 +3453,7 @@ export default function ClassDetail() {
             <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" }}>
               <div style={{ width: "38px", height: "38px", borderRadius: "50%", background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px" }}>⚡</div>
               <div>
-                <div style={{ fontSize: "16px", fontWeight: 700, color: "#1a1a2e" }}>Level Up Chat</div>
+                <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)" }}>Level Up Chat</div>
                 {levelUpLevel && <div style={{ fontSize: "11px", color: "#22c55e", fontWeight: 600 }}>
                   ● {levelUpLevel === "beginner"
                     ? (lang === "en" ? "🌱 Beginner" : "🌱 စတင်သင်")
@@ -2409,7 +3462,7 @@ export default function ClassDetail() {
                     : (lang === "en" ? "🔥 Advanced" : "🔥 နားလည်ပြီး")} mode
                 </div>}
               </div>
-              <button onClick={() => { setAiModal(null); setLevelUpLevel(null); }} style={{ marginLeft: "auto", background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "#9ca3af" }}>×</button>
+              <button onClick={() => { setAiModal(null); setLevelUpLevel(null); }} style={{ marginLeft: "auto", background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
             </div>
 
             {/* Level selector screen */}
@@ -2417,10 +3470,10 @@ export default function ClassDetail() {
               <div>
                 <div style={{ textAlign: "center", marginBottom: "20px" }}>
                   <div style={{ fontSize: "32px", marginBottom: "10px" }}>🎯</div>
-                  <div style={{ fontSize: "15px", fontWeight: 700, color: "#1a1a2e", marginBottom: "6px" }}>
+                  <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)", marginBottom: "6px" }}>
                     {lang === "en" ? "How well do you know this material?" : "ဒီသင်ခန်းစာနဲ့ ပတ်သက်ပြီး ဘယ်လောက်နားလည်သလဲ?"}
                   </div>
-                  <div style={{ fontSize: "13px", color: "#6b7280" }}><strong>{selectedMat?.title}</strong></div>
+                  <div style={{ fontSize: "13px", color: "var(--text-muted)" }}><strong>{selectedMat?.title}</strong></div>
                 </div>
                 {[
                   { key: "beginner", icon: "🌱",
@@ -2430,7 +3483,7 @@ export default function ClassDetail() {
                   { key: "intermediate", icon: "📘",
                     label: lang === "en" ? "Know the basics" : "တစ်ဝက်နားလည်",
                     desc: lang === "en" ? "I know some parts but still have gaps" : "အခြေခံသိသော်လည်း အချို့နေရာများ မရှင်းသေးပါ",
-                    color: "#3B37CC", bg: "#f0f4ff", border: "#a5b4fc" },
+                    color: "#3B37CC", bg: "var(--primary-tint)", border: "#a5b4fc" },
                   { key: "advanced", icon: "🔥",
                     label: lang === "en" ? "Ready to be challenged" : "နားလည်ပြီး စစ်ချင်",
                     desc: lang === "en" ? "I know it well — give me hard questions" : "ကောင်းစွာသိပြီး ခက်ခဲသောမေးခွန်းများ ဖြေချင်သည်",
@@ -2444,12 +3497,12 @@ export default function ClassDetail() {
                     <div style={{ fontSize: "28px", flexShrink: 0 }}>{l.icon}</div>
                     <div>
                       <div style={{ fontSize: "15px", fontWeight: 700, color: l.color }}>{l.label}</div>
-                      <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "2px" }}>{l.desc}</div>
+                      <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>{l.desc}</div>
                     </div>
                     <div style={{ marginLeft: "auto", color: l.color, fontSize: "18px" }}>›</div>
                   </div>
                 ))}
-                {chatSending && <div style={{ textAlign: "center", color: "#9ca3af", fontSize: "13px", padding: "10px" }}>
+                {chatSending && <div style={{ textAlign: "center", color: "var(--text-faint)", fontSize: "13px", padding: "10px" }}>
                   {lang === "en" ? "AI is preparing..." : "AI ပြင်ဆင်နေသည်..."}
                 </div>}
               </div>
@@ -2461,8 +3514,8 @@ export default function ClassDetail() {
                 <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
                   <div style={{
                     maxWidth: "82%", padding: "10px 14px", borderRadius: "14px", fontSize: "14px", lineHeight: 1.5,
-                    background: msg.role === "user" ? "#3B37CC" : "#f3f4f6",
-                    color: msg.role === "user" ? "#fff" : "#374151",
+                    background: msg.role === "user" ? "#3B37CC" : "var(--surface-alt)",
+                    color: msg.role === "user" ? "#fff" : "var(--text-muted)",
                     borderBottomRightRadius: msg.role === "user" ? "4px" : "14px",
                     borderBottomLeftRadius: msg.role === "assistant" ? "4px" : "14px",
                   }}>
@@ -2474,7 +3527,7 @@ export default function ClassDetail() {
               ))}
               {chatSending && (
                 <div style={{ display: "flex", justifyContent: "flex-start" }}>
-                  <div style={{ background: "#f3f4f6", padding: "10px 14px", borderRadius: "14px", fontSize: "14px", color: "#9ca3af" }}>
+                  <div style={{ background: "var(--surface-alt)", padding: "10px 14px", borderRadius: "14px", fontSize: "14px", color: "var(--text-faint)" }}>
                     ⚡ {lang === "en" ? "AI is thinking..." : "AI တွေးဆနေသည်..."}
                   </div>
                 </div>
@@ -2484,7 +3537,7 @@ export default function ClassDetail() {
 
             {/* Level badge + change level */}
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-              <span style={{ fontSize: "11px", color: "#9ca3af" }}>
+              <span style={{ fontSize: "11px", color: "var(--text-faint)" }}>
                 {levelUpLevel === "beginner"
                   ? (lang === "en" ? "🌱 Beginner mode" : "🌱 စတင်သင် mode")
                   : levelUpLevel === "intermediate"
@@ -2497,7 +3550,7 @@ export default function ClassDetail() {
             </div>
 
             {/* Chat input */}
-            <div style={{ display: "flex", gap: "10px", borderTop: "1px solid #e5e7eb", paddingTop: "12px" }}>
+            <div style={{ display: "flex", gap: "10px", borderTop: "1px solid var(--border)", paddingTop: "12px" }}>
               <input
                 value={chatInput}
                 onChange={e => setChatInput(e.target.value)}
@@ -2520,7 +3573,7 @@ export default function ClassDetail() {
       {resourceModal && (
         <div style={overlayStyle} onClick={() => setResourceModal(false)}>
           <div onClick={e => e.stopPropagation()} style={modalStyle}>
-            <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#1a1a2e", margin: "0 0 20px" }}>📂 Add Resource</h2>
+            <h2 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text)", margin: "0 0 20px" }}>📂 Add Resource</h2>
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               <div>
                 <label style={lbl}>Title *</label>
@@ -2530,7 +3583,7 @@ export default function ClassDetail() {
                 <label style={lbl}>Link URL</label>
                 <input value={resourceForm.url} onChange={e => setResourceForm(f => ({ ...f, url: e.target.value }))} placeholder="https://..." style={inp} disabled={!!resourceFile} />
               </div>
-              <div style={{ textAlign: "center", color: "#9ca3af", fontSize: "13px" }}>— or —</div>
+              <div style={{ textAlign: "center", color: "var(--text-faint)", fontSize: "13px" }}>— or —</div>
               <div>
                 <label style={lbl}>Upload File</label>
                 <input type="file" ref={resourceFileRef} onChange={e => setResourceFile(e.target.files[0])} style={{ fontSize: "13px" }} />
@@ -2546,63 +3599,110 @@ export default function ClassDetail() {
         </div>
       )}
 
-      {/* Create Assignment Modal */}
+      {/* Create Assignment — full screen Google Classroom style */}
       {assignModal && (
-        <div style={overlayStyle} onClick={() => setAssignModal(false)}>
-          <div onClick={e => e.stopPropagation()} style={modalStyle}>
-            <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#1a1a2e", margin: "0 0 20px" }}>📝 Create Assignment</h2>
-            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-              <div>
-                <label style={lbl}>Title *</label>
-                <input value={assignForm.title} onChange={e => setAssignForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Week 1 Exercise" style={inp} autoFocus />
-              </div>
-              <div>
-                <label style={lbl}>Instructions</label>
-                <textarea value={assignForm.instructions} onChange={e => setAssignForm(f => ({ ...f, instructions: e.target.value }))} placeholder="What should students do?" style={{ ...inp, height: "80px", resize: "none" }} />
-              </div>
-              <div style={{ display: "flex", gap: "12px" }}>
-                <div style={{ flex: 1 }}>
-                  <label style={lbl}>Due Date</label>
-                  <input type="datetime-local" value={assignForm.due_date} onChange={e => setAssignForm(f => ({ ...f, due_date: e.target.value }))} style={inp} />
+        <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "var(--bg)", display: "flex", flexDirection: "column" }}>
+          {/* Top bar */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", height: "64px", background: "var(--surface)", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <button onClick={() => window.history.back()}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: "20px", padding: "4px", borderRadius: "50%", display: "flex", alignItems: "center" }}>✕</button>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div style={{ width: "32px", height: "32px", background: "var(--primary-tint)", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <span style={{ fontSize: "16px" }}>📝</span>
                 </div>
-                <div style={{ width: "100px" }}>
-                  <label style={lbl}>Points</label>
-                  <input type="number" min="0" max="1000" value={assignForm.points} onChange={e => setAssignForm(f => ({ ...f, points: e.target.value }))} style={inp} />
-                </div>
+                <span style={{ fontSize: "17px", fontWeight: 700, color: "var(--text)" }}>Create assignment</span>
               </div>
-              {/* File attachments */}
-              <div>
-                <label style={lbl}>Attachments (optional)</label>
-                <div style={{ border: "1.5px dashed #d1d5db", borderRadius: "10px", padding: "12px", background: "#fafafa" }}>
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button onClick={() => createAssignment(true)} disabled={assignCreating || !assignForm.title.trim()}
+                style={{ background: "var(--surface-alt)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "8px", padding: "9px 20px", fontSize: "13px", fontWeight: 600, cursor: assignCreating || !assignForm.title.trim() ? "not-allowed" : "pointer", opacity: !assignForm.title.trim() ? 0.5 : 1 }}>
+                Save draft
+              </button>
+              <button onClick={() => createAssignment(false)} disabled={assignCreating || !assignForm.title.trim()}
+                style={{ background: assignCreating || !assignForm.title.trim() ? "#c7d2fe" : "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 24px", fontSize: "14px", fontWeight: 700, cursor: assignCreating || !assignForm.title.trim() ? "not-allowed" : "pointer" }}>
+                {assignCreating ? "Posting..." : "Post"}
+              </button>
+            </div>
+          </div>
+
+          {/* Body — 2 column layout */}
+          <div style={{ flex: 1, overflowY: "auto", display: "flex", justifyContent: "center", padding: "32px 16px" }}>
+            <div style={{ width: "100%", maxWidth: "900px", display: "flex", gap: "20px", alignItems: "flex-start" }}>
+
+              {/* Left — main form */}
+              <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "16px" }}>
+                {/* Title */}
+                <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", overflow: "hidden" }}>
+                  <input
+                    value={assignForm.title}
+                    onChange={e => setAssignForm(f => ({ ...f, title: e.target.value }))}
+                    placeholder="Assignment title"
+                    autoFocus
+                    style={{ width: "100%", border: "none", outline: "none", fontSize: "22px", fontWeight: 600, color: "var(--text)", padding: "20px 24px", boxSizing: "border-box", background: "transparent" }}
+                  />
+                </div>
+
+                {/* Instructions */}
+                <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "20px 24px" }}>
+                  <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", display: "block", marginBottom: "10px" }}>Instructions (optional)</span>
+                  <textarea
+                    value={assignForm.instructions}
+                    onChange={e => setAssignForm(f => ({ ...f, instructions: e.target.value }))}
+                    placeholder="Tell students what to do..."
+                    style={{ width: "100%", minHeight: "120px", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px", fontSize: "14px", color: "var(--text-muted)", resize: "vertical", outline: "none", boxSizing: "border-box", fontFamily: "inherit", lineHeight: "1.6" }}
+                  />
+                </div>
+
+                {/* File attachments */}
+                <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "20px 24px" }}>
+                  <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", display: "block", marginBottom: "12px" }}>Attachments (optional)</span>
                   <input ref={assignFileRef} type="file" multiple style={{ display: "none" }}
                     onChange={e => setAssignFiles(prev => [...prev, ...Array.from(e.target.files)])} />
-                  <button type="button" onClick={() => assignFileRef.current?.click()}
-                    style={{ fontSize: "13px", color: "#3B37CC", background: "#f0f4ff", border: "1px solid #a5b4fc", borderRadius: "8px", padding: "6px 14px", cursor: "pointer", fontWeight: 600 }}>
-                    📎 Add files
-                  </button>
                   {assignFiles.length > 0 && (
-                    <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px" }}>
                       {assignFiles.map((f, i) => (
-                        <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: "#374151", background: "#fff", padding: "4px 10px", borderRadius: "6px", border: "1px solid #e5e7eb" }}>
-                          <span>📄 {f.name}</span>
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: "10px", background: "#f8f9ff", border: "1px solid #e0e7ff", borderRadius: "8px", padding: "10px 14px" }}>
+                          <span style={{ fontSize: "18px" }}>📄</span>
+                          <span style={{ flex: 1, fontSize: "13px", fontWeight: 500, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
                           <button onClick={() => setAssignFiles(prev => prev.filter((_, j) => j !== i))}
-                            style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontWeight: 700, fontSize: "14px" }}>×</button>
+                            style={{ background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", fontSize: "16px" }}>✕</button>
                         </div>
                       ))}
                     </div>
                   )}
+                  <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "2px dashed #c7d2fe", borderRadius: "10px", padding: "24px", cursor: "pointer", color: "var(--text-muted)", gap: "6px" }}>
+                    <span style={{ fontSize: "28px" }}>📎</span>
+                    <span style={{ fontSize: "13px", fontWeight: 600, color: "#3B37CC" }}>Attach files</span>
+                    <input type="file" multiple style={{ display: "none" }}
+                      onChange={e => setAssignFiles(prev => [...prev, ...Array.from(e.target.files)])} />
+                  </label>
+                </div>
+
+                {assignError && (
+                  <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px", padding: "12px 16px", color: "#dc2626", fontSize: "13px" }}>
+                    {assignError}
+                  </div>
+                )}
+              </div>
+
+              {/* Right — settings panel */}
+              <div style={{ width: "240px", flexShrink: 0, display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", overflow: "hidden" }}>
+                  <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--surface-alt)" }}>
+                    <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>Points</div>
+                    <input type="number" min="0" max="1000" value={assignForm.points}
+                      onChange={e => setAssignForm(f => ({ ...f, points: e.target.value }))}
+                      style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 10px", fontSize: "16px", fontWeight: 700, color: "#3B37CC", outline: "none", textAlign: "center", boxSizing: "border-box" }} />
+                  </div>
+                  <div style={{ padding: "14px 16px" }}>
+                    <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>Due date</div>
+                    <input type="datetime-local" value={assignForm.due_date}
+                      onChange={e => setAssignForm(f => ({ ...f, due_date: e.target.value }))}
+                      style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 10px", fontSize: "13px", color: "var(--text-muted)", outline: "none", boxSizing: "border-box" }} />
+                  </div>
                 </div>
               </div>
-            </div>
-            {assignError && <p style={{ color: "#ef4444", fontSize: "13px", marginTop: "10px" }}>{assignError}</p>}
-            <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
-              <button onClick={() => { setAssignModal(false); setAssignFiles([]); }} style={{ ...btnOutline, flex: 1 }}>Cancel</button>
-              <button onClick={() => createAssignment(true)} disabled={assignCreating || !assignForm.title.trim()} style={{ ...btnOutline, flex: 1, opacity: (!assignForm.title.trim() || assignCreating) ? 0.6 : 1, color: "#6b7280" }}>
-                📄 Save Draft
-              </button>
-              <button onClick={() => createAssignment(false)} disabled={assignCreating || !assignForm.title.trim()} style={{ ...btnPrimary, flex: 1, opacity: (!assignForm.title.trim() || assignCreating) ? 0.6 : 1 }}>
-                {assignCreating ? "..." : "📢 Post"}
-              </button>
             </div>
           </div>
         </div>
@@ -2613,17 +3713,17 @@ export default function ClassDetail() {
       {selectedAssign && isTeacher && (
         <div style={{ position: "fixed", inset: 0, background: "#f5f6fa", zIndex: 900, overflowY: "auto" }}>
           {/* Top bar */}
-          <div style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "14px 28px", display: "flex", alignItems: "center", gap: "14px", position: "sticky", top: 0, zIndex: 10 }}>
+          <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "14px 28px", display: "flex", alignItems: "center", gap: "14px", position: "sticky", top: 0, zIndex: 10 }}>
             <button onClick={() => { setSelectedAssign(null); setAssignDetail(null); setSelectedSubmissionStudent(null); }}
-              style={{ background: "none", border: "none", fontSize: "22px", cursor: "pointer", color: "#6b7280", lineHeight: 1 }}>←</button>
+              style={{ background: "none", border: "none", fontSize: "22px", cursor: "pointer", color: "var(--text-muted)", lineHeight: 1 }}>←</button>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: "17px", fontWeight: 700, color: "#1a1a2e" }}>📝 {selectedAssign.title}</div>
-              <div style={{ fontSize: "12px", color: "#9ca3af" }}>
+              <div style={{ fontSize: "17px", fontWeight: 700, color: "var(--text)" }}>📝 {selectedAssign.title}</div>
+              <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>
                 {selectedAssign.due_date ? `Due: ${formatDate(selectedAssign.due_date)}` : "No due date"} • {selectedAssign.points} pts
               </div>
             </div>
             <button onClick={() => openEditAssign(selectedAssign)}
-              style={{ fontSize: "13px", fontWeight: 600, color: "#3B37CC", background: "#f0f4ff", border: "1px solid #a5b4fc", borderRadius: "8px", padding: "7px 16px", cursor: "pointer" }}>
+              style={{ fontSize: "13px", fontWeight: 600, color: "#3B37CC", background: "var(--primary-tint)", border: "1px solid #a5b4fc", borderRadius: "8px", padding: "7px 16px", cursor: "pointer" }}>
               ✏️ Edit
             </button>
           </div>
@@ -2631,45 +3731,45 @@ export default function ClassDetail() {
           {/* Body */}
           <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 0, minHeight: "calc(100vh - 64px)" }}>
             {/* LEFT — student list */}
-            <div style={{ background: "#fff", borderRight: "1px solid #e5e7eb", padding: "16px" }}>
+            <div style={{ background: "var(--surface)", borderRight: "1px solid var(--border)", padding: "16px" }}>
               {/* Stats row */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "16px" }}>
                 {[
                   { label: "Submitted", count: assignDetail?.submissions?.length || 0, color: "#22c55e", bg: "#f0fdf4" },
                   { label: "Missing", count: Math.max(0, (students?.length || 0) - (assignDetail?.submissions?.length || 0)), color: "#ef4444", bg: "#fef2f2" },
-                  { label: "Graded", count: assignDetail?.submissions?.filter(s => s.status === "graded" || s.status === "returned").length || 0, color: "#3B37CC", bg: "#f0f4ff" },
+                  { label: "Graded", count: assignDetail?.submissions?.filter(s => s.status === "graded" || s.status === "returned").length || 0, color: "#3B37CC", bg: "var(--primary-tint)" },
                 ].map(stat => (
                   <div key={stat.label} style={{ background: stat.bg, borderRadius: "10px", padding: "10px 8px", textAlign: "center" }}>
                     <div style={{ fontSize: "20px", fontWeight: 800, color: stat.color }}>{stat.count}</div>
-                    <div style={{ fontSize: "10px", color: "#6b7280", marginTop: "2px" }}>{stat.label}</div>
+                    <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "2px" }}>{stat.label}</div>
                   </div>
                 ))}
               </div>
 
-              <div style={{ fontSize: "12px", fontWeight: 700, color: "#9ca3af", marginBottom: "10px", letterSpacing: "0.05em" }}>STUDENTS</div>
+              <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-faint)", marginBottom: "10px", letterSpacing: "0.05em" }}>STUDENTS</div>
 
               {!assignDetail ? (
-                <div style={{ color: "#9ca3af", fontSize: "13px", textAlign: "center", padding: "32px" }}>Loading...</div>
+                <div style={{ color: "var(--text-faint)", fontSize: "13px", textAlign: "center", padding: "32px" }}>Loading...</div>
               ) : students.map(st => {
                 const sub = assignDetail.submissions?.find(s => s.student_id === st.id);
                 const isSelected = selectedSubmissionStudent?.id === st.id;
                 return (
                   <div key={st.id} onClick={() => setSelectedSubmissionStudent({ ...st, submission: sub || null })}
-                    style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px", borderRadius: "10px", cursor: "pointer", marginBottom: "4px", background: isSelected ? "#f0f4ff" : "transparent", border: isSelected ? "1.5px solid #3B37CC" : "1.5px solid transparent", transition: "all 0.12s" }}>
-                    <div style={{ width: "34px", height: "34px", borderRadius: "50%", background: isSelected ? "#3B37CC" : "#e5e7eb", color: isSelected ? "#fff" : "#374151", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", fontWeight: 700, flexShrink: 0 }}>
+                    style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px", borderRadius: "10px", cursor: "pointer", marginBottom: "4px", background: isSelected ? "var(--primary-tint)" : "transparent", border: isSelected ? "1.5px solid #3B37CC" : "1.5px solid transparent", transition: "all 0.12s" }}>
+                    <div style={{ width: "34px", height: "34px", borderRadius: "50%", background: isSelected ? "#3B37CC" : "var(--border)", color: isSelected ? "#fff" : "var(--text-muted)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", fontWeight: 700, flexShrink: 0 }}>
                       {st.name[0].toUpperCase()}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: "13px", fontWeight: 600, color: "#1a1a2e", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{st.name}</div>
+                      <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{st.name}</div>
                       {sub ? (
-                        <div style={{ fontSize: "11px", color: "#6b7280" }}>{formatDate(sub.submitted_at)}</div>
+                        <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>{formatDate(sub.submitted_at)}</div>
                       ) : (
                         <div style={{ fontSize: "11px", color: "#ef4444" }}>Missing</div>
                       )}
                     </div>
                     <span style={{
                       fontSize: "10px", fontWeight: 700, padding: "2px 8px", borderRadius: "20px", flexShrink: 0,
-                      background: !sub ? "#fef2f2" : (sub.status === "graded" || sub.status === "returned") ? "#f0f4ff" : "#f0fdf4",
+                      background: !sub ? "#fef2f2" : (sub.status === "graded" || sub.status === "returned") ? "var(--primary-tint)" : "#f0fdf4",
                       color: !sub ? "#ef4444" : (sub.status === "graded" || sub.status === "returned") ? "#3B37CC" : "#22c55e",
                     }}>
                       {!sub ? "Missing" : (sub.status === "graded" || sub.status === "returned") ? `${sub.grade}/${selectedAssign.points}` : "Submitted"}
@@ -2682,14 +3782,14 @@ export default function ClassDetail() {
             {/* RIGHT — submission detail */}
             <div style={{ padding: "24px 32px", overflowY: "auto" }}>
               {!selectedSubmissionStudent ? (
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#9ca3af", gap: "12px" }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--text-faint)", gap: "12px" }}>
                   <div style={{ fontSize: "48px" }}>👈</div>
                   <div style={{ fontSize: "14px" }}>Select a student to view their submission</div>
                 </div>
               ) : !selectedSubmissionStudent.submission ? (
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "#9ca3af", gap: "12px" }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--text-faint)", gap: "12px" }}>
                   <div style={{ fontSize: "48px" }}>📭</div>
-                  <div style={{ fontSize: "15px", fontWeight: 600, color: "#374151" }}>{selectedSubmissionStudent.name}</div>
+                  <div style={{ fontSize: "15px", fontWeight: 600, color: "var(--text-muted)" }}>{selectedSubmissionStudent.name}</div>
                   <div style={{ fontSize: "13px" }}>No submission yet</div>
                 </div>
               ) : (() => {
@@ -2702,11 +3802,11 @@ export default function ClassDetail() {
                         {selectedSubmissionStudent.name[0].toUpperCase()}
                       </div>
                       <div>
-                        <div style={{ fontSize: "16px", fontWeight: 700, color: "#1a1a2e" }}>{selectedSubmissionStudent.name}</div>
-                        <div style={{ fontSize: "12px", color: "#9ca3af" }}>Submitted {formatDate(sub.submitted_at)}{sub.status === "late" ? " (Late)" : ""}</div>
+                        <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)" }}>{selectedSubmissionStudent.name}</div>
+                        <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>Submitted {formatDate(sub.submitted_at)}{sub.status === "late" ? " (Late)" : ""}</div>
                       </div>
                       <span style={{ marginLeft: "auto", fontSize: "11px", fontWeight: 700, padding: "4px 12px", borderRadius: "20px",
-                        background: (sub.status === "graded" || sub.status === "returned") ? "#f0f4ff" : "#f0fdf4",
+                        background: (sub.status === "graded" || sub.status === "returned") ? "var(--primary-tint)" : "#f0fdf4",
                         color: (sub.status === "graded" || sub.status === "returned") ? "#3B37CC" : "#22c55e" }}>
                         {(sub.status === "graded" || sub.status === "returned") ? `Graded: ${sub.grade}/${selectedAssign.points}` : "Submitted"}
                       </span>
@@ -2714,7 +3814,7 @@ export default function ClassDetail() {
 
                     {/* Submission content */}
                     {sub.content && (
-                      <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", padding: "16px", marginBottom: "16px", fontSize: "14px", color: "#374151", lineHeight: 1.7 }}>
+                      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px", marginBottom: "16px", fontSize: "14px", color: "var(--text-muted)", lineHeight: 1.7 }}>
                         {sub.content}
                       </div>
                     )}
@@ -2722,19 +3822,19 @@ export default function ClassDetail() {
                     {/* File */}
                     {sub.file_path && (
                       <a href={`http://localhost:5001/uploads/${sub.file_path}`} target="_blank" rel="noreferrer"
-                        style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#3B37CC", fontWeight: 600, background: "#f0f4ff", padding: "8px 16px", borderRadius: "10px", textDecoration: "none", border: "1px solid #a5b4fc", marginBottom: "20px" }}>
+                        style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#3B37CC", fontWeight: 600, background: "var(--primary-tint)", padding: "8px 16px", borderRadius: "10px", textDecoration: "none", border: "1px solid #a5b4fc", marginBottom: "20px" }}>
                         📎 View attached file
                       </a>
                     )}
 
                     {/* Grade section */}
-                    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", padding: "16px", marginBottom: "16px" }}>
-                      <div style={{ fontSize: "13px", fontWeight: 700, color: "#374151", marginBottom: "12px" }}>Grade</div>
+                    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px", marginBottom: "16px" }}>
+                      <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "12px" }}>Grade</div>
                       {(sub.status === "graded" || sub.status === "returned") ? (
                         <div style={{ display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
                           <span style={{ fontSize: "22px", fontWeight: 800, color: "#22c55e" }}>{sub.grade}</span>
-                          <span style={{ fontSize: "14px", color: "#6b7280" }}>/ {selectedAssign.points} pts</span>
-                          {sub.grade_comment && <span style={{ fontSize: "13px", color: "#374151", fontStyle: "italic" }}>— {sub.grade_comment}</span>}
+                          <span style={{ fontSize: "14px", color: "var(--text-muted)" }}>/ {selectedAssign.points} pts</span>
+                          {sub.grade_comment && <span style={{ fontSize: "13px", color: "var(--text-muted)", fontStyle: "italic" }}>— {sub.grade_comment}</span>}
                           {sub.status === "graded" && (
                             <button onClick={() => returnSubmission(sub.id)} disabled={returning[sub.id]}
                               style={{ marginLeft: "auto", background: "#f0fdf4", border: "1px solid #22c55e", color: "#15803d", borderRadius: "8px", padding: "6px 14px", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
@@ -2772,8 +3872,8 @@ export default function ClassDetail() {
                     </div>
 
                     {/* Private comment */}
-                    <div style={{ background: "#fff", border: "1px solid #e5e7eb", borderRadius: "12px", padding: "16px" }}>
-                      <div style={{ fontSize: "12px", fontWeight: 700, color: "#6b7280", marginBottom: "12px", letterSpacing: "0.05em" }}>🔒 PRIVATE COMMENT — {selectedSubmissionStudent.name}</div>
+                    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px" }}>
+                      <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "12px", letterSpacing: "0.05em" }}>🔒 PRIVATE COMMENT — {selectedSubmissionStudent.name}</div>
                       <SubmissionComments
                         assignId={selectedAssign.id}
                         studentId={selectedSubmissionStudent.id}
@@ -2795,24 +3895,24 @@ export default function ClassDetail() {
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "600px", maxHeight: "85vh", overflowY: "auto" }}>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "16px" }}>
               <div>
-                <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#1a1a2e", margin: "0 0 4px" }}>📝 {selectedAssign.title}</h2>
-                <div style={{ fontSize: "12px", color: "#9ca3af" }}>
+                <h2 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text)", margin: "0 0 4px" }}>📝 {selectedAssign.title}</h2>
+                <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>
                   {selectedAssign.due_date ? `Due: ${formatDate(selectedAssign.due_date)}` : "No due date"} • {selectedAssign.points} pts
                 </div>
               </div>
-              <button onClick={() => setSelectedAssign(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "#9ca3af" }}>×</button>
+              <button onClick={() => setSelectedAssign(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
             </div>
             {selectedAssign.instructions && (
-              <div style={{ background: "#f8f9fa", borderRadius: "10px", padding: "14px", marginBottom: "12px", fontSize: "14px", color: "#374151", lineHeight: 1.6 }}>
+              <div style={{ background: "var(--bg)", borderRadius: "10px", padding: "14px", marginBottom: "12px", fontSize: "14px", color: "var(--text-muted)", lineHeight: 1.6 }}>
                 {selectedAssign.instructions}
               </div>
             )}
             {selectedAssign.files?.length > 0 && (
               <div style={{ marginBottom: "16px" }}>
-                <div style={{ fontSize: "12px", fontWeight: 700, color: "#6b7280", marginBottom: "6px" }}>ATTACHMENTS</div>
+                <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "6px" }}>ATTACHMENTS</div>
                 {selectedAssign.files.map(f => (
                   <a key={f.id} href={`http://localhost:5001/uploads/${f.file_path}`} target="_blank" rel="noreferrer"
-                    style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#3B37CC", fontWeight: 600, background: "#f0f4ff", padding: "6px 12px", borderRadius: "8px", textDecoration: "none", border: "1px solid #a5b4fc", marginRight: "8px", marginBottom: "4px" }}>
+                    style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#3B37CC", fontWeight: 600, background: "var(--primary-tint)", padding: "6px 12px", borderRadius: "8px", textDecoration: "none", border: "1px solid #a5b4fc", marginRight: "8px", marginBottom: "4px" }}>
                     📄 {f.file_name}
                   </a>
                 ))}
@@ -2822,35 +3922,275 @@ export default function ClassDetail() {
         </div>
       )}
 
-      {/* Upload Modal */}
+      {/* Upload / Edit Material Modal — full screen Google Classroom style */}
       {uploadModal && (
-        <div style={overlayStyle} onClick={() => setUploadModal(false)}>
-          <div onClick={e => e.stopPropagation()} style={modalStyle}>
-            <h2 style={{ fontSize: "18px", fontWeight: 700, color: "#1a1a2e", margin: "0 0 20px" }}>Add New Material</h2>
-            <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-              <div>
-                <label style={lbl}>Title *</label>
-                <input value={uploadForm.title} onChange={e => setUploadForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Week 1 – Introduction" style={inp} autoFocus />
-              </div>
-              <div>
-                <label style={lbl}>Week</label>
-                <input type="number" min="1" max="20" value={uploadForm.week} onChange={e => setUploadForm(f => ({ ...f, week: e.target.value }))} style={{ ...inp, width: "80px" }} />
-              </div>
-              <div>
-                <label style={lbl}>Instructions</label>
-                <textarea value={uploadForm.instructions} onChange={e => setUploadForm(f => ({ ...f, instructions: e.target.value }))} placeholder="Instructions for students..." style={{ ...inp, height: "80px", resize: "none" }} />
-              </div>
-              <div>
-                <label style={lbl}>PDF File (optional)</label>
-                <input type="file" accept="application/pdf" ref={fileRef} onChange={e => setUploadFile(e.target.files[0])} style={{ fontSize: "13px" }} />
+        <div style={{ position: "fixed", inset: 0, zIndex: 1000, background: "var(--bg)", display: "flex", flexDirection: "column" }}>
+          {/* Top bar */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", height: "64px", background: "var(--surface)", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+              <button onClick={closeUploadModal}
+                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: "20px", padding: "4px", borderRadius: "50%", display: "flex", alignItems: "center" }}>✕</button>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div style={{ width: "32px", height: "32px", background: "#3B37CC", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <span style={{ color: "#fff", fontSize: "16px" }}>📄</span>
+                </div>
+                <span style={{ fontSize: "17px", fontWeight: 700, color: "var(--text)" }}>{materialEditId ? "Edit material" : "Create material"}</span>
               </div>
             </div>
-            {uploadError && <p style={{ color: "#ef4444", fontSize: "13px", marginTop: "10px" }}>{uploadError}</p>}
-            <div style={{ display: "flex", gap: "10px", marginTop: "20px" }}>
-              <button onClick={() => setUploadModal(false)} style={{ ...btnOutline, flex: 1 }}>Cancel</button>
-              <button onClick={handleUpload} disabled={uploading || !uploadForm.title.trim()} style={{ ...btnPrimary, flex: 1, opacity: (!uploadForm.title.trim() || uploading) ? 0.6 : 1 }}>
-                {uploading ? "Uploading..." : "Upload"}
-              </button>
+            <button onClick={handleUpload} disabled={uploading || !uploadForm.title.trim()}
+              style={{ background: uploading || !uploadForm.title.trim() ? "#c7d2fe" : "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 24px", fontSize: "14px", fontWeight: 700, cursor: uploading || !uploadForm.title.trim() ? "not-allowed" : "pointer", transition: "background 0.2s" }}>
+              {uploading ? "Saving..." : materialEditId ? "Save Changes" : "Post"}
+            </button>
+          </div>
+
+          {/* Body */}
+          <div style={{ flex: 1, overflowY: "auto", display: "flex", justifyContent: "center", padding: "32px 16px" }}>
+            <div style={{ width: "100%", maxWidth: "720px", display: "flex", flexDirection: "column", gap: "16px" }}>
+
+              {/* Title */}
+              <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", overflow: "hidden" }}>
+                <input
+                  value={uploadForm.title}
+                  onChange={e => setUploadForm(f => ({ ...f, title: e.target.value }))}
+                  placeholder="Title"
+                  autoFocus
+                  style={{ width: "100%", border: "none", outline: "none", fontSize: "22px", fontWeight: 600, color: "var(--text)", padding: "20px 24px", boxSizing: "border-box", background: "transparent" }}
+                />
+                <div style={{ height: "1px", background: "var(--surface-alt)", margin: "0 24px" }} />
+                <div style={{ padding: "4px 24px 16px", display: "flex", alignItems: "center", gap: "8px" }}>
+                  <span style={{ fontSize: "12px", color: "var(--text-faint)", fontWeight: 600 }}>WEEK</span>
+                  <input type="number" min="1" max="20" value={uploadForm.week}
+                    onChange={e => setUploadForm(f => ({ ...f, week: e.target.value }))}
+                    style={{ width: "56px", border: "1px solid var(--border)", borderRadius: "6px", padding: "4px 8px", fontSize: "14px", fontWeight: 600, color: "#3B37CC", textAlign: "center", outline: "none" }} />
+                </div>
+              </div>
+
+              {/* YouTube suggestions */}
+              <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "20px 24px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
+                  <div>
+                    <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)" }}>🎬 Related YouTube Videos</span>
+                    <span style={{ fontSize: "11px", color: "var(--text-faint)", marginLeft: "8px" }}>PDF ဖတ်ပြီး AI ကညွှန်းပေးမည်</span>
+                  </div>
+                  {uploadFile && (
+                    <button
+                      onClick={() => handleSuggestVideos(undefined, true)}
+                      disabled={suggestingVideos}
+                      style={{
+                        display: "flex", alignItems: "center", gap: "6px",
+                        background: suggestingVideos ? "var(--surface-alt)" : "#fff7ed",
+                        color: "#ea580c", border: "1px solid #fed7aa",
+                        borderRadius: "20px", padding: "5px 14px",
+                        fontSize: "12px", fontWeight: 700,
+                        cursor: suggestingVideos ? "not-allowed" : "pointer",
+                        flexShrink: 0,
+                      }}>
+                      {suggestingVideos ? <><span>⏳</span> Searching...</> : <><span>🔄</span> Re-search</>}
+                    </button>
+                  )}
+                </div>
+                {/* Language hint row */}
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: (suggestedVideos.length > 0 || suggestingVideos) ? "14px" : "8px" }}>
+                  <span style={{ fontSize: "11px", color: "var(--text-faint)", flexShrink: 0 }}>Video ဘာသာစကား:</span>
+                  {[{ label: "ENG", value: "English" }, { label: "KOR", value: "Korean" }].map(btn => (
+                    <button key={btn.value} onClick={() => setYtLanguageHint(btn.value)}
+                      style={{
+                        fontSize: "11px", fontWeight: 700,
+                        padding: "3px 12px", borderRadius: "14px",
+                        border: `1px solid ${ytLanguageHint === btn.value ? "#3B37CC" : "var(--border)"}`,
+                        background: ytLanguageHint === btn.value ? "#3B37CC" : "var(--surface-alt)",
+                        color: ytLanguageHint === btn.value ? "#fff" : "var(--text-muted)",
+                        cursor: "pointer", transition: "all 0.15s",
+                      }}>
+                      {btn.label}
+                    </button>
+                  ))}
+                </div>
+                {suggestingVideos && (
+                  <div style={{ display: "flex", gap: "10px" }}>
+                    {[1,2,3].map(i => (
+                      <div key={i} style={{ flex: 1, borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border)" }}>
+                        <div style={{ height: "80px", background: "linear-gradient(135deg, #fee2e2, #fecaca)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px" }}>▶</div>
+                        <div style={{ padding: "8px", background: "var(--surface-alt)" }}>
+                          <div style={{ height: "8px", background: "var(--border)", borderRadius: "4px", marginBottom: "4px" }} />
+                          <div style={{ height: "6px", background: "var(--border)", borderRadius: "4px", width: "70%" }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {suggestedVideos.length > 0 && (
+                  <div>
+                    <div style={{ display: "flex", gap: "10px", flexWrap: "nowrap", overflowX: "auto", paddingBottom: "4px" }}>
+                      {suggestedVideos.map((v, i) => {
+                        const isSelected = selectedVideoUrls.has(v.url);
+                        return (
+                          <div key={i} onClick={() => setSelectedVideoUrls(prev => {
+                            const next = new Set(prev);
+                            isSelected ? next.delete(v.url) : next.add(v.url);
+                            return next;
+                          })}
+                            style={{ flex: "0 0 200px", borderRadius: "8px", overflow: "hidden", border: `2px solid ${isSelected ? "#3B37CC" : "var(--border)"}`, cursor: "pointer", display: "block", transition: "border-color 0.15s, box-shadow 0.15s", boxShadow: isSelected ? "0 0 0 3px rgba(59,55,204,0.15)" : "none", userSelect: "none" }}>
+                            <div style={{ position: "relative" }}>
+                              {v.thumbnail ? (
+                                <img src={v.thumbnail} alt={v.title} style={{ width: "100%", height: "112px", objectFit: "cover", display: "block" }} />
+                              ) : (
+                                <div style={{ height: "112px", background: "#ef4444", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "32px", color: "#fff" }}>▶</div>
+                              )}
+                              <div style={{ position: "absolute", top: "6px", right: "6px", background: "rgba(0,0,0,0.65)", color: "#fff", fontSize: "10px", fontWeight: 700, padding: "2px 5px", borderRadius: "4px" }}>YouTube</div>
+                              {isSelected && (
+                                <div style={{ position: "absolute", top: "6px", left: "6px", background: "#3B37CC", color: "#fff", fontSize: "14px", width: "22px", height: "22px", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>
+                              )}
+                            </div>
+                            <div style={{ padding: "8px 10px", background: isSelected ? "rgba(59,55,204,0.06)" : "var(--surface)" }}>
+                              <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text)", lineHeight: 1.4, marginBottom: "3px", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{v.title}</div>
+                              <div style={{ fontSize: "10px", color: "var(--text-faint)" }}>{v.channel}</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "8px" }}>
+                      <div style={{ fontSize: "11px", color: selectedVideoUrls.size > 0 ? "#3B37CC" : "var(--text-faint)" }}>
+                        {selectedVideoUrls.size > 0
+                          ? `✓ ${selectedVideoUrls.size} video ရွေးထားသည် — post လုပ်သောအခါ lesson မှာ ထည့်သွင်းမည်`
+                          : "Video ကို နှိပ်ပြီး ရွေးပါ — ကြိုက်သောဟာကို lesson မှာ ထည့်နိုင်သည်"}
+                      </div>
+                      {selectedVideoUrls.size > 0 && (
+                        <button onClick={() => setSelectedVideoUrls(new Set())}
+                          style={{ fontSize: "10px", color: "var(--text-faint)", background: "none", border: "none", cursor: "pointer", padding: "0" }}>
+                          ဖျက်မည်
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {!suggestingVideos && suggestedVideos.length === 0 && (
+                  <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--text-faint)", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span style={{ fontSize: "16px" }}>📄</span>
+                    PDF file တင်လိုက်တာနဲ့ AI က file အကြောင်းကို ဖတ်ပြီး သင်ခန်းစာနဲ့ ကိုက်ညီတဲ့ YouTube videos အလိုအလျောက် ညွှန်းပေးမည်
+                  </div>
+                )}
+              </div>
+
+              {/* Instructions */}
+              <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "20px 24px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
+                  <div>
+                    <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)" }}>Instructions for students</span>
+                    <span style={{ fontSize: "11px", color: "var(--text-faint)", marginLeft: "8px" }}>AI က သင်ရိုးကြည့်ပြီး ရေးပေးမည်</span>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <div style={{ display: "flex", borderRadius: "20px", overflow: "hidden", border: "1px solid var(--border)" }}>
+                      {["en", "ko"].map(lang => (
+                        <button key={lang} onClick={() => {
+                          setInstructionLang(lang);
+                          if (uploadFile && !generatingInstructions) handleGenerateInstructions(lang);
+                        }}
+                          style={{ padding: "4px 12px", fontSize: "11px", fontWeight: 700, border: "none", cursor: "pointer", background: instructionLang === lang ? "#3B37CC" : "var(--surface)", color: instructionLang === lang ? "#fff" : "var(--text-faint)", transition: "background 0.15s" }}>
+                          {lang === "en" ? "ENG" : "KOR"}
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={handleGenerateInstructions}
+                      disabled={generatingInstructions || !uploadFile}
+                      title={!uploadFile ? "PDF တင်မှ အသုံးပြုနိုင်မည်" : ""}
+                      style={{ display: "flex", alignItems: "center", gap: "6px", background: generatingInstructions ? "var(--surface-alt)" : !uploadFile ? "var(--surface-alt)" : "var(--primary-tint)", color: !uploadFile ? "var(--text-faint)" : "#3B37CC", border: `1px solid ${!uploadFile ? "var(--border)" : "#c7d2fe"}`, borderRadius: "20px", padding: "5px 14px", fontSize: "12px", fontWeight: 700, cursor: (generatingInstructions || !uploadFile) ? "not-allowed" : "pointer", opacity: !uploadFile ? 0.6 : 1 }}>
+                      {generatingInstructions ? (
+                        <><span style={{ fontSize: "14px" }}>⏳</span> Generating...</>
+                      ) : (
+                        <><span style={{ fontSize: "14px" }}>{!uploadFile ? "🔒" : "✨"}</span> Generate with AI</>
+                      )}
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  value={uploadForm.instructions}
+                  onChange={e => setUploadForm(f => ({ ...f, instructions: e.target.value }))}
+                  placeholder="Add instructions for your students..."
+                  style={{ width: "100%", minHeight: "120px", border: "1px solid var(--border)", borderRadius: "8px", padding: "12px", fontSize: "14px", color: "var(--text-muted)", resize: "vertical", outline: "none", boxSizing: "border-box", fontFamily: "inherit", lineHeight: "1.6" }}
+                />
+              </div>
+
+              {/* File upload */}
+              <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "20px 24px" }}>
+                <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", display: "block", marginBottom: "12px" }}>Attach PDF (optional)</span>
+                {uploadFile ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px", background: "#f8f9ff", border: "1px solid #c7d2fe", borderRadius: "10px", padding: "12px 16px" }}>
+                    <span style={{ fontSize: "24px" }}>📑</span>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>{uploadFile.name}</div>
+                      <div style={{ fontSize: "11px", color: "var(--text-faint)" }}>{(uploadFile.size / 1024).toFixed(0)} KB</div>
+                    </div>
+                    <button onClick={() => { setUploadFile(null); if (fileRef.current) fileRef.current.value = ""; }}
+                      style={{ background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", fontSize: "18px" }}>✕</button>
+                  </div>
+                ) : (
+                  <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "2px dashed #c7d2fe", borderRadius: "10px", padding: "32px", cursor: "pointer", color: "var(--text-muted)", gap: "8px" }}>
+                    <span style={{ fontSize: "32px" }}>📎</span>
+                    <span style={{ fontSize: "14px", fontWeight: 600 }}>Click to attach a PDF</span>
+                    <span style={{ fontSize: "12px", color: "var(--text-faint)" }}>PDF files only</span>
+                    <input type="file" accept="application/pdf" ref={fileRef} onChange={e => {
+                      const f = e.target.files[0];
+                      if (!f) return;
+                      setUploadFile(f);
+                      setSuggestedVideos([]);
+                      setYtNextPageToken(null);
+                      cachedInstructionText.current = "";
+                      handleSuggestVideos(f);
+                    }} style={{ display: "none" }} />
+                  </label>
+                )}
+              </div>
+
+              {/* Additional attachments */}
+              <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "20px 24px" }}>
+                <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", display: "block", marginBottom: "12px" }}>Additional attachments (optional)</span>
+
+                {materialEditId && selectedMat?.files?.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
+                    {selectedMat.files.map(f => (
+                      <div key={f.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: deleteAttachmentIds.includes(f.id) ? "var(--text-faint)" : "var(--text-muted)", background: deleteAttachmentIds.includes(f.id) ? "#fef2f2" : "var(--surface-alt)", padding: "8px 12px", borderRadius: "8px", border: `1px solid ${deleteAttachmentIds.includes(f.id) ? "#fca5a5" : "var(--border)"}`, textDecoration: deleteAttachmentIds.includes(f.id) ? "line-through" : "none" }}>
+                        <span>📄 {f.file_name}</span>
+                        <button type="button" onClick={() => setDeleteAttachmentIds(prev => prev.includes(f.id) ? prev.filter(x => x !== f.id) : [...prev, f.id])}
+                          style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 700, fontSize: "12px", color: deleteAttachmentIds.includes(f.id) ? "#22c55e" : "#ef4444" }}>
+                          {deleteAttachmentIds.includes(f.id) ? "↩ Restore" : "× Remove"}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {uploadExtraFiles.length > 0 && (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
+                    {uploadExtraFiles.map((f, i) => (
+                      <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: "var(--text)", background: "#f8f9ff", padding: "8px 12px", borderRadius: "8px", border: "1px solid #c7d2fe" }}>
+                        <span>📎 {f.name}</span>
+                        <button type="button" onClick={() => setUploadExtraFiles(prev => prev.filter((_, idx) => idx !== i))}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: "14px" }}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <input ref={extraFileRef} type="file" multiple style={{ display: "none" }}
+                  onChange={e => {
+                    const picked = Array.from(e.target.files);
+                    setUploadExtraFiles(prev => [...prev, ...picked]);
+                    e.target.value = "";
+                  }} />
+                <button type="button" onClick={() => extraFileRef.current?.click()}
+                  style={{ fontSize: "13px", color: "#3B37CC", background: "var(--primary-tint)", border: "1px solid #a5b4fc", borderRadius: "8px", padding: "8px 16px", cursor: "pointer", fontWeight: 600 }}>
+                  + Add files
+                </button>
+              </div>
+
+              {uploadError && (
+                <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px", padding: "12px 16px", color: "#dc2626", fontSize: "13px" }}>
+                  {uploadError}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -2859,8 +4199,61 @@ export default function ClassDetail() {
   );
 }
 
+// ── Editable comment content — shows edit/delete only for the comment's own author ──
+function CommentContent({ comment, isMine, onUpdate, onDelete }) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(comment.content);
+  const [busy, setBusy] = useState(false);
+
+  async function save() {
+    if (!text.trim()) return;
+    setBusy(true);
+    try {
+      const { data } = await API.put(`/classroom/comments/${comment.id}`, { content: text.trim() });
+      onUpdate(data);
+      setEditing(false);
+    } catch (err) { console.error(err); }
+    finally { setBusy(false); }
+  }
+
+  async function remove() {
+    if (!window.confirm("Delete this comment?")) return;
+    setBusy(true);
+    try {
+      await API.delete(`/classroom/comments/${comment.id}`);
+      onDelete();
+    } catch (err) { console.error(err); }
+    finally { setBusy(false); }
+  }
+
+  if (editing) {
+    return (
+      <div>
+        <textarea value={text} onChange={e => setText(e.target.value)} rows={2} autoFocus
+          style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "6px", padding: "6px 8px", fontSize: "13px", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} />
+        <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
+          <button onClick={save} disabled={busy || !text.trim()} style={{ fontSize: "11px", fontWeight: 700, color: "#3B37CC", background: "none", border: "none", cursor: "pointer", padding: 0 }}>Save</button>
+          <button onClick={() => { setEditing(false); setText(comment.content); }} style={{ fontSize: "11px", color: "#9aa0a6", background: "none", border: "none", cursor: "pointer", padding: 0 }}>Cancel</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <span>
+      {comment.content}
+      {isMine && (
+        <span style={{ marginLeft: "8px", whiteSpace: "nowrap" }}>
+          <button onClick={() => setEditing(true)} title="Edit" style={{ background: "none", border: "none", cursor: "pointer", fontSize: "11px", color: "#9aa0a6", padding: "0 2px" }}>✏️</button>
+          <button onClick={remove} disabled={busy} title="Delete" style={{ background: "none", border: "none", cursor: "pointer", fontSize: "11px", color: "#9aa0a6", padding: "0 2px" }}>🗑️</button>
+        </span>
+      )}
+    </span>
+  );
+}
+
 // ── Submission Comments (inline, for teacher's assignment detail) ──
-function SubmissionComments({ assignId, studentId, studentName, myName }) {
+function SubmissionComments({ assignId, studentId, studentName, myName, myId }) {
   const [comments, setComments] = useState([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -2886,23 +4279,26 @@ function SubmissionComments({ assignId, studentId, studentName, myName }) {
   }
 
   return (
-    <div style={{ borderTop: "1px solid #e5e7eb", paddingTop: "10px" }}>
-      <div style={{ fontSize: "11px", fontWeight: 700, color: "#6b7280", marginBottom: "8px", letterSpacing: "0.05em" }}>
+    <div style={{ borderTop: "1px solid var(--border)", paddingTop: "10px" }}>
+      <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "8px", letterSpacing: "0.05em" }}>
         🔒 PRIVATE COMMENT — {studentName}
       </div>
       <div style={{ maxHeight: "160px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", marginBottom: "8px" }}>
         {comments.length === 0
-          ? <div style={{ fontSize: "12px", color: "#9ca3af" }}>No comments yet.</div>
+          ? <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>No comments yet.</div>
           : comments.map((c, i) => (
-            <div key={i} style={{ fontSize: "12px", color: "#374151" }}>
-              <span style={{ fontWeight: 700 }}>{c.author_name || (c.author_id === studentId ? studentName : myName)}:</span> {c.content}
+            <div key={i} style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+              <span style={{ fontWeight: 700 }}>{c.author_name || (c.author_id === studentId ? studentName : myName)}:</span>{" "}
+              <CommentContent comment={c} isMine={c.author_id === myId}
+                onUpdate={updated => setComments(prev => prev.map(x => x.id === c.id ? updated : x))}
+                onDelete={() => setComments(prev => prev.filter(x => x.id !== c.id))} />
             </div>
           ))
         }
       </div>
       <div style={{ display: "flex", gap: "6px" }}>
         <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()}
-          placeholder="Add private comment..." style={{ flex: 1, padding: "6px 10px", border: "1px solid #e5e7eb", borderRadius: "8px", fontSize: "12px" }} />
+          placeholder="Add private comment..." style={{ flex: 1, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: "8px", fontSize: "12px" }} />
         <button onClick={send} disabled={sending || !input.trim()}
           style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "6px 12px", fontSize: "12px", cursor: "pointer", fontWeight: 600 }}>
           Send
@@ -2915,11 +4311,11 @@ function SubmissionComments({ assignId, studentId, studentName, myName }) {
 // ── Stream Section Component ──
 function StreamSection({ icon, title, onMore, children, empty, emptyMsg }) {
   return (
-    <div style={{ background: "#fff", borderRadius: "12px", border: "1px solid #e5e7eb", overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid #f3f4f6", background: "#fafafa" }}>
+    <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid var(--surface-alt)", background: "#fafafa" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span style={{ fontSize: "18px" }}>{icon}</span>
-          <span style={{ fontSize: "15px", fontWeight: 700, color: "#1a1a2e" }}>{title}</span>
+          <span style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)" }}>{title}</span>
         </div>
         <button onClick={onMore} style={{ fontSize: "12px", color: "#3B37CC", fontWeight: 600, background: "none", border: "none", cursor: "pointer" }}>
           More »
@@ -2927,7 +4323,7 @@ function StreamSection({ icon, title, onMore, children, empty, emptyMsg }) {
       </div>
       <div style={{ padding: "6px 18px 10px" }}>
         {empty
-          ? <div style={{ fontSize: "13px", color: "#9ca3af", padding: "12px 0" }}>{emptyMsg}</div>
+          ? <div style={{ fontSize: "13px", color: "var(--text-faint)", padding: "12px 0" }}>{emptyMsg}</div>
           : children
         }
       </div>
@@ -2937,15 +4333,15 @@ function StreamSection({ icon, title, onMore, children, empty, emptyMsg }) {
 
 function StreamRow({ label, date, badge, badgeColor, onClick, actions }) {
   return (
-    <div onClick={onClick} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid #f9fafb", cursor: onClick ? "pointer" : "default", gap: "6px" }}
-      onMouseEnter={e => onClick && (e.currentTarget.style.background = "#f9fafb")}
+    <div onClick={onClick} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--surface-alt)", cursor: onClick ? "pointer" : "default", gap: "6px" }}
+      onMouseEnter={e => onClick && (e.currentTarget.style.background = "var(--surface-alt)")}
       onMouseLeave={e => onClick && (e.currentTarget.style.background = "transparent")}>
-      <span style={{ fontSize: "13px", color: "#374151", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      <span style={{ fontSize: "13px", color: "var(--text-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         · {label}
       </span>
       {actions}
-      {badge && <span style={{ fontSize: "11px", color: badgeColor || "#6b7280", fontWeight: 600, flexShrink: 0 }}>{badge}</span>}
-      {date && !badge && <span style={{ fontSize: "11px", color: "#9ca3af", flexShrink: 0 }}>{date}</span>}
+      {badge && <span style={{ fontSize: "11px", color: badgeColor || "var(--text-muted)", fontWeight: 600, flexShrink: 0 }}>{badge}</span>}
+      {date && !badge && <span style={{ fontSize: "11px", color: "var(--text-faint)", flexShrink: 0 }}>{date}</span>}
     </div>
   );
 }
@@ -2964,24 +4360,24 @@ function PostCard({ post, myName, isTeacher, onEdit, onDelete, expandedComments,
           {(post.author_name || "T")[0].toUpperCase()}
         </div>
         <div>
-          <div style={{ fontSize: "14px", fontWeight: 600, color: "#1a1a2e" }}>{post.author_name}</div>
-          <div style={{ fontSize: "12px", color: "#9ca3af" }}>{formatDate(post.created_at)}</div>
+          <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{post.author_name}</div>
+          <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{formatDate(post.created_at)}</div>
         </div>
         {isMaterial && (
-          <span style={{ marginLeft: "auto", background: "#f0f4ff", color: "#3B37CC", fontSize: "11px", fontWeight: 700, padding: "3px 10px", borderRadius: "20px" }}>
+          <span style={{ marginLeft: "auto", background: "var(--primary-tint)", color: "#3B37CC", fontSize: "11px", fontWeight: 700, padding: "3px 10px", borderRadius: "20px" }}>
             📄 Material
           </span>
         )}
         {isTeacher && !isMaterial && (
           <div style={{ marginLeft: isMaterial ? "8px" : "auto", display: "flex", gap: "6px" }}>
-            <button onClick={() => onEdit(post)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "14px", color: "#9ca3af", padding: "2px 6px" }} title="Edit">✏️</button>
+            <button onClick={() => onEdit(post)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "14px", color: "var(--text-faint)", padding: "2px 6px" }} title="Edit">✏️</button>
             <button onClick={() => onDelete(post.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "14px", color: "#ef4444", padding: "2px 6px" }} title="Delete">🗑️</button>
           </div>
         )}
       </div>
 
       {/* Content */}
-      <p style={{ fontSize: "14px", color: "#374151", lineHeight: 1.6, margin: "0 0 12px" }}>
+      <p style={{ fontSize: "14px", color: "var(--text-muted)", lineHeight: 1.6, margin: "0 0 12px" }}>
         {post.content}
       </p>
 
@@ -2990,9 +4386,9 @@ function PostCard({ post, myName, isTeacher, onEdit, onDelete, expandedComments,
         <div style={matPostCard}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <div>
-              <div style={{ fontSize: "14px", fontWeight: 600, color: "#1a1a2e" }}>{post.material_title}</div>
+              <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{post.material_title}</div>
               {post.material_instructions && (
-                <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "4px" }}>{post.material_instructions}</div>
+                <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>{post.material_instructions}</div>
               )}
             </div>
             {post.material_file_url && (
@@ -3005,7 +4401,7 @@ function PostCard({ post, myName, isTeacher, onEdit, onDelete, expandedComments,
       )}
 
       {/* Comment toggle */}
-      <div style={{ borderTop: "1px solid #f3f4f6", marginTop: "12px", paddingTop: "10px" }}>
+      <div style={{ borderTop: "1px solid var(--surface-alt)", marginTop: "12px", paddingTop: "10px" }}>
         <button
           onClick={() => setExpandedComments(e => ({ ...e, [post.id]: !e[post.id] }))}
           style={commentToggle}
@@ -3022,8 +4418,8 @@ function PostCard({ post, myName, isTeacher, onEdit, onDelete, expandedComments,
               <div style={commentAvatar}>{(c.author_name || "U")[0].toUpperCase()}</div>
               <div style={commentBubble}>
                 <span style={{ fontWeight: 600, fontSize: "13px" }}>{c.author_name} </span>
-                <span style={{ fontSize: "13px", color: "#374151" }}>{c.content}</span>
-                <div style={{ fontSize: "11px", color: "#9ca3af", marginTop: "2px" }}>{formatDate(c.created_at)}</div>
+                <span style={{ fontSize: "13px", color: "var(--text-muted)" }}>{c.content}</span>
+                <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "2px" }}>{formatDate(c.created_at)}</div>
               </div>
             </div>
           ))}
@@ -3067,7 +4463,7 @@ function QuizView({ questions }) {
     <div>
       {questions.map((q, i) => (
         <div key={i} style={{ marginBottom: "24px" }}>
-          <div style={{ fontSize: "14px", fontWeight: 700, color: "#1a1a2e", marginBottom: "12px" }}>
+          <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)", marginBottom: "12px" }}>
             Q{i + 1}. {q.question}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
@@ -3075,12 +4471,12 @@ function QuizView({ questions }) {
               const letter = opt[0];
               const isSelected = answers[i] === letter;
               const isCorrect = letter === q.answer;
-              let bg = "#fff", border = "1px solid #e5e7eb", color = "#374151";
+              let bg = "#fff", border = "1px solid var(--border)", color = "var(--text-muted)";
               if (submitted) {
                 if (isCorrect) { bg = "#f0fdf4"; border = "2px solid #22c55e"; color = "#15803d"; }
                 else if (isSelected) { bg = "#fef2f2"; border = "2px solid #ef4444"; color = "#dc2626"; }
               } else if (isSelected) {
-                bg = "#f0f4ff"; border = "2px solid #3B37CC"; color = "#3B37CC";
+                bg = "var(--primary-tint)"; border = "2px solid #3B37CC"; color = "#3B37CC";
               }
               return (
                 <div
@@ -3096,7 +4492,7 @@ function QuizView({ questions }) {
             })}
           </div>
           {submitted && (
-            <div style={{ fontSize: "12px", color: "#6b7280", marginTop: "8px", fontStyle: "italic" }}>
+            <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "8px", fontStyle: "italic" }}>
               💡 {q.explanation}
             </div>
           )}
@@ -3111,11 +4507,11 @@ function QuizView({ questions }) {
           Submit Quiz
         </button>
       ) : (
-        <div style={{ background: score === questions.length ? "#f0fdf4" : "#f0f4ff", borderRadius: "10px", padding: "16px", textAlign: "center" }}>
+        <div style={{ background: score === questions.length ? "#f0fdf4" : "var(--primary-tint)", borderRadius: "10px", padding: "16px", textAlign: "center" }}>
           <div style={{ fontSize: "28px", fontWeight: 800, color: score === questions.length ? "#15803d" : "#3B37CC" }}>
             {score}/{questions.length}
           </div>
-          <div style={{ fontSize: "14px", color: "#6b7280", marginTop: "4px" }}>
+          <div style={{ fontSize: "14px", color: "var(--text-muted)", marginTop: "4px" }}>
             {score === questions.length ? "Perfect! 🎉" : score >= 2 ? "Good job! 👍" : "Keep studying! 📚"}
           </div>
         </div>
@@ -3132,40 +4528,40 @@ function formatDate(dateStr) {
 }
 
 // ── Styles ──
-const layout = { display: "flex", minHeight: "100vh", background: "#f8f9fa" };
+const layout = { display: "flex", minHeight: "100vh", background: "var(--bg)" };
 
 const topHeader = {
-  background: "#fff", borderBottom: "1px solid #e5e7eb",
+  background: "var(--surface)", borderBottom: "1px solid var(--border)",
   padding: "14px 28px", display: "flex", alignItems: "center",
   justifyContent: "space-between", position: "sticky", top: 0, zIndex: 50,
 };
 
 const backBtn = {
   background: "none", border: "none", cursor: "pointer",
-  fontSize: "18px", color: "#6b7280", padding: "4px 8px",
+  fontSize: "18px", color: "var(--text-muted)", padding: "4px 8px",
 };
 
 const tabBtn = (active) => ({
   padding: "8px 18px", borderRadius: "8px", border: "none",
   fontSize: "14px", fontWeight: 600, cursor: "pointer",
   background: active ? "#3B37CC" : "transparent",
-  color: active ? "#fff" : "#6b7280",
+  color: active ? "#fff" : "var(--text-muted)",
 });
 
 const avatarSm = {
   width: "36px", height: "36px", borderRadius: "50%",
-  background: "#e5e7eb", display: "flex", alignItems: "center",
-  justifyContent: "center", fontSize: "14px", fontWeight: 700, color: "#374151",
+  background: "var(--border)", display: "flex", alignItems: "center",
+  justifyContent: "center", fontSize: "14px", fontWeight: 700, color: "var(--text-muted)",
 };
 
 const announceCard = {
-  background: "#fff", border: "1px solid #e5e7eb",
+  background: "var(--surface)", border: "1px solid var(--border)",
   borderRadius: "12px", padding: "16px 20px", marginBottom: "20px",
 };
 
 const announceTextarea = {
   flex: 1, border: "none", outline: "none", fontSize: "14px",
-  color: "#374151", resize: "none", background: "transparent",
+  color: "var(--text-muted)", resize: "none", background: "transparent",
   fontFamily: "inherit", lineHeight: 1.6,
 };
 
@@ -3176,12 +4572,12 @@ const postBtn = {
 };
 
 const postCard = {
-  background: "#fff", border: "1px solid #e5e7eb",
+  background: "var(--surface)", border: "1px solid var(--border)",
   borderRadius: "12px", padding: "20px", marginBottom: "16px",
 };
 
 const matPostCard = {
-  background: "#f8f9fa", border: "1px solid #e5e7eb",
+  background: "var(--bg)", border: "1px solid var(--border)",
   borderRadius: "10px", padding: "14px 16px", marginBottom: "4px",
 };
 
@@ -3193,7 +4589,7 @@ const dlBtn = {
 
 const commentToggle = {
   background: "none", border: "none", cursor: "pointer",
-  fontSize: "13px", color: "#6b7280", fontWeight: 500, padding: "4px 0",
+  fontSize: "13px", color: "var(--text-muted)", fontWeight: 500, padding: "4px 0",
 };
 
 const commentRow = {
@@ -3201,19 +4597,19 @@ const commentRow = {
 };
 
 const commentAvatar = {
-  width: "28px", height: "28px", borderRadius: "50%", background: "#e5e7eb",
+  width: "28px", height: "28px", borderRadius: "50%", background: "var(--border)",
   display: "flex", alignItems: "center", justifyContent: "center",
-  fontSize: "12px", fontWeight: 700, color: "#374151", flexShrink: 0,
+  fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", flexShrink: 0,
 };
 
 const commentBubble = {
-  background: "#f3f4f6", borderRadius: "12px", padding: "8px 12px",
-  fontSize: "13px", color: "#374151", flex: 1,
+  background: "var(--surface-alt)", borderRadius: "12px", padding: "8px 12px",
+  fontSize: "13px", color: "var(--text-muted)", flex: 1,
 };
 
 const commentInput = {
   flex: 1, padding: "8px 14px", borderRadius: "20px",
-  border: "1px solid #e5e7eb", fontSize: "13px", outline: "none",
+  border: "1px solid var(--border)", fontSize: "13px", outline: "none",
 };
 
 const sendBtn = {
@@ -3229,13 +4625,13 @@ const aiCard = {
 };
 
 const aiBtn = {
-  marginTop: "14px", background: "#fff", color: "#3B37CC",
+  marginTop: "14px", background: "var(--surface)", color: "#3B37CC",
   border: "none", borderRadius: "8px", padding: "8px 16px",
   fontSize: "13px", fontWeight: 600, cursor: "pointer", width: "100%",
 };
 
 const sideCard = {
-  background: "#fff", border: "1px solid #e5e7eb",
+  background: "var(--surface)", border: "1px solid var(--border)",
   borderRadius: "14px", padding: "16px 20px",
 };
 
@@ -3247,32 +4643,32 @@ const banner = {
 };
 
 const newMatBtn = {
-  background: "#fff", color: "#3B37CC", border: "none",
+  background: "var(--surface)", color: "#3B37CC", border: "none",
   borderRadius: "8px", padding: "10px 20px", fontSize: "13px",
   fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
 };
 
 const weekLabel = {
-  fontSize: "12px", fontWeight: 700, color: "#9ca3af",
+  fontSize: "12px", fontWeight: 700, color: "var(--text-faint)",
   textTransform: "uppercase", letterSpacing: "1px", padding: "14px 0 6px",
 };
 
 const matRow = {
   display: "flex", justifyContent: "space-between", alignItems: "center",
-  padding: "14px 18px", background: "#fff", border: "1px solid #e5e7eb",
+  padding: "14px 18px", background: "var(--surface)", border: "1px solid var(--border)",
   borderRadius: "10px", marginBottom: "3px", cursor: "pointer",
 };
 
 const matIcon = {
   width: "36px", height: "36px", borderRadius: "8px",
-  background: "#f0f4ff", display: "flex", alignItems: "center",
+  background: "var(--primary-tint)", display: "flex", alignItems: "center",
   justifyContent: "center", fontSize: "16px", flexShrink: 0,
 };
 
 const fileChip = {
   display: "flex", alignItems: "center", gap: "8px",
-  background: "#fff", border: "1px solid #e5e7eb", borderRadius: "8px",
-  padding: "8px 14px", fontSize: "13px", color: "#374151",
+  background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px",
+  padding: "8px 14px", fontSize: "13px", color: "var(--text-muted)",
   textDecoration: "none", maxWidth: "100%", boxSizing: "border-box",
 };
 
@@ -3292,13 +4688,13 @@ const sectionHead = {
 
 const memberRow = {
   display: "flex", alignItems: "center", gap: "12px",
-  padding: "12px 16px", background: "#fff", borderRadius: "10px",
-  border: "1px solid #e5e7eb", marginBottom: "4px",
+  padding: "12px 16px", background: "var(--surface)", borderRadius: "10px",
+  border: "1px solid var(--border)", marginBottom: "4px",
 };
 
 const memberAvatar = {
   width: "40px", height: "40px", borderRadius: "50%",
-  background: "#e5e7eb", color: "#374151", display: "flex",
+  background: "var(--border)", color: "var(--text-muted)", display: "flex",
   alignItems: "center", justifyContent: "center",
   fontSize: "16px", fontWeight: 700, flexShrink: 0,
 };
@@ -3309,7 +4705,7 @@ const overlayStyle = {
 };
 
 const modalStyle = {
-  background: "#fff", borderRadius: "16px", padding: "28px",
+  background: "var(--surface)", borderRadius: "16px", padding: "28px",
   width: "420px", maxWidth: "92vw",
 };
 
@@ -3320,16 +4716,16 @@ const btnPrimary = {
 };
 
 const btnOutline = {
-  background: "#fff", color: "#6b7280", padding: "11px 20px",
+  background: "var(--surface)", color: "var(--text-muted)", padding: "11px 20px",
   borderRadius: "10px", fontSize: "14px", fontWeight: 600,
-  border: "1px solid #d1d5db", cursor: "pointer", width: "100%",
+  border: "1px solid var(--border)", cursor: "pointer", width: "100%",
 };
 
-const lbl = { display: "block", fontSize: "13px", fontWeight: 600, color: "#374151", marginBottom: "6px" };
-const inp = { width: "100%", padding: "10px 14px", borderRadius: "8px", border: "1px solid #d1d5db", fontSize: "14px", outline: "none", boxSizing: "border-box" };
+const lbl = { display: "block", fontSize: "13px", fontWeight: 600, color: "var(--text-muted)", marginBottom: "6px" };
+const inp = { width: "100%", padding: "10px 14px", borderRadius: "8px", border: "1px solid var(--border)", fontSize: "14px", outline: "none", boxSizing: "border-box" };
 
 const aiMentorPanel = {
-  background: "#fff", border: "1px solid #e5e7eb",
+  background: "var(--surface)", border: "1px solid var(--border)",
   borderRadius: "16px", padding: "20px",
   position: "sticky", top: "80px",
 };

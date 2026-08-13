@@ -44,3 +44,50 @@ test("detectDocumentText returns the document annotation", async () => {
 
   assert.equal(await vision.detectDocumentText(Buffer.from("document")), annotation);
 });
+
+test("rejects cleanly with VISION_NOT_CONFIGURED when GOOGLE_APPLICATION_CREDENTIALS is unset, without touching the real client", async () => {
+  const original = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  vision.setVisionClientForTests(null);
+
+  try {
+    await assert.rejects(
+      () => vision.extractImageContext(Buffer.from("image")),
+      (error) => {
+        assert.equal(error.code, "VISION_NOT_CONFIGURED");
+        return true;
+      }
+    );
+    await assert.rejects(
+      () => vision.detectDocumentText(Buffer.from("document")),
+      (error) => {
+        assert.equal(error.code, "VISION_NOT_CONFIGURED");
+        return true;
+      }
+    );
+  } finally {
+    if (original === undefined) delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    else process.env.GOOGLE_APPLICATION_CREDENTIALS = original;
+    vision.setVisionClientForTests(null);
+  }
+});
+
+test("rejects cleanly with VISION_NOT_CONFIGURED when GOOGLE_APPLICATION_CREDENTIALS points to a missing file", async () => {
+  const original = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  process.env.GOOGLE_APPLICATION_CREDENTIALS = "/tmp/does-not-exist-vision-credentials.json";
+  vision.setVisionClientForTests(null);
+
+  try {
+    await assert.rejects(
+      () => vision.detectDocumentText(Buffer.from("document")),
+      (error) => {
+        assert.equal(error.code, "VISION_NOT_CONFIGURED");
+        return true;
+      }
+    );
+  } finally {
+    if (original === undefined) delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    else process.env.GOOGLE_APPLICATION_CREDENTIALS = original;
+    vision.setVisionClientForTests(null);
+  }
+});

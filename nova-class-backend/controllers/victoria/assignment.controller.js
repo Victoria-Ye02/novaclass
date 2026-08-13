@@ -1,6 +1,7 @@
 const pool = require("../../config/db");
 const fs = require("fs");
 const { completeText } = require("../../services/ai/groqText");
+const { notifyUsers, notifyUser } = require("../../services/notifications");
 
 async function checkAccess(classId, userId) {
   const [classes] = await pool.query("SELECT * FROM classes WHERE id = ?", [classId]);
@@ -68,13 +69,14 @@ exports.createAssignment = async (req, res) => {
     if (access.error) return res.status(access.status).json({ error: access.error });
     if (access.role !== "teacher") return res.status(403).json({ error: "Teachers only" });
 
-    const { title, instructions, due_date, points, is_draft } = req.body;
+    const { title, instructions, due_date, points, is_draft, material_id } = req.body;
     if (!title?.trim()) return res.status(400).json({ error: "Title is required" });
     const draft = is_draft ? 1 : 0;
+    const matId = material_id ? parseInt(material_id) : null;
 
     const [result] = await pool.query(
-      "INSERT INTO assignments (class_id, title, instructions, due_date, points, is_draft, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      [req.params.id, title.trim(), instructions || null, due_date || null, points || 100, draft, userId]
+      "INSERT INTO assignments (class_id, title, instructions, due_date, points, is_draft, created_by, material_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [req.params.id, title.trim(), instructions || null, due_date || null, points || 100, draft, userId, matId]
     );
     const assignId = result.insertId;
 
@@ -92,6 +94,15 @@ exports.createAssignment = async (req, res) => {
         "INSERT INTO class_posts (class_id, author_id, content, type) VALUES (?, ?, ?, 'announcement')",
         [req.params.id, userId, `📝 New assignment: ${title.trim()}`]
       );
+      const [members] = await pool.query(
+        "SELECT user_id FROM class_members WHERE class_id = ?",
+        [req.params.id]
+      );
+      await notifyUsers(members.map(m => m.user_id), {
+        type: "assignment_created",
+        title: `New assignment: ${title.trim()}`,
+        linkUrl: `/classroom/${req.params.id}`,
+      });
     }
 
     const [[assignment]] = await pool.query(
@@ -204,6 +215,14 @@ exports.gradeSubmission = async (req, res) => {
        JOIN users u ON u.id = s.student_id WHERE s.id = ?`,
       [req.params.id]
     );
+
+    const [[assignment]] = await pool.query("SELECT title FROM assignments WHERE id = ?", [sub.assignment_id]);
+    await notifyUser(sub.student_id, {
+      type: "submission_graded",
+      title: `Your submission for "${assignment.title}" was graded`,
+      linkUrl: `/classroom/${sub.class_id}`,
+    });
+
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -345,6 +364,43 @@ exports.addComment = async (req, res) => {
       [result.insertId]
     );
     res.status(201).json(comment);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// PUT /api/classroom/comments/:commentId  (author only, teacher or student)
+exports.editComment = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [[comment]] = await pool.query("SELECT * FROM assignment_comments WHERE id = ?", [req.params.commentId]);
+    if (!comment) return res.status(404).json({ error: "Not found" });
+    if (comment.author_id !== userId) return res.status(403).json({ error: "You can only edit your own comments" });
+
+    const { content } = req.body;
+    if (!content?.trim()) return res.status(400).json({ error: "Comment cannot be empty" });
+
+    await pool.query("UPDATE assignment_comments SET content=? WHERE id=?", [content.trim(), req.params.commentId]);
+    const [[updated]] = await pool.query(
+      `SELECT ac.*, u.name AS author_name FROM assignment_comments ac JOIN users u ON u.id = ac.author_id WHERE ac.id = ?`,
+      [req.params.commentId]
+    );
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// DELETE /api/classroom/comments/:commentId  (author only, teacher or student)
+exports.deleteComment = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [[comment]] = await pool.query("SELECT * FROM assignment_comments WHERE id = ?", [req.params.commentId]);
+    if (!comment) return res.status(404).json({ error: "Not found" });
+    if (comment.author_id !== userId) return res.status(403).json({ error: "You can only delete your own comments" });
+
+    await pool.query("DELETE FROM assignment_comments WHERE id=?", [req.params.commentId]);
+    res.json({ message: "Deleted" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -524,7 +580,7 @@ exports.getSubmissionStats = async (req, res) => {
 
     const [students] = await pool.query(
       `SELECT u.id, u.name FROM class_members cm JOIN users u ON u.id=cm.user_id
-       WHERE cm.class_id=? AND cm.role='student'`, [assignment.class_id]
+       WHERE cm.class_id=?`, [assignment.class_id]
     );
     const [subs] = await pool.query(
       "SELECT * FROM submissions WHERE assignment_id=?", [req.params.id]

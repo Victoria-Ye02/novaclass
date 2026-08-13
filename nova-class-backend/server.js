@@ -8,7 +8,7 @@ const app = express();
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-admin-secret"],
 }));
 app.use(express.json());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -20,6 +20,8 @@ app.use("/api/classroom",  require("./routes/victoria/classroom.routes"));
 app.use("/api/kmate",      require("./routes/victoria/kmate.routes"));
 app.use("/api/progress",   require("./routes/victoria/progress.routes"));
 app.use("/api/multimodal", require("./routes/victoria/multimodal.routes"));
+app.use("/api/admin",     require("./routes/victoria/admin.routes"));
+app.use("/api/notifications", require("./routes/victoria/notification.routes"));
 
 // --- Thine's routes (add as they land in routes/thine/) ---
 // app.use("/api/...", require("./routes/thine/xxx.routes"));

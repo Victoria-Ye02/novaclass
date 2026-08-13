@@ -1,43 +1,118 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import API from "../../services/api";
+
+// OAuth client IDs are public by design (embedded in frontend code, verified
+// against the corresponding secret only on Google's own servers), so this is
+// not a value that needs to live in an env file.
+const GOOGLE_CLIENT_ID = "758626044822-0jl8fkqk0l1t15d4loac8tl9k89rk5d3.apps.googleusercontent.com";
+
+// The API reports failures as { error: "..." }, so reading `message` here would
+// swallow every real reason behind the generic fallback. A request that never
+// reached the server has no response at all — say so rather than blaming credentials.
+function authErrorText(err, fallback) {
+  if (!err.response) return "Cannot reach the server. Is the backend running on port 5001?";
+  return err.response.data?.error || err.response.data?.message || fallback;
+}
 
 export default function Login() {
   const [tab, setTab]         = useState("login");
   const [email, setEmail]     = useState("");
   const [password, setPass]   = useState("");
   const [name, setName]       = useState("");
+  const [username, setUsername] = useState("");
   const [error, setError]     = useState("");
   const [success, setSuccess] = useState("");
   const [loading, setLoading] = useState(false);
   const [showPass, setShowPass] = useState(false);
+  const [googleError, setGoogleError] = useState("");
   const navigate = useNavigate();
+  const googleBtnRef = useRef(null);
+
+  // Stable identity matters here: it's a dependency of the Google sign-in
+  // effect below, which must only load/initialize the script once on mount.
+  const storeSessionAndGo = useCallback((data, fallbackEmail) => {
+    localStorage.setItem("nova_token", data.token);
+    localStorage.setItem("nova_name", data.user.name);
+    localStorage.setItem("nova_role", data.user.role || "student");
+    localStorage.setItem("nova_email", (data.user.email || fallbackEmail).toLowerCase());
+    navigate("/");
+  }, [navigate]);
 
   async function handleLogin(e) {
     e.preventDefault();
     setError(""); setLoading(true);
     try {
-      const res = await API.post("/auth/login", { email, password });
-      localStorage.setItem("nova_token", res.data.token);
-      localStorage.setItem("nova_name", res.data.user.name);
-      localStorage.setItem("nova_role", res.data.user.role || "student");
-      localStorage.setItem("nova_email", (res.data.user.email || email).toLowerCase());
-      navigate("/");
+      const res = await API.post("/auth/login", { email: email.trim().toLowerCase(), password });
+      storeSessionAndGo(res.data, email);
     } catch (err) {
-      setError(err.response?.data?.message || "Invalid ID or password. Please try again.");
+      setError(authErrorText(err, "Invalid ID or password. Please try again."));
     }
     setLoading(false);
   }
+
+  useEffect(() => {
+    // Captured fresh on every `tab` change, so a credential response is always
+    // attributed to whichever tab was active when the button was rendered:
+    // the Login tab must never silently create an account, and the Sign Up
+    // tab is the only place that's allowed to.
+    async function handleGoogleCredential(response) {
+      setGoogleError("");
+      try {
+        const intent = tab === "register" ? "register" : "login";
+        const res = await API.post("/auth/google", { credential: response.credential, intent });
+        storeSessionAndGo(res.data, "");
+      } catch (err) {
+        setGoogleError(authErrorText(err, tab === "register"
+          ? "Google sign-up failed. Please try again."
+          : "No account found for this Google email. Please sign up first."));
+      }
+    }
+
+    let cancelled = false;
+    const scriptId = "google-identity-services";
+    function renderGoogleButton() {
+      if (cancelled || !window.google?.accounts?.id || !googleBtnRef.current) return;
+      window.google.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: handleGoogleCredential,
+      });
+      window.google.accounts.id.renderButton(googleBtnRef.current, {
+        type: "standard", theme: "outline", size: "large",
+        text: tab === "register" ? "signup_with" : "continue_with",
+        shape: "rectangular", width: 336,
+      });
+    }
+
+    if (window.google?.accounts?.id) {
+      renderGoogleButton();
+    } else if (!document.getElementById(scriptId)) {
+      const script = document.createElement("script");
+      script.id = scriptId;
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.onload = renderGoogleButton;
+      script.onerror = () => !cancelled && setGoogleError("Couldn't load Google Sign-In. Check your connection.");
+      document.body.appendChild(script);
+    } else {
+      document.getElementById(scriptId).addEventListener("load", renderGoogleButton, { once: true });
+    }
+
+    return () => { cancelled = true; };
+  }, [storeSessionAndGo, tab]);
 
   async function handleRegister(e) {
     e.preventDefault();
     setError(""); setLoading(true);
     try {
-      await API.post("/auth/register", { name, email, password });
+      await API.post("/auth/register", {
+        name, email: email.trim().toLowerCase(), username: username.trim().toLowerCase(), password,
+      });
       setSuccess("Registered! Please login.");
       setTimeout(() => { setTab("login"); setSuccess(""); }, 1500);
     } catch (err) {
-      setError(err.response?.data?.message || "Registration failed.");
+      setError(authErrorText(err, "Registration failed."));
     }
     setLoading(false);
   }
@@ -90,16 +165,13 @@ export default function Login() {
                   <span style={s.inputIcon}>👤</span>
                   <input
                     style={{ ...s.input, ...(error ? s.inputError : {}) }}
-                    type="email" placeholder="Enter your email"
+                    type="text" autoComplete="username" placeholder="Enter your email or ID"
                     value={email} onChange={e => setEmail(e.target.value)} required
                   />
                 </div>
               </div>
               <div style={s.field}>
-                <div style={{ display: "flex", justifyContent: "space-between" }}>
-                  <label style={s.label}>Password</label>
-                  <span style={s.forgotLink}>Forgot Password?</span>
-                </div>
+                <label style={s.label}>Password</label>
                 <div style={s.inputWrap}>
                   <span style={s.inputIcon}>🔒</span>
                   <input
@@ -138,6 +210,15 @@ export default function Login() {
                 </div>
               </div>
               <div style={s.field}>
+                <label style={s.label}>ID (at least 6 characters)</label>
+                <div style={s.inputWrap}>
+                  <span style={s.inputIcon}>🆔</span>
+                  <input style={s.input} type="text" autoComplete="username"
+                    placeholder="Choose an ID for logging in" minLength={6}
+                    value={username} onChange={e => setUsername(e.target.value)} required />
+                </div>
+              </div>
+              <div style={s.field}>
                 <label style={s.label}>Password</label>
                 <div style={s.inputWrap}>
                   <span style={s.inputIcon}>🔒</span>
@@ -152,9 +233,8 @@ export default function Login() {
           )}
 
           <div style={s.divider}><span>or continue with</span></div>
-          <button style={s.googleBtn}>
-            <span style={{ fontSize: "18px" }}>G</span> Continue with Google
-          </button>
+          {googleError && <div style={s.errorBox}>⚠️ {googleError}</div>}
+          <div ref={googleBtnRef} style={s.googleBtnSlot} />
         </div>
       </div>
     </div>
@@ -179,18 +259,18 @@ const s = {
     padding: "8px 16px", borderRadius: "20px", fontSize: "13px", fontWeight: 500,
   },
   right: {
-    width: "480px", background: "#f5f5f5",
+    width: "480px", background: "var(--bg)",
     display: "flex", alignItems: "center", justifyContent: "center", padding: "40px",
   },
   card: { width: "100%", maxWidth: "400px" },
   welcome: { fontSize: "28px", fontWeight: 700, color: "#3B37CC", marginBottom: "6px" },
-  sub: { fontSize: "14px", color: "#6b7280", marginBottom: "24px" },
-  tabRow: { display: "flex", background: "#e5e7eb", borderRadius: "10px", padding: "4px", marginBottom: "20px" },
+  sub: { fontSize: "14px", color: "var(--text-muted)", marginBottom: "24px" },
+  tabRow: { display: "flex", background: "var(--border)", borderRadius: "10px", padding: "4px", marginBottom: "20px" },
   tab: {
     flex: 1, padding: "8px", borderRadius: "8px", fontSize: "13px",
-    fontWeight: 600, background: "transparent", color: "#6b7280", border: "none",
+    fontWeight: 600, background: "transparent", color: "var(--text-muted)", border: "none",
   },
-  tabActive: { background: "#fff", color: "#3B37CC", boxShadow: "0 1px 4px rgba(0,0,0,0.1)" },
+  tabActive: { background: "var(--surface)", color: "#3B37CC", boxShadow: "0 1px 4px rgba(0,0,0,0.1)" },
   errorBox: {
     background: "#fef2f2", border: "1px solid #fca5a5", color: "#dc2626",
     padding: "10px 14px", borderRadius: "8px", fontSize: "13px", marginBottom: "16px",
@@ -200,29 +280,25 @@ const s = {
     padding: "10px 14px", borderRadius: "8px", fontSize: "13px", marginBottom: "16px",
   },
   field: { marginBottom: "16px" },
-  label: { display: "block", fontSize: "13px", fontWeight: 600, color: "#374151", marginBottom: "6px" },
+  label: { display: "block", fontSize: "13px", fontWeight: 600, color: "var(--text-muted)", marginBottom: "6px" },
   inputWrap: { position: "relative", display: "flex", alignItems: "center" },
   inputIcon: { position: "absolute", left: "12px", fontSize: "14px" },
   eyeIcon: { position: "absolute", right: "12px", fontSize: "14px", cursor: "pointer" },
   input: {
-    width: "100%", padding: "11px 40px", background: "#fff",
-    border: "1.5px solid #e5e7eb", borderRadius: "10px", fontSize: "14px", color: "#1a1a2e",
+    width: "100%", padding: "11px 40px", background: "var(--surface)",
+    border: "1.5px solid var(--border)", borderRadius: "10px", fontSize: "14px", color: "var(--text)",
   },
   inputError: { borderColor: "#ef4444" },
-  forgotLink: { fontSize: "12px", color: "#3B37CC", cursor: "pointer", fontWeight: 500 },
   signInBtn: {
     width: "100%", padding: "13px", background: "#3B37CC", color: "#fff",
     borderRadius: "10px", fontSize: "15px", fontWeight: 700, border: "none",
     marginTop: "8px", transition: "background 0.2s",
   },
   divider: {
-    textAlign: "center", margin: "20px 0", color: "#9ca3af", fontSize: "13px",
-    borderTop: "1px solid #e5e7eb", paddingTop: "20px",
+    textAlign: "center", margin: "20px 0", color: "var(--text-faint)", fontSize: "13px",
+    borderTop: "1px solid var(--border)", paddingTop: "20px",
   },
-  googleBtn: {
-    width: "100%", padding: "11px", background: "#fff",
-    border: "1.5px solid #e5e7eb", borderRadius: "10px",
-    fontSize: "14px", fontWeight: 600, color: "#374151",
-    display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
+  googleBtnSlot: {
+    display: "flex", justifyContent: "center", minHeight: "40px",
   },
 };

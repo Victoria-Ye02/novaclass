@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Document, Page, pdfjs } from "react-pdf";
 import PdfHighlightOverlay from "./PdfHighlightOverlay";
+import PdfThumbnailSidebar from "./PdfThumbnailSidebar";
+import Icon from "./Icon";
 import "./PdfLessonViewer.css";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -15,7 +17,7 @@ function viewerPageWidth() {
   if (typeof window === "undefined") return 820;
   return window.innerWidth <= 640
     ? Math.max(240, window.innerWidth - 32)
-    : Math.min(820, window.innerWidth - 160);
+    : Math.min(960, window.innerWidth - 160);
 }
 
 function isEditableTarget(target) {
@@ -33,6 +35,7 @@ export default function PdfLessonViewer({
   onToggleBookmark,
   onDismissEmptySpace,
   onPdfReady,
+  onPageChange,
   highlightState,
 }) {
   const {
@@ -52,6 +55,8 @@ export default function PdfLessonViewer({
   const [savedPagesOpen, setSavedPagesOpen] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
+  const [thumbnailsOpen, setThumbnailsOpen] = useState(true);
+  const [pdfDocument, setPdfDocument] = useState(null);
 
   const savedPages = useMemo(
     () => [...new Set(bookmarks)].sort((a, b) => a - b),
@@ -68,11 +73,28 @@ export default function PdfLessonViewer({
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  useEffect(() => {
+    if (numPages) onPageChange?.(currentPage, numPages);
+  }, [currentPage, numPages, onPageChange]);
+
+  // Thumbnail sidebar defaults to open per lesson. A manual close should
+  // stick while browsing the current lesson (page nav, zoom, retries), but
+  // opening a different lesson (a genuine fileUrl change) resets it back to
+  // open rather than carrying over the previous lesson's collapsed state.
+  const previousFileUrlRef = useRef(fileUrl);
+  useEffect(() => {
+    if (previousFileUrlRef.current !== fileUrl) {
+      previousFileUrlRef.current = fileUrl;
+      setThumbnailsOpen(true);
+    }
+  }, [fileUrl]);
+
   const onDocumentLoad = useCallback((pdf) => {
     setNumPages(pdf.numPages);
     setCurrentPage(1);
     setPageInput("1");
     setLoadError(false);
+    setPdfDocument(pdf);
     onPdfReady?.(pdf);
   }, [onPdfReady]);
 
@@ -239,7 +261,7 @@ export default function PdfLessonViewer({
                   aria-pressed={highlightsVisible}
                   onClick={() => setHighlightsVisible?.(!highlightsVisible)}
                 >
-                  <span aria-hidden="true">✨</span> AI 하이라이트
+                  <Icon name="sparkling" size={14} alt="" /> AI 하이라이트
                 </button>
               ) : (
                 <span
@@ -255,11 +277,35 @@ export default function PdfLessonViewer({
         )}
       </div>
 
-      <div
-        className="pdf-viewer-background"
-        data-testid="pdf-viewer-background"
-        onClick={onBackgroundClick}
-      >
+      <div className="pdf-viewer-body">
+        <div className={`pdf-thumbnail-sidebar${thumbnailsOpen ? " is-open" : ""}`}>
+          <div className="pdf-thumbnail-sidebar-header">
+            <button
+              type="button"
+              className="pdf-thumbnail-toggle"
+              aria-label="Toggle page thumbnails"
+              aria-pressed={thumbnailsOpen}
+              aria-expanded={thumbnailsOpen}
+              onClick={() => setThumbnailsOpen((open) => !open)}
+            >
+              <Icon name="thumbnails" size={17} alt="" />
+            </button>
+            {thumbnailsOpen && <span className="pdf-thumbnail-sidebar-title">Thumbnails</span>}
+          </div>
+          <div aria-hidden={!thumbnailsOpen} inert={!thumbnailsOpen}>
+            <PdfThumbnailSidebar
+              pdfDocument={pdfDocument}
+              numPages={numPages}
+              currentPage={currentPage}
+              onSelectPage={goToPage}
+            />
+          </div>
+        </div>
+        <div
+          className="pdf-viewer-background"
+          data-testid="pdf-viewer-background"
+          onClick={onBackgroundClick}
+        >
         {loadError ? (
           <div className="pdf-viewer-status" onClick={(event) => event.stopPropagation()}>
             <span className="pdf-status-icon" aria-hidden="true">!</span>
@@ -302,6 +348,7 @@ export default function PdfLessonViewer({
             />
           </div>
         )}
+        </div>
       </div>
 
       <div className="pdf-floating-actions" onClick={(event) => event.stopPropagation()}>
@@ -312,7 +359,7 @@ export default function PdfLessonViewer({
           aria-expanded={savedPagesOpen}
           onClick={() => setSavedPagesOpen((open) => !open)}
         >
-          <span aria-hidden="true">☰</span>
+          <Icon name="bookmark" size={16} alt="" style={{ filter: "brightness(0) invert(1)" }} />
           <span>{savedPages.length}</span>
         </button>
         <button
@@ -323,7 +370,12 @@ export default function PdfLessonViewer({
           disabled={bookmarkBusy || !numPages}
           onClick={() => onToggleBookmark(currentPage)}
         >
-          <span aria-hidden="true">{currentPageSaved ? "♥" : "♡"}</span>
+          <Icon
+            name="hearts"
+            size={22}
+            alt=""
+            style={currentPageSaved ? undefined : { filter: "grayscale(1) brightness(1.6)" }}
+          />
           {syncingPage === currentPage && <span className="pdf-sync-dot" />}
         </button>
       </div>

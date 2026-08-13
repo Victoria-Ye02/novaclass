@@ -15,11 +15,19 @@ async function setup() {
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(100) NOT NULL,
       email VARCHAR(150) NOT NULL UNIQUE,
+      username VARCHAR(50) UNIQUE,
       password VARCHAR(255) NOT NULL,
       role ENUM('teacher','student') DEFAULT 'student',
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
+  // Nullable: existing accounts (and Google sign-ins, which never collect an
+  // ID) simply can't log in by username until one is set.
+  // This server doesn't support `ADD COLUMN IF NOT EXISTS` (unlike the
+  // `materials` patches below) — ER_DUP_FIELDNAME is caught instead.
+  await conn.query(`ALTER TABLE users ADD COLUMN username VARCHAR(50) UNIQUE`).catch(err => {
+    if (err.code !== "ER_DUP_FIELDNAME") throw err;
+  });
 
   await conn.query(`
     CREATE TABLE IF NOT EXISTS classes (
@@ -72,6 +80,17 @@ async function setup() {
       summary_detailed TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (material_id) REFERENCES materials(id)
+    )
+  `);
+
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS material_files (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      material_id INT NOT NULL,
+      file_name VARCHAR(255) NOT NULL,
+      file_path VARCHAR(255) NOT NULL,
+      uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE
     )
   `);
 
@@ -133,6 +152,20 @@ async function setup() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       FOREIGN KEY (analysis_id) REFERENCES material_highlight_analyses(id) ON DELETE CASCADE
+    )
+  `);
+
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      type VARCHAR(50) NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      message TEXT,
+      link_url VARCHAR(500),
+      is_read TINYINT(1) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_notifications_user (user_id, is_read, created_at)
     )
   `);
 

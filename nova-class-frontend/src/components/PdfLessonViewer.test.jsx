@@ -48,8 +48,8 @@ function renderViewer(overrides = {}) {
     onDismissEmptySpace: vi.fn(),
     ...overrides,
   };
-  render(<PdfLessonViewer {...props} />);
-  return props;
+  const { rerender } = render(<PdfLessonViewer {...props} />);
+  return { ...props, rerender: (nextOverrides = {}) => rerender(<PdfLessonViewer {...props} {...nextOverrides} />) };
 }
 
 describe("PdfLessonViewer", () => {
@@ -360,6 +360,124 @@ describe("PdfLessonViewer", () => {
 
       expect(retry).toHaveBeenCalledTimes(1);
       expect(screen.getByTestId("rendered-page-1")).toBeTruthy();
+    });
+  });
+
+  describe("onPageChange", () => {
+    it("reports the current page and page count after load and on navigation", async () => {
+      const onPageChange = vi.fn();
+      renderViewer({ onPageChange });
+      await screen.findByTestId("rendered-page-1");
+
+      expect(onPageChange).toHaveBeenCalledWith(1, 5);
+
+      fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+
+      expect(onPageChange).toHaveBeenCalledWith(2, 5);
+    });
+  });
+
+  describe("page thumbnails", () => {
+    it("is open by default", async () => {
+      renderViewer();
+      await screen.findByTestId("rendered-page-1");
+
+      expect(screen.getByRole("button", { name: "Go to page 1" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Toggle page thumbnails" }).getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("closes on toggle click and reopens on a second click", async () => {
+      renderViewer();
+      await screen.findByTestId("rendered-page-1");
+
+      const toggle = screen.getByRole("button", { name: "Toggle page thumbnails" });
+      fireEvent.click(toggle);
+
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+      expect(screen.queryByRole("button", { name: "Go to page 1" })).toBeNull();
+
+      fireEvent.click(toggle);
+
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+      expect(screen.getByRole("button", { name: "Go to page 1" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Go to page 5" })).toBeTruthy();
+    });
+
+    it("navigates to the clicked thumbnail's page", async () => {
+      renderViewer();
+      await screen.findByTestId("rendered-page-1");
+
+      fireEvent.click(screen.getByRole("button", { name: "Go to page 3" }));
+
+      expect(screen.getByTestId("rendered-page-3")).toBeTruthy();
+    });
+
+    it("highlights the current page's thumbnail", async () => {
+      renderViewer();
+      await screen.findByTestId("rendered-page-1");
+
+      fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+
+      expect(screen.getByRole("button", { name: "Go to page 2" }).getAttribute("aria-current")).toBe("true");
+      expect(screen.getByRole("button", { name: "Go to page 1" }).getAttribute("aria-current")).toBeNull();
+    });
+
+    it("stays closed across page navigation within the same lesson", async () => {
+      const viewer = renderViewer();
+      await screen.findByTestId("rendered-page-1");
+
+      fireEvent.click(screen.getByRole("button", { name: "Toggle page thumbnails" }));
+      fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+      viewer.rerender();
+
+      expect(screen.getByRole("button", { name: "Toggle page thumbnails" }).getAttribute("aria-pressed")).toBe("false");
+      expect(screen.queryByRole("button", { name: "Go to page 2" })).toBeNull();
+    });
+
+    it("resets to open when a different lesson (a new fileUrl) is opened", async () => {
+      const viewer = renderViewer();
+      await screen.findByTestId("rendered-page-1");
+
+      fireEvent.click(screen.getByRole("button", { name: "Toggle page thumbnails" }));
+      expect(screen.getByRole("button", { name: "Toggle page thumbnails" }).getAttribute("aria-pressed")).toBe("false");
+
+      viewer.rerender({ fileUrl: "http://localhost/other-material.pdf" });
+      await screen.findByTestId("rendered-page-1");
+
+      expect(screen.getByRole("button", { name: "Toggle page thumbnails" }).getAttribute("aria-pressed")).toBe("true");
+      expect(screen.getByRole("button", { name: "Go to page 1" })).toBeTruthy();
+    });
+
+    it("keeps the toggle button reachable and clickable while collapsed", async () => {
+      renderViewer();
+      await screen.findByTestId("rendered-page-1");
+
+      const toggle = screen.getByRole("button", { name: "Toggle page thumbnails" });
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+
+      // The button itself must never be aria-hidden/inert — only the list is.
+      expect(toggle.closest("[aria-hidden='true']")).toBeNull();
+      expect(toggle.getAttribute("aria-hidden")).not.toBe("true");
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+    });
+
+    it("preserves the thumbnail list's scroll position across a collapse/expand cycle", async () => {
+      renderViewer();
+      await screen.findByTestId("rendered-page-1");
+
+      const list = screen.getByRole("navigation", { name: "Page thumbnails" });
+      Object.defineProperty(list, "scrollHeight", { value: 1000, configurable: true });
+      Object.defineProperty(list, "clientHeight", { value: 200, configurable: true });
+      list.scrollTop = 340;
+
+      fireEvent.click(screen.getByRole("button", { name: "Toggle page thumbnails" }));
+      fireEvent.click(screen.getByRole("button", { name: "Toggle page thumbnails" }));
+
+      expect(screen.getByRole("navigation", { name: "Page thumbnails" })).toBe(list);
+      expect(list.scrollTop).toBe(340);
     });
   });
 });

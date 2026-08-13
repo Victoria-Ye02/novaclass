@@ -42,6 +42,14 @@ const highlightPageImage = multer({
   fileFilter: (req, file, cb) => cb(null, ["image/png", "image/jpeg"].includes(file.mimetype)),
 });
 
+// Materials — one primary document (drives PDF viewer/OCR/highlights,
+// unchanged) plus any number of supplementary attachments.
+const materialUpload = documentUpload.fields([
+  { name: "file", maxCount: 1 },
+  { name: "files", maxCount: 10 },
+]);
+
 module.exports = documentUpload;
 module.exports.anyFile = anyFile;
 module.exports.highlightPageImage = highlightPageImage;
+module.exports.materialUpload = materialUpload;

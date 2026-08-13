@@ -287,7 +287,18 @@ exports.submitHighlightPage = async (req, res) => {
       if (!Buffer.isBuffer(req.file?.buffer)) {
         return clientError(res, 400, "An in-memory page image is required for OCR");
       }
-      candidates = await ocr.ocrPage(req.file.buffer);
+      try {
+        candidates = await ocr.ocrPage(req.file.buffer);
+      } catch (error) {
+        // OCR being unavailable (e.g. Vision credentials not configured) is
+        // an environment-level gap, not a per-request failure. One unreadable
+        // page must not block every other page in the document — record it
+        // with zero candidates (no highlights for this page) instead of
+        // failing the request. Any other, unrecognized failure still surfaces
+        // as a real error rather than being silently swallowed.
+        if (error?.code !== "VISION_NOT_CONFIGURED") throw error;
+        candidates = [];
+      }
     } else {
       let parsed;
       try {

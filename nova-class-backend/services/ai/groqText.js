@@ -2,7 +2,7 @@ const Groq = require("groq-sdk");
 
 require("dotenv").config();
 
-const TEXT_MODEL = "openai/gpt-oss-120b";
+const TEXT_MODEL = "llama-3.3-70b-versatile";
 let client = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 async function completeText({ messages, maxTokens = 1024, responseFormat }) {

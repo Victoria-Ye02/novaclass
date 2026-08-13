@@ -283,6 +283,82 @@ test("scan submission sends only the in-memory buffer to OCR and stores the oute
   });
 });
 
+test("scan submission stores zero candidates instead of failing the page when OCR is unavailable", async () => {
+  installFileStat();
+  const accessQuery = materialAccessQuery();
+  const image = Buffer.from("page image bytes");
+  let storedCandidates;
+  let storedSourceType;
+
+  ocr.ocrPage = async () => {
+    const error = new Error("Google Cloud Vision is not configured");
+    error.code = "VISION_NOT_CONFIGURED";
+    throw error;
+  };
+  pool.query = async (sql, params) => {
+    const access = await accessQuery(sql, params);
+    if (access) return access;
+    if (sql.includes("FROM material_highlight_analyses")) {
+      assert.deepEqual(params, [52, 9, FINGERPRINT, 1]);
+      return [[{ id: 52, total_pages: 8, status: "pending" }]];
+    }
+    if (sql.includes("INSERT INTO material_highlight_pages")) {
+      assert.deepEqual(params.slice(0, 3), [52, 7, "ocr"]);
+      storedSourceType = params[2];
+      storedCandidates = JSON.parse(params[3]);
+      return [{ affectedRows: 1 }];
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const { req, res } = httpDouble({
+    params: { materialId: "9" },
+    body: { analysisId: "52", pageNumber: "7", sourceType: "ocr", candidates: "[]" },
+    file: { buffer: image, mimetype: "image/png", size: image.length },
+  });
+  await controller.submitHighlightPage(req, res);
+
+  // The page is still recorded (satisfying "every page must be submitted"
+  // for the analysis to ever reach ready) with an empty candidate set, so
+  // one unreadable page never blocks the rest of the document.
+  assert.equal(storedSourceType, "ocr");
+  assert.deepEqual(storedCandidates, []);
+  assert.equal(res.statusCode, 201);
+  assert.deepEqual(res.body, {
+    analysisId: 52,
+    pageNumber: 7,
+    sourceType: "ocr",
+    candidateCount: 0,
+  });
+});
+
+test("scan submission still fails the request for a genuine client error unrelated to OCR availability", async () => {
+  installFileStat();
+  const accessQuery = materialAccessQuery();
+  const image = Buffer.from("page image bytes");
+
+  ocr.ocrPage = async () => {
+    throw new Error("boom: unexpected provider crash");
+  };
+  pool.query = async (sql, params) => {
+    const access = await accessQuery(sql, params);
+    if (access) return access;
+    if (sql.includes("FROM material_highlight_analyses")) {
+      return [[{ id: 52, total_pages: 8, status: "pending" }]];
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const { req, res } = httpDouble({
+    params: { materialId: "9" },
+    body: { analysisId: "52", pageNumber: "7", sourceType: "ocr", candidates: "[]" },
+    file: { buffer: image, mimetype: "image/png", size: image.length },
+  });
+  await controller.submitHighlightPage(req, res);
+
+  assert.equal(res.statusCode, 500);
+});
+
 test("concurrent complete calls conditionally claim only one pending analysis", async () => {
   installFileStat();
   const accessQuery = materialAccessQuery();

@@ -1,9 +1,29 @@
+const fs = require("fs");
 const vision = require("@google-cloud/vision");
 
 let client;
 
+function assertVisionConfigured() {
+  const credentialsPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  if (credentialsPath && fs.existsSync(credentialsPath)) return;
+
+  // google-auth-library's application-default-credentials discovery throws a
+  // second, genuinely unhandled internal exception (separate from the promise
+  // callers await) when no ADC source is configured, crashing the whole
+  // process regardless of any try/catch here. Never let it start that
+  // discovery: fail fast and synchronously before constructing a real client.
+  const error = new Error(
+    "Google Cloud Vision is not configured (GOOGLE_APPLICATION_CREDENTIALS is unset or unreadable)"
+  );
+  error.code = "VISION_NOT_CONFIGURED";
+  throw error;
+}
+
 function getClient() {
-  if (!client) client = new vision.ImageAnnotatorClient();
+  if (!client) {
+    assertVisionConfigured();
+    client = new vision.ImageAnnotatorClient();
+  }
   return client;
 }
 

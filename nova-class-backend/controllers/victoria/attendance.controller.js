@@ -42,6 +42,11 @@ exports.createSession = async (req, res) => {
     if (access.role !== "teacher") return res.status(403).json({ error: "Teachers only" });
     const { title, session_date } = req.body;
     if (!title || !session_date) return res.status(400).json({ error: "title and session_date required" });
+    const [[existing]] = await pool.query(
+      "SELECT id FROM attendance_sessions WHERE class_id=? AND session_date=?",
+      [req.params.id, session_date]
+    );
+    if (existing) return res.status(409).json({ error: "A session already exists for this date." });
     const [result] = await pool.query(
       "INSERT INTO attendance_sessions (class_id, title, session_date, created_by) VALUES (?,?,?,?)",
       [req.params.id, title, session_date, userId]
@@ -138,5 +143,31 @@ exports.getMyAttendance = async (req, res) => {
     const late = rows.filter(r => r.status === "late").length;
     const rate = total > 0 ? Math.round(((present + late) / total) * 100) : null;
     res.json({ rows, total, present, late, absent: total - present - late, rate });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+// GET /api/classroom/attendance/summary — this calendar month's attendance
+// rate across every class the user is enrolled in (as a student), for the
+// Dashboard's attendance ring. Teachers with no student enrollments simply
+// get an all-zero, null-rate result — the frontend hides the widget then.
+exports.getMyMonthlyAttendance = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [[counts]] = await pool.query(
+      `SELECT COUNT(*) AS total, SUM(r.status='present') AS present,
+              SUM(r.status='late') AS late, SUM(r.status='absent') AS absent
+       FROM attendance_records r
+       JOIN attendance_sessions s ON s.id = r.session_id
+       WHERE r.student_id = ?
+         AND MONTH(s.session_date) = MONTH(CURDATE())
+         AND YEAR(s.session_date) = YEAR(CURDATE())`,
+      [userId]
+    );
+    const total = Number(counts.total) || 0;
+    const present = Number(counts.present) || 0;
+    const late = Number(counts.late) || 0;
+    const absent = Number(counts.absent) || 0;
+    const rate = total > 0 ? Math.round(((present + late) / total) * 100) : null;
+    res.json({ total, present, late, absent, rate });
   } catch (err) { res.status(500).json({ error: err.message }); }
 };

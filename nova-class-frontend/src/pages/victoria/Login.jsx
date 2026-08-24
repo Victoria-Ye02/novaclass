@@ -245,7 +245,7 @@ const s = {
   page: { display: "flex", minHeight: "100vh" },
   left: {
     flex: 1,
-    background: "linear-gradient(135deg, #3B37CC 0%, #6c35b5 60%, #9333ea 100%)",
+    background: "linear-gradient(135deg, var(--primary) 0%, #6c35b5 60%, #9333ea 100%)",
     display: "flex", alignItems: "center", justifyContent: "center",
     padding: "48px", position: "relative", overflow: "hidden",
   },
@@ -263,20 +263,20 @@ const s = {
     display: "flex", alignItems: "center", justifyContent: "center", padding: "40px",
   },
   card: { width: "100%", maxWidth: "400px" },
-  welcome: { fontSize: "28px", fontWeight: 700, color: "#3B37CC", marginBottom: "6px" },
+  welcome: { fontSize: "28px", fontWeight: 700, color: "var(--primary)", marginBottom: "6px" },
   sub: { fontSize: "14px", color: "var(--text-muted)", marginBottom: "24px" },
   tabRow: { display: "flex", background: "var(--border)", borderRadius: "10px", padding: "4px", marginBottom: "20px" },
   tab: {
     flex: 1, padding: "8px", borderRadius: "8px", fontSize: "13px",
     fontWeight: 600, background: "transparent", color: "var(--text-muted)", border: "none",
   },
-  tabActive: { background: "var(--surface)", color: "#3B37CC", boxShadow: "0 1px 4px rgba(0,0,0,0.1)" },
+  tabActive: { background: "var(--surface)", color: "var(--primary)", boxShadow: "0 1px 4px rgba(0,0,0,0.1)" },
   errorBox: {
-    background: "#fef2f2", border: "1px solid #fca5a5", color: "#dc2626",
+    background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444",
     padding: "10px 14px", borderRadius: "8px", fontSize: "13px", marginBottom: "16px",
   },
   successBox: {
-    background: "#f0fdf4", border: "1px solid #86efac", color: "#16a34a",
+    background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.3)", color: "#22c55e",
     padding: "10px 14px", borderRadius: "8px", fontSize: "13px", marginBottom: "16px",
   },
   field: { marginBottom: "16px" },
@@ -290,7 +290,7 @@ const s = {
   },
   inputError: { borderColor: "#ef4444" },
   signInBtn: {
-    width: "100%", padding: "13px", background: "#3B37CC", color: "#fff",
+    width: "100%", padding: "13px", background: "var(--primary)", color: "#fff",
     borderRadius: "10px", fontSize: "15px", fontWeight: 700, border: "none",
     marginTop: "8px", transition: "background 0.2s",
   },

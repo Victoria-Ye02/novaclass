@@ -3,10 +3,18 @@ import { useNavigate } from "react-router-dom";
 import Sidebar from "../../components/Sidebar";
 import Icon from "../../components/Icon";
 import API from "../../services/api";
+import { useLang } from "../../LanguageContext";
 
-const LIVE_MEETING_POLL_MS = 20000;
 const URGENT_WINDOW_MS = 24 * 60 * 60 * 1000;
-const WEEKDAY_LABELS = ["M", "T", "W", "T", "F"];
+const CAL_HEADERS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const EVENT_COLORS = ["var(--primary)", "#059669", "#E97316", "#DC2626", "#0891B2", "var(--primary)"];
+
+function toYMD(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function monthKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 
 function formatDateTime(dateStr) {
   const d = new Date(dateStr);
@@ -16,18 +24,9 @@ function formatDateTime(dateStr) {
   return { day: String(d.getDate()).padStart(2, "0"), month: d.toLocaleString("default", { month: "short" }).toUpperCase(), time, label: isToday ? `Today ${time}` : `${date}` };
 }
 
-function mondayOfThisWeek() {
-  const d = new Date();
-  const dow = d.getDay(); // 0=Sun..6=Sat
-  const diff = dow === 0 ? -6 : 1 - dow;
-  d.setDate(d.getDate() + diff);
-  d.setHours(0, 0, 0, 0);
-  return d;
-}
 
 export default function Dashboard() {
   const [summary, setSummary] = useState(null);
-  const [liveMeetings, setLiveMeetings] = useState([]);
   const [classes, setClasses] = useState(null);
   const [deadlines, setDeadlines] = useState(null);
   const [attendance, setAttendance] = useState(null);
@@ -35,9 +34,16 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [bellOpen, setBellOpen] = useState(false);
+  const [calMonth, setCalMonth] = useState(() => new Date());
+  const [calEvents, setCalEvents] = useState([]);
+  const [addModal, setAddModal] = useState(null); // { date: "YYYY-MM-DD" }
+  const [addForm, setAddForm] = useState({ class_id: "", title: "", color: EVENT_COLORS[0] });
+  const [addLoading, setAddLoading] = useState(false);
+  const [hoveredDay, setHoveredDay] = useState(null);
   const navigate = useNavigate();
   const bellRef = useRef(null);
   const name = localStorage.getItem("nova_name") || "Student";
+  const { lang } = useLang();
 
   function loadNotifications() {
     API.get("/notifications").then(r => setNotifications(r.data.notifications || [])).catch(() => {});
@@ -46,25 +52,11 @@ export default function Dashboard() {
 
   useEffect(() => {
     API.get("/progress/summary").then(r => setSummary(r.data)).catch(() => {});
-    API.get("/progress/today-plan").then(r => setTodayPlan(r.data)).catch(() => setTodayPlan({ studentPlan: [], teacherPlan: [] }));
+    API.get(`/progress/today-plan?lang=${lang}`).then(r => setTodayPlan(r.data)).catch(() => setTodayPlan({ studentPlan: [], teacherPlan: [] }));
     API.get("/classroom/classes").then(r => setClasses(r.data)).catch(() => setClasses([]));
     API.get("/classroom/deadlines").then(r => setDeadlines(r.data.deadlines || [])).catch(() => setDeadlines([]));
     API.get("/classroom/attendance/summary").then(r => setAttendance(r.data)).catch(() => {});
     loadNotifications();
-  }, []);
-
-  // Polled (not push-based) so a class going live shows up here without the
-  // student needing to open that class's Attendance tab to notice.
-  useEffect(() => {
-    let cancelled = false;
-    function loadLiveMeetings() {
-      API.get("/classroom/meetings/active")
-        .then(r => { if (!cancelled) setLiveMeetings(r.data.meetings || []); })
-        .catch(() => {});
-    }
-    loadLiveMeetings();
-    const interval = setInterval(loadLiveMeetings, LIVE_MEETING_POLL_MS);
-    return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
   useEffect(() => {
@@ -74,6 +66,37 @@ export default function Dashboard() {
     document.addEventListener("mousedown", onOutsideClick);
     return () => document.removeEventListener("mousedown", onOutsideClick);
   }, []);
+
+  useEffect(() => {
+    API.get(`/calendar/events?month=${monthKey(calMonth)}`)
+      .then(r => setCalEvents(r.data || []))
+      .catch(() => {});
+  }, [calMonth]);
+
+  async function handleAddEvent() {
+    if (!addForm.class_id || !addForm.title.trim()) return;
+    setAddLoading(true);
+    try {
+      const { data } = await API.post("/calendar/events", {
+        class_id: addForm.class_id,
+        date: addModal.date,
+        title: addForm.title.trim(),
+        color: addForm.color,
+      });
+      setCalEvents(prev => [...prev, data]);
+      setAddModal(null);
+      setAddForm({ class_id: "", title: "", color: EVENT_COLORS[0] });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setAddLoading(false);
+    }
+  }
+
+  async function handleDeleteEvent(id) {
+    await API.delete(`/calendar/events/${id}`).catch(() => {});
+    setCalEvents(prev => prev.filter(e => e.id !== id));
+  }
 
   function openNotification(n) {
     if (!n.is_read) {
@@ -89,6 +112,29 @@ export default function Dashboard() {
   const isLearning = (summary?.classes_joined ?? 0) > 0;
   const roleLabel = [isTeaching && "Teacher", isLearning && "Student"].filter(Boolean).join(" · ")
     || (localStorage.getItem("nova_role") || "student").toUpperCase();
+
+  const allClasses = classes?.classes || classes || [];
+  const teachingClasses = allClasses.filter(c => c.my_role === "teacher");
+
+  // Build calendar grid for calMonth
+  const calYear = calMonth.getFullYear();
+  const calMo = calMonth.getMonth();
+  const firstDay = new Date(calYear, calMo, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(calYear, calMo + 1, 0).getDate();
+  const calCells = [
+    ...Array(firstDay).fill(null),
+    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+  ];
+  // pad to full rows
+  while (calCells.length % 7 !== 0) calCells.push(null);
+
+  const todayStr = toYMD(new Date());
+  const eventsMap = {}; // date string -> [event]
+  calEvents.forEach(ev => {
+    const d = ev.date.slice(0, 10);
+    if (!eventsMap[d]) eventsMap[d] = [];
+    eventsMap[d].push(ev);
+  });
 
   const now = Date.now();
   const urgentDeadline = (deadlines || [])
@@ -113,20 +159,7 @@ export default function Dashboard() {
       text: `${n} submission${n > 1 ? "s" : ""} waiting to be graded`,
       action: () => navigate("/classroom"),
     };
-  } else if (liveMeetings.length > 0) {
-    banner = {
-      icon: "🔴",
-      text: `${liveMeetings[0].class_name} is live now`,
-      action: () => window.open(liveMeetings[0].room_url, "_blank", "noreferrer"),
-    };
   }
-
-  const weekStart = mondayOfThisWeek();
-  const weekDays = WEEKDAY_LABELS.map((label, i) => {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + i);
-    return { label, num: d.getDate(), isToday: d.toDateString() === new Date().toDateString() };
-  });
 
   return (
     <div style={s.layout}>
@@ -205,10 +238,13 @@ export default function Dashboard() {
                 <div style={s.todayPlanSection}>
                   <h3 style={s.todayPlanTitle}>Student Today Plan</h3>
                   {todayPlan.studentPlan?.length > 0 ? todayPlan.studentPlan.map((task, index) => (
-                    <button type="button" key={`${task.link}-${index}`} style={s.todayTask} onClick={() => navigate(task.link)}>
+                    <button type="button" key={`${task.link}-${index}`} style={{ ...s.todayTask, background: task.isOverdue ? "rgba(239, 68, 68, 0.08)" : "transparent" }} onClick={() => navigate(task.link)}>
                       <span style={s.todayTaskNumber}>{index + 1}</span>
                       <span style={s.todayTaskCopy}><strong>{task.title}</strong><small>{task.reason}</small></span>
-                      <span style={s.todayTaskGo}>Start →</span>
+                      <span style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px" }}>
+                        {task.dueLabel && <span style={{ fontSize: "11px", fontWeight: 600, color: task.isOverdue ? "#EF4444" : "#6B7280" }}>{task.dueLabel}</span>}
+                        <span style={s.todayTaskGo}>Start →</span>
+                      </span>
                     </button>
                   )) : <p style={s.todayPlanEmpty}>You are all caught up. Review a lesson or practice with K_MATE.</p>}
                 </div>
@@ -217,7 +253,7 @@ export default function Dashboard() {
                 <div style={s.todayPlanSection}>
                   <h3 style={s.todayPlanTitle}>Teacher Today Plan</h3>
                   {todayPlan.teacherPlan?.length > 0 ? todayPlan.teacherPlan.map((task, index) => (
-                    <button type="button" key={`${task.link}-${index}`} style={s.todayTask} onClick={() => navigate(task.link)}>
+                    <button type="button" key={`${task.link}-${index}`} style={{ ...s.todayTask, background: task.isOverdue ? "rgba(239, 68, 68, 0.08)" : "transparent" }} onClick={() => navigate(task.link)}>
                       <span style={s.todayTaskNumber}>{index + 1}</span>
                       <span style={s.todayTaskCopy}><strong>{task.title}</strong><small>{task.reason}</small></span>
                       <span style={s.todayTaskGo}>Review →</span>
@@ -241,14 +277,10 @@ export default function Dashboard() {
                     <div style={s.summaryStatsRow}>
                       <span><strong>{summary.classes_teaching}</strong> classes</span>
                       <span><strong>{summary.to_grade_count}</strong> to grade</span>
-                      <span><strong>{liveMeetings.length}</strong> live now</span>
                     </div>
                     <div style={s.quickActions}>
                       <button style={s.quickActionBtn} onClick={() => navigate("/classroom")}>
                         <Icon name="add-file" size={13} alt="" /> Create assignment
-                      </button>
-                      <button style={s.quickActionBtn} onClick={() => navigate("/classroom")}>
-                        <Icon name="video-call" size={13} alt="" /> Start meeting
                       </button>
                     </div>
                   </div>
@@ -321,20 +353,98 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Right: This week + Upcoming */}
+          {/* Right: Calendar + Upcoming */}
           <div style={s.colRight}>
+            {/* Full Monthly Calendar */}
             <div style={s.card}>
-              <h3 style={s.cardHeading}>This week</h3>
-              <div style={s.weekStrip} data-testid="week-strip">
-                {weekDays.map(d => (
-                  <div key={d.label + d.num} style={{ ...s.weekDay, ...(d.isToday ? s.weekDayToday : {}) }}>
-                    <div style={s.weekDayLabel}>{d.label}</div>
-                    <div style={s.weekDayNum}>{d.num}</div>
-                  </div>
-                ))}
+              {/* Calendar header */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
+                <button
+                  onClick={() => setCalMonth(m => new Date(m.getFullYear(), m.getMonth() - 1, 1))}
+                  style={s.calNavBtn}
+                >‹</button>
+                <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)" }}>
+                  {calMonth.toLocaleString("default", { month: "long", year: "numeric" })}
+                </span>
+                <button
+                  onClick={() => setCalMonth(m => new Date(m.getFullYear(), m.getMonth() + 1, 1))}
+                  style={s.calNavBtn}
+                >›</button>
               </div>
+
+              {/* Day-of-week headers */}
+              <div style={s.calGrid}>
+                {CAL_HEADERS.map(h => (
+                  <div key={h} style={s.calDayHeader}>{h}</div>
+                ))}
+
+                {/* Day cells */}
+                {calCells.map((day, idx) => {
+                  if (!day) return <div key={`empty-${idx}`} />;
+                  const dateStr = `${calYear}-${String(calMo + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                  const isToday = dateStr === todayStr;
+                  const dayEvents = eventsMap[dateStr] || [];
+                  const isHovered = hoveredDay === dateStr;
+
+                  return (
+                    <div
+                      key={dateStr}
+                      style={{
+                        ...s.calCell,
+                        ...(isToday ? s.calCellToday : {}),
+                        ...(isHovered && isTeaching ? { background: "var(--primary-tint)" } : {}),
+                        position: "relative",
+                      }}
+                      onMouseEnter={() => isTeaching && setHoveredDay(dateStr)}
+                      onMouseLeave={() => setHoveredDay(null)}
+                    >
+                      <span style={{ fontSize: "12px", fontWeight: isToday ? 700 : 500 }}>{day}</span>
+
+                      {/* Event dots */}
+                      {dayEvents.length > 0 && (
+                        <div style={{ display: "flex", gap: "2px", flexWrap: "wrap", justifyContent: "center", marginTop: "2px" }}>
+                          {dayEvents.slice(0, 3).map(ev => (
+                            <span
+                              key={ev.id}
+                              title={ev.title}
+                              style={{ width: "5px", height: "5px", borderRadius: "50%", background: ev.color, flexShrink: 0, cursor: "pointer" }}
+                              onClick={e => { e.stopPropagation(); if (isTeaching) handleDeleteEvent(ev.id); }}
+                            />
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Teacher: + button on hover */}
+                      {isTeaching && isHovered && (
+                        <button
+                          onClick={() => {
+                            setAddModal({ date: dateStr });
+                            setAddForm({ class_id: teachingClasses[0]?.id || "", title: "", color: EVENT_COLORS[0] });
+                          }}
+                          style={s.calAddBtn}
+                          title="Add note"
+                        >+</button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Legend: today's events */}
+              {eventsMap[todayStr]?.length > 0 && (
+                <div style={{ marginTop: "10px", borderTop: "1px solid var(--border)", paddingTop: "10px", display: "flex", flexDirection: "column", gap: "4px" }}>
+                  {eventsMap[todayStr].map(ev => (
+                    <div key={ev.id} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--text-muted)" }}>
+                      <span style={{ width: "8px", height: "8px", borderRadius: "50%", background: ev.color, flexShrink: 0 }} />
+                      <span style={{ flex: 1 }}>{ev.title}</span>
+                      <span style={{ color: "var(--text-faint)", fontSize: "10px" }}>{ev.class_name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
+            {/* Upcoming deadlines */}
             <div style={s.card}>
               <h3 style={s.cardHeading}>Upcoming</h3>
               {deadlines && deadlines.length === 0 && <p style={s.noEventsHint}>No upcoming deadlines — you're all caught up 🎉</p>}
@@ -352,6 +462,64 @@ export default function Dashboard() {
           </div>
         </div>
       </main>
+
+      {/* Add Event Modal */}
+      {addModal && (
+        <div style={s.overlay} onClick={() => setAddModal(null)}>
+          <div style={s.modalBox} onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: "0 0 4px", fontSize: "16px", fontWeight: 700, color: "var(--text)" }}>Add Note</h3>
+            <p style={{ margin: "0 0 18px", fontSize: "12px", color: "var(--text-faint)" }}>{addModal.date}</p>
+
+            <label style={s.fieldLabel}>Class</label>
+            <select
+              value={addForm.class_id}
+              onChange={e => setAddForm(f => ({ ...f, class_id: e.target.value }))}
+              style={s.fieldInput}
+            >
+              <option value="">Select class…</option>
+              {teachingClasses.map(c => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+
+            <label style={{ ...s.fieldLabel, marginTop: "12px" }}>Note</label>
+            <input
+              autoFocus
+              value={addForm.title}
+              onChange={e => setAddForm(f => ({ ...f, title: e.target.value }))}
+              placeholder="e.g. Exam day, Holiday…"
+              style={s.fieldInput}
+              onKeyDown={e => e.key === "Enter" && handleAddEvent()}
+            />
+
+            <label style={{ ...s.fieldLabel, marginTop: "12px" }}>Color</label>
+            <div style={{ display: "flex", gap: "8px", marginBottom: "20px" }}>
+              {EVENT_COLORS.map(c => (
+                <button
+                  key={c}
+                  onClick={() => setAddForm(f => ({ ...f, color: c }))}
+                  style={{
+                    width: "24px", height: "24px", borderRadius: "50%", background: c, border: "none",
+                    cursor: "pointer", outline: addForm.color === c ? `3px solid ${c}` : "none",
+                    outlineOffset: "2px",
+                  }}
+                />
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: "10px" }}>
+              <button onClick={() => setAddModal(null)} style={s.btnOutline}>Cancel</button>
+              <button
+                onClick={handleAddEvent}
+                disabled={addLoading || !addForm.class_id || !addForm.title.trim()}
+                style={{ ...s.btnPrimary, opacity: (!addForm.class_id || !addForm.title.trim() || addLoading) ? 0.6 : 1 }}
+              >
+                {addLoading ? "Saving…" : "Add"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -387,7 +555,7 @@ const s = {
     display: "flex", justifyContent: "space-between", alignItems: "center",
     padding: "12px 14px", borderBottom: "1px solid var(--border)", fontSize: "13px", fontWeight: 700, color: "var(--text)",
   },
-  bellMarkAll: { fontSize: "12px", fontWeight: 600, color: "#4F46E5", cursor: "pointer" },
+  bellMarkAll: { fontSize: "12px", fontWeight: 600, color: "var(--primary)", cursor: "pointer" },
   bellEmpty: { padding: "20px", textAlign: "center", fontSize: "13px", color: "var(--text-muted)" },
   bellItem: { padding: "10px 14px", borderBottom: "1px solid var(--border)", cursor: "pointer" },
   bellItemUnread: { background: "var(--surface-alt)" },
@@ -404,26 +572,26 @@ const s = {
   welcomeTitle: { fontSize: "24px", fontWeight: 700, color: "var(--text)" },
   priorityBanner: {
     display: "flex", alignItems: "center", justifyContent: "space-between",
-    background: "linear-gradient(135deg, #4F46E5, #6366F1)", color: "#fff",
+    background: "linear-gradient(135deg, var(--primary), var(--primary))", color: "#fff",
     borderRadius: "16px", padding: "16px 22px", marginBottom: "20px",
   },
   priorityText: { fontSize: "14px", fontWeight: 600 },
   priorityBtn: {
-    background: "#fff", color: "#4F46E5", border: "none", borderRadius: "8px",
+    background: "rgba(255,255,255,0.2)", color: "#fff", border: "1px solid rgba(255,255,255,0.4)", borderRadius: "8px",
     padding: "8px 18px", fontSize: "13px", fontWeight: 700, cursor: "pointer", flexShrink: 0,
   },
-  todayPlanCard: { background: "linear-gradient(135deg, #EEF2FF, var(--surface))", border: "1px solid #C7D2FE", borderRadius: "16px", padding: "18px", marginBottom: "20px" },
+  todayPlanCard: { background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "16px", padding: "18px", marginBottom: "20px" },
   todayPlanHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", color: "var(--text)", fontSize: "15px", fontWeight: 800, marginBottom: "14px" },
-  todayPlanSparkle: { color: "#4F46E5", marginRight: "6px" },
+  todayPlanSparkle: { color: "var(--primary)", marginRight: "6px" },
   todayPlanHint: { color: "var(--text-muted)", fontSize: "12px", fontWeight: 600 },
   todayPlanSections: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "14px" },
   todayPlanSection: { display: "flex", flexDirection: "column", gap: "8px" },
   todayPlanTitle: { color: "#3730A3", fontSize: "13px", fontWeight: 800, margin: 0 },
   todayPlanEmpty: { margin: 0, padding: "11px", borderRadius: "10px", background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-muted)", fontSize: "12px", lineHeight: 1.45 },
   todayTask: { display: "flex", alignItems: "center", gap: "10px", width: "100%", padding: "10px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", cursor: "pointer", textAlign: "left", color: "var(--text)" },
-  todayTaskNumber: { width: "22px", height: "22px", flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: "#E0E7FF", color: "#4338CA", fontSize: "11px", fontWeight: 800 },
+  todayTaskNumber: { width: "22px", height: "22px", flexShrink: 0, display: "grid", placeItems: "center", borderRadius: "50%", background: "var(--border)", color: "var(--primary-dark)", fontSize: "11px", fontWeight: 800 },
   todayTaskCopy: { display: "flex", flex: 1, minWidth: 0, flexDirection: "column", gap: "2px", fontSize: "12px" },
-  todayTaskGo: { color: "#4F46E5", fontSize: "11px", fontWeight: 800, flexShrink: 0 },
+  todayTaskGo: { color: "var(--primary)", fontSize: "11px", fontWeight: 800, flexShrink: 0 },
   summaryCard: {
     background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px",
     boxShadow: "0 4px 20px rgba(15,23,42,0.06)", marginBottom: "20px", overflow: "hidden",
@@ -432,7 +600,7 @@ const s = {
   summaryBlock: { flex: 1, display: "flex", gap: "14px", padding: "22px" },
   summaryBlockBordered: { borderRight: "1px solid var(--border)" },
   summaryBlockIcon: {
-    width: "44px", height: "44px", borderRadius: "12px", background: "#EEF2FF",
+    width: "44px", height: "44px", borderRadius: "12px", background: "var(--primary-tint)",
     display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
   },
   summaryBlockIconCyan: { background: "#ECFEFF" },
@@ -461,7 +629,7 @@ const s = {
   attendanceBadgeBad: { background: "#FEE2E2", color: "#DC2626" },
   grid: { display: "grid", gridTemplateColumns: "1.6fr 1fr", gap: "20px" },
   colLeft: {},
-  colRight: { display: "flex", flexDirection: "column", gap: "16px" },
+  colRight: { display: "flex", flexDirection: "column", gap: "16px", position: "sticky", top: "24px", alignSelf: "flex-start" },
   sectionHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "10px" },
   sectionTitle: { fontSize: "15px", fontWeight: 700, color: "var(--text)" },
   viewAll: { fontSize: "13px", color: "var(--primary)", cursor: "pointer", fontWeight: 600 },
@@ -481,7 +649,7 @@ const s = {
   classRowName: { fontSize: "14px", fontWeight: 700, color: "var(--text)" },
   classRowSub: { fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" },
   classTag: { fontSize: "11px", fontWeight: 700, padding: "4px 10px", borderRadius: "20px", flexShrink: 0 },
-  classTagTeaching: { background: "#EEF2FF", color: "#4F46E5" },
+  classTagTeaching: { background: "var(--primary-tint)", color: "var(--primary)" },
   classTagLearning: { background: "#ECFEFF", color: "#06B6D4" },
   classRowAdd: {
     padding: "14px 18px", border: "1.5px dashed var(--border)", textAlign: "center",
@@ -497,17 +665,61 @@ const s = {
     border: "1px solid var(--border)", boxShadow: "0 4px 20px rgba(15,23,42,0.06)",
   },
   cardHeading: { fontSize: "14px", fontWeight: 700, marginBottom: "12px", color: "var(--text)" },
-  weekStrip: { display: "flex", gap: "6px" },
-  weekDay: {
-    flex: 1, textAlign: "center", padding: "10px 0", borderRadius: "10px",
-    background: "var(--surface-alt)", color: "var(--text)",
-  },
-  weekDayToday: { background: "var(--primary)", color: "#fff" },
-  weekDayLabel: { fontSize: "11px", fontWeight: 600, opacity: 0.8 },
-  weekDayNum: { fontSize: "15px", fontWeight: 700, marginTop: "2px" },
   noEventsHint: { fontSize: "13px", color: "var(--text-muted)" },
   upcomingRow: { display: "flex", alignItems: "center", gap: "8px", padding: "8px 0", borderBottom: "1px solid var(--border)" },
-  upcomingDot: { width: "7px", height: "7px", borderRadius: "50%", background: "#4F46E5", flexShrink: 0 },
+  upcomingDot: { width: "7px", height: "7px", borderRadius: "50%", background: "var(--primary)", flexShrink: 0 },
   upcomingTitle: { flex: 1, fontSize: "13px", color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
   upcomingTime: { fontSize: "12px", color: "var(--text-muted)", flexShrink: 0 },
+  // Calendar
+  calNavBtn: {
+    width: "28px", height: "28px", borderRadius: "8px", border: "1px solid var(--border)",
+    background: "var(--surface-alt)", color: "var(--text)", fontSize: "16px",
+    cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+  },
+  calGrid: {
+    display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: "2px",
+  },
+  calDayHeader: {
+    textAlign: "center", fontSize: "10px", fontWeight: 700, color: "var(--text-faint)",
+    padding: "4px 0 6px",
+  },
+  calCell: {
+    minHeight: "36px", borderRadius: "6px", display: "flex", flexDirection: "column",
+    alignItems: "center", justifyContent: "center", padding: "3px 2px",
+    cursor: "default", transition: "background 0.1s",
+    background: "transparent",
+  },
+  calCellToday: {
+    background: "var(--primary)", color: "#fff",
+  },
+  calAddBtn: {
+    position: "absolute", bottom: "1px", right: "1px",
+    width: "14px", height: "14px", borderRadius: "4px",
+    background: "var(--primary)", color: "#fff",
+    border: "none", fontSize: "12px", lineHeight: 1,
+    cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+    fontWeight: 700,
+  },
+  // Modal
+  overlay: {
+    position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)",
+    display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
+  },
+  modalBox: {
+    background: "var(--surface)", borderRadius: "16px", padding: "24px",
+    width: "340px", maxWidth: "92vw", border: "1px solid var(--border)",
+  },
+  fieldLabel: { display: "block", fontSize: "12px", fontWeight: 600, color: "var(--text-muted)", marginBottom: "5px" },
+  fieldInput: {
+    width: "100%", padding: "9px 12px", borderRadius: "8px", border: "1px solid var(--border)",
+    background: "var(--surface-alt)", color: "var(--text)", fontSize: "13px", boxSizing: "border-box",
+  },
+  btnPrimary: {
+    flex: 1, padding: "10px", background: "var(--primary)", color: "#fff",
+    border: "none", borderRadius: "8px", fontSize: "13px", fontWeight: 700, cursor: "pointer",
+  },
+  btnOutline: {
+    flex: 1, padding: "10px", background: "transparent", color: "var(--text-muted)",
+    border: "1px solid var(--border)", borderRadius: "8px", fontSize: "13px", fontWeight: 600, cursor: "pointer",
+  },
 };

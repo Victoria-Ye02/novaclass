@@ -3,6 +3,19 @@ import { useParams, useNavigate, useLocation } from "react-router-dom";
 import Sidebar from "../../components/Sidebar";
 import API from "../../services/api";
 import { useLang } from "../../LanguageContext";
+import CommentContent from "../../components/CommentContent";
+import PrivateCommentsPanel from "../../components/PrivateCommentsPanel";
+import Icon from "../../components/Icon";
+import {
+  SubmissionComments, MaterialAssignmentForm, FileCard, extLabel, PostCard, QuizView, formatDate,
+  btnStyle, layout, topHeader, backBtn, tabBtn, avatarSm, announceCard, announceTextarea,
+  postBtn, postCard, matPostCard, dlBtn, commentToggle, commentRow, commentAvatar,
+  commentBubble, commentInput, sendBtn, aiCard, aiBtn, sideCard, banner, newMatBtn,
+  weekLabel, matRow, matIcon, fileChip, fab, sectionHead, memberRow, memberAvatar,
+  overlayStyle, modalStyle, btnPrimary, btnOutline, lbl, inp, aiMentorPanel,
+  aiAvatarStyle, aiFeatureCard,
+  fbComposerCard, fbComposerInput, fbAvatar, fbActionBtn,
+} from "./ClassDetailHelpers";
 
 export default function ClassDetail() {
   const { id } = useParams();
@@ -13,6 +26,7 @@ export default function ClassDetail() {
   const [members, setMembers] = useState([]);
   const [posts, setPosts] = useState([]);
   const _initTab = new URLSearchParams(location.search).get("tab") || "stream";
+  const _initAssign = new URLSearchParams(location.search).get("assign");
   const [activeTab, setActiveTab] = useState(_initTab);
 
   function goTab(tab) {
@@ -25,6 +39,8 @@ export default function ClassDetail() {
 
   // Stream state
   const [announcement, setAnnouncement] = useState("");
+  const [postImage, setPostImage] = useState(null);       // File object
+  const [postImagePreview, setPostImagePreview] = useState(null); // object URL
   const [posting, setPosting] = useState(false);
   const [expandedComments, setExpandedComments] = useState({});
   const [commentInputs, setCommentInputs] = useState({});
@@ -37,8 +53,11 @@ export default function ClassDetail() {
   const [uploadFile, setUploadFile] = useState(null);
   const [uploadExtraFiles, setUploadExtraFiles] = useState([]);
   const [deleteAttachmentIds, setDeleteAttachmentIds] = useState([]);
+  const [removeMainFile, setRemoveMainFile] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [linkedAssign, setLinkedAssign] = useState(null); // null | { title, due_date, points }
+  const [expandedMats, setExpandedMats] = useState(new Set());
   const [generatingInstructions, setGeneratingInstructions] = useState(false);
   const [suggestedVideos, setSuggestedVideos] = useState([]);
   const [suggestingVideos, setSuggestingVideos] = useState(false);
@@ -46,12 +65,25 @@ export default function ClassDetail() {
   const [instructionLang, setInstructionLang] = useState("en");
   const [ytNextPageToken, setYtNextPageToken] = useState(null);
   const [ytLanguageHint, setYtLanguageHint] = useState("English");
+  const [ytPromptQuery, setYtPromptQuery] = useState("");
   const fileRef = useRef();
   const extraFileRef = useRef();
   const cachedInstructionText = useRef("");
+  // Guards handleSuggestVideos against out-of-order responses: if the file is
+  // swapped while a search for the previous file is still in flight, the
+  // older response can resolve after the newer one and silently overwrite it
+  // with videos for the wrong document.
+  const videoSearchSeq = useRef(0);
 
   // AI Study Mentor state
-  const [aiModal, setAiModal] = useState(null); // null | 'highlights' | 'summary' | 'quiz' | 'chat'
+  const [aiModal, setAiModal] = useState(null); // null | 'highlights' | 'summary' | 'quiz' | 'chat' | 'tutor'
+  const [tutorConfig, setTutorConfig] = useState(null);      // { lesson_context, homework_context, enabled }
+  const [tutorSetupOpen, setTutorSetupOpen] = useState(false);
+  const [tutorForm, setTutorForm] = useState({ lesson_context: "", homework_context: "", enabled: true });
+  const [tutorSaving, setTutorSaving] = useState(false);
+  const [tutorHistory, setTutorHistory] = useState([]);
+  const [tutorInput, setTutorInput] = useState("");
+  const [tutorSending, setTutorSending] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [chatHistory, setChatHistory] = useState([]);
@@ -86,8 +118,10 @@ export default function ClassDetail() {
   const [disputeModal, setDisputeModal] = useState(null); // null | {title, session_date, status}
   const [disputeForm, setDisputeForm] = useState({ requested: "present", reason: "" });
   const [leaveModal, setLeaveModal] = useState(null); // null | "form" | "confirm"
-  const [leaveForm, setLeaveForm] = useState({ from: new Date().toISOString().slice(0,10), to: new Date().toISOString().slice(0,10), reasonType: "medical", details: "" });
+  const [leaveForm, setLeaveForm] = useState({ from: new Date().toISOString().slice(0,10), to: new Date().toISOString().slice(0,10), reasonType: "medical", details: "", attachment: null });
   const [leaveHistory, setLeaveHistory] = useState([]);
+  const [leaveRequests, setLeaveRequests] = useState([]); // teacher: all class requests
+  const [leaveDetailModal, setLeaveDetailModal] = useState(null); // null | req object
   const [newSessionTitle, setNewSessionTitle] = useState("");
   const [attendanceMarkModal, setAttendanceMarkModal] = useState(false);
   const [attendanceModalEditMode, setAttendanceModalEditMode] = useState(false);
@@ -95,10 +129,7 @@ export default function ClassDetail() {
   const [attendanceSearchQuery, setAttendanceSearchQuery] = useState("");
   const [renamingSessionId, setRenamingSessionId] = useState(null);
   const [renamingTitle, setRenamingTitle] = useState("");
-  const [sessionMenuOpen, setSessionMenuOpen] = useState(null); // session id of open ⋮ menu
-  // Meeting
-  const [activeMeeting, setActiveMeeting] = useState(null);
-  const [meetingLoading, setMeetingLoading] = useState(false);
+  const [sessCtxMenu, setSessCtxMenu] = useState(null); // { id, x, y } — right-click / ⋮ context menu
 
   // Unread tracking (localStorage-based)
   const [seenAssignIds, setSeenAssignIds] = useState(() => {
@@ -152,7 +183,7 @@ export default function ClassDetail() {
   const [assignPage, setAssignPage] = useState(null); // student full-page view
   const [assignPageDetail, setAssignPageDetail] = useState(null);
   const [submitContent, setSubmitContent] = useState("");
-  const [submitFile, setSubmitFile] = useState(null);
+  const [submitFiles, setSubmitFiles] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [editing, setEditing] = useState(false); // editing existing submission
   const [aiCheck, setAiCheck] = useState(null); // { loading, result }
@@ -167,19 +198,25 @@ export default function ClassDetail() {
 
   // Material edit mode (null = create, number = editing material id)
   const [materialEditId, setMaterialEditId] = useState(null);
+  const [matMenu, setMatMenu] = useState(null); // { id, x, y } — context/three-dot menu
+  const [matDeleteConfirm, setMatDeleteConfirm] = useState(null); // material id to confirm delete
 
   // Material-linked assignments
   const [matAssignments, setMatAssignments] = useState([]);
-  const [matAssignForm, setMatAssignForm] = useState({ title: "", instructions: "", due_date: "", points: 100 });
   const [matAssignOpen, setMatAssignOpen] = useState(false);
-  const [matAssignSaving, setMatAssignSaving] = useState(false);
 
   // Teacher-specific states
-  const [streamView, setStreamView] = useState("dashboard");
   const [editingPost, setEditingPost] = useState(null);
   const [selectedStudent, setSelectedStudent] = useState(null); // People tab detail panel
   const [studentStats, setStudentStats] = useState(null);
   const [studentStatsLoading, setStudentStatsLoading] = useState(false);
+  const [richMembers, setRichMembers] = useState(null);
+  const [richLoading, setRichLoading] = useState(false);
+  const [notePanel, setNotePanel] = useState(null); // null | { id, name }
+  const [noteCategory, setNoteCategory] = useState("concern");
+  const [noteMessage, setNoteMessage] = useState("");
+  const [noteSending, setNoteSending] = useState(false);
+  const [classNotices, setClassNotices] = useState([]);
   const [inviteModal, setInviteModal] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviting, setInviting] = useState(false);
@@ -194,10 +231,11 @@ export default function ClassDetail() {
   const myName = localStorage.getItem("nova_name") || "You";
 
   useEffect(() => {
-    loadAll().then(() => {
+    loadAll().then((myRole) => {
       const tab = new URLSearchParams(location.search).get("tab");
-      if (tab === "attendance") { loadAttendance(); loadMeeting(); }
+      if (tab === "attendance") { loadAttendance(myRole); }
       if (tab === "grades") loadGrades();
+      if (tab === "people") loadRichMembers();
     });
   }, [id]);
 
@@ -233,6 +271,38 @@ export default function ClassDetail() {
     setCalStudentMonth(latest.getMonth());
   }, [myAttendance]);
 
+  // Material creation now generates its AI YouTube suggestions in the
+  // background (see backend: autoSuggestYoutubeResources) so the "Post"
+  // button doesn't sit there for several seconds — but that means a
+  // freshly-created material's `ai_resources` is still null in the
+  // `materials` list snapshot this component already has. Poll for it
+  // for a little while whenever the currently-open material doesn't have
+  // any yet, so "Related YouTube Videos" appears once the background job
+  // lands instead of requiring a manual reload to ever show up.
+  useEffect(() => {
+    if (!selectedMat || selectedMat.ai_resources?.length > 0) return;
+    let cancelled = false;
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      try {
+        const { data } = await API.get(`/classroom/classes/${id}/materials`);
+        const fresh = (data.materials || data || []).find(m => m.id === selectedMat.id);
+        if (cancelled) return;
+        if (fresh?.ai_resources?.length > 0) {
+          setMaterials(prev => prev.map(m => m.id === fresh.id ? { ...m, ...fresh } : m));
+          setSelectedMat(prev => (prev && prev.id === fresh.id ? { ...prev, ...fresh } : prev));
+          clearInterval(poll);
+        } else if (attempts >= 5) {
+          clearInterval(poll);
+        }
+      } catch {
+        clearInterval(poll);
+      }
+    }, 3000);
+    return () => { cancelled = true; clearInterval(poll); };
+  }, [selectedMat?.id]);
+
   async function loadAll() {
     setLoading(true);
     try {
@@ -244,7 +314,8 @@ export default function ClassDetail() {
       ]);
       const cls = classRes.data.class || classRes.data;
       setClassInfo(cls);
-      setIsTeacher(cls.my_role === "teacher");
+      const myRole = cls.my_role === "teacher";
+      setIsTeacher(myRole);
       setMyId(cls.my_id);
       setMaterials(matsRes.data.materials || matsRes.data || []);
       const md = membersRes.data;
@@ -255,14 +326,52 @@ export default function ClassDetail() {
       setPosts(postsRes.data || []);
 
       // Load optional data separately so failures don't block the page
-      API.get(`/classroom/classes/${id}/assignments`).then(r => setAssignments(r.data || [])).catch(() => {});
+      API.get(`/classroom/classes/${id}/assignments`).then(r => {
+        const list = r.data || [];
+        setAssignments(list);
+        if (_initAssign && cls.my_role !== "teacher") {
+          const target = list.find(a => String(a.id) === String(_initAssign));
+          if (target) openAssignment(target);
+        }
+      }).catch(() => {});
       API.get(`/classroom/classes/${id}/resources`).then(r => setResources(r.data || [])).catch(() => {});
       API.get(`/classroom/classes/${id}/stream-stats`).then(r => setStreamStats(r.data)).catch(() => {});
+      API.get(`/classroom/classes/${id}/ai-tutor`).then(r => {
+        if (r.data) { setTutorConfig(r.data); setTutorForm({ lesson_context: r.data.lesson_context || "", homework_context: r.data.homework_context || "", enabled: !!r.data.enabled }); }
+      }).catch(() => {});
+      if (cls.my_role !== "teacher") loadClassNotices();
+      return myRole;
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function saveTutorConfig() {
+    setTutorSaving(true);
+    try {
+      const { data } = await API.post(`/classroom/classes/${id}/ai-tutor`, tutorForm);
+      setTutorConfig(data);
+      setTutorSetupOpen(false);
+    } catch (err) { console.error(err); } finally { setTutorSaving(false); }
+  }
+
+  async function sendTutorMessage() {
+    if (!tutorInput.trim() || tutorSending) return;
+    const userMsg = { role: "user", content: tutorInput };
+    const newHistory = [...tutorHistory, userMsg];
+    setTutorHistory(newHistory);
+    setTutorInput("");
+    setTutorSending(true);
+    try {
+      const { data } = await API.post(`/classroom/classes/${id}/ai-tutor/chat`, {
+        message: userMsg.content, history: tutorHistory, lang,
+      });
+      setTutorHistory([...newHistory, { role: "assistant", content: data.reply }]);
+    } catch {
+      setTutorHistory([...newHistory, { role: "assistant", content: lang === "en" ? "AI unavailable. Please try again." : "AI မရနိုင်ပါ။" }]);
+    } finally { setTutorSending(false); }
   }
 
   async function handleEditPost() {
@@ -336,6 +445,45 @@ export default function ClassDetail() {
     } catch (err) { console.error(err); }
   }
 
+  async function loadRichMembers(force = false) {
+    if (!force && (richMembers !== null || richLoading)) return;
+    setRichLoading(true);
+    try {
+      const { data } = await API.get(`/classroom/classes/${id}/members/rich`);
+      setRichMembers(data.students || []);
+    } catch { setRichMembers([]); }
+    finally { setRichLoading(false); }
+  }
+
+  async function sendNote() {
+    if (!notePanel || !noteMessage.trim()) return;
+    setNoteSending(true);
+    try {
+      await API.post(`/classroom/classes/${id}/notes`, {
+        studentId: notePanel.id, category: noteCategory, message: noteMessage,
+      });
+      setNotePanel(null);
+      setNoteMessage("");
+      setNoteCategory("concern");
+    } catch (err) { console.error(err); }
+    finally { setNoteSending(false); }
+  }
+
+  async function loadClassNotices() {
+    try {
+      const { data } = await API.get("/notifications");
+      const notices = (data.notifications || []).filter(
+        n => n.type === "teacher_note" && n.link_url === `/classroom/${id}` && !n.is_read
+      );
+      setClassNotices(notices);
+    } catch { }
+  }
+
+  async function dismissNotice(noticeId) {
+    try { await API.post(`/notifications/${noticeId}/read`); } catch { }
+    setClassNotices(prev => prev.filter(n => n.id !== noticeId));
+  }
+
   async function openStudentStats(student) {
     setSelectedStudent(student);
     setStudentStats(null);
@@ -359,6 +507,11 @@ export default function ClassDetail() {
       const res = await API.get(`/classroom/classes/${id}/members`);
       const md = res.data;
       setMembers(md.members || [...(md.teachers||[]).map(t=>({...t,role:"teacher"})),...(md.students||[]).map(s=>({...s,role:"student"}))]);
+      // loadRichMembers() normally only fetches once (guarded by richMembers
+      // !== null) — force bypasses that so a freshly-invited student shows
+      // up in the People tab's grade/attendance table right away, instead
+      // of only after a full page reload.
+      loadRichMembers(true);
     } catch (err) {
       setInviteMsg({ ok: false, text: err.response?.data?.error || "Error occurred" });
     } finally { setInviting(false); }
@@ -380,17 +533,41 @@ export default function ClassDetail() {
   }
 
   async function handlePost() {
-    if (!announcement.trim()) return;
+    if (!announcement.trim() && !postImage) return;
     setPosting(true);
     try {
-      const { data } = await API.post(`/classroom/classes/${id}/posts`, { content: announcement });
+      const fd = new FormData();
+      fd.append("content", announcement.trim());
+      if (postImage) fd.append("image", postImage);
+      const { data } = await API.post(`/classroom/classes/${id}/posts`, fd, { headers: { "Content-Type": "multipart/form-data" } });
       setPosts(prev => [data, ...prev]);
       setAnnouncement("");
+      setPostImage(null);
+      if (postImagePreview) { URL.revokeObjectURL(postImagePreview); setPostImagePreview(null); }
     } catch (err) {
       console.error(err);
     } finally {
       setPosting(false);
     }
+  }
+
+  async function handleLike(postId) {
+    try {
+      const { data } = await API.post(`/classroom/posts/${postId}/like`);
+      setPosts(prev => prev.map(p =>
+        p.id === postId ? { ...p, liked_by_me: data.liked, like_count: data.like_count } : p
+      ));
+    } catch (err) { console.error(err); }
+  }
+
+  async function handlePin(postId) {
+    try {
+      const { data } = await API.patch(`/classroom/posts/${postId}/pin`);
+      setPosts(prev => {
+        const updated = prev.map(p => p.id === postId ? { ...p, is_pinned: data.is_pinned } : p);
+        return [...updated].sort((a, b) => (b.is_pinned ? 1 : 0) - (a.is_pinned ? 1 : 0));
+      });
+    } catch (err) { console.error(err); }
   }
 
   async function handleComment(postId) {
@@ -410,6 +587,18 @@ export default function ClassDetail() {
     }
   }
 
+  function handleCommentUpdate(postId, updated) {
+    setPosts(prev => prev.map(p =>
+      p.id === postId ? { ...p, comments: (p.comments || []).map(c => c.id === updated.id ? updated : c) } : p
+    ));
+  }
+
+  function handleCommentDelete(postId, commentId) {
+    setPosts(prev => prev.map(p =>
+      p.id === postId ? { ...p, comments: (p.comments || []).filter(c => c.id !== commentId) } : p
+    ));
+  }
+
   async function openAI(action) {
     if (!selectedMat) {
       // If called from Stream tab: switch to Classwork, auto-select first material if only one
@@ -423,7 +612,7 @@ export default function ClassDetail() {
         if (action !== "chat") {
           setAiLoading(true);
           try {
-            const { data } = await API.post(`/classroom/materials/${materials[0].id}/ai`, { action });
+            const { data } = await API.post(`/classroom/materials/${materials[0].id}/ai`, { action, lang });
             setAiResult(data.data);
           } catch {
             setAiResult({ error: "AI unavailable. Check GEMINI_API_KEY in backend .env" });
@@ -439,10 +628,11 @@ export default function ClassDetail() {
     setAiModal(action);
     setAiResult(null);
     setChatHistory([]);
+    if (action === "tutor") { setTutorHistory([]); setTutorInput(""); return; }
     if (action === "chat") { setLevelUpLevel(null); return; }
     setAiLoading(true);
     try {
-      const { data } = await API.post(`/classroom/materials/${selectedMat.id}/ai`, { action });
+      const { data } = await API.post(`/classroom/materials/${selectedMat.id}/ai`, { action, lang });
       setAiResult(data.data);
     } catch (err) {
       setAiResult({ error: "AI unavailable. Check GEMINI_API_KEY in backend .env" });
@@ -510,43 +700,47 @@ export default function ClassDetail() {
     finally { setGradesLoading(false); }
   }
 
-  async function loadAttendance() {
+  async function loadAttendance(forceTeacher) {
+    const asTeacher = forceTeacher !== undefined ? forceTeacher : isTeacher;
     setAttendanceLoading(true);
     try {
-      if (isTeacher) {
+      if (asTeacher) {
         const { data } = await API.get(`/classroom/classes/${id}/attendance`);
         setAttendanceSessions(data);
+        const { data: lr } = await API.get(`/classroom/classes/${id}/leave-requests`);
+        setLeaveRequests(lr);
       } else {
         const { data } = await API.get(`/classroom/classes/${id}/attendance/me`);
         setMyAttendance(data);
+        const { data: lr } = await API.get(`/classroom/classes/${id}/leave-requests`);
+        setLeaveHistory(lr);
       }
     } catch (err) { console.error(err); }
     finally { setAttendanceLoading(false); }
   }
 
-  async function loadMeeting() {
+  async function submitLeaveRequest() {
     try {
-      const { data } = await API.get(`/classroom/classes/${id}/meeting`);
-      setActiveMeeting(data.meeting);
+      const fd = new FormData();
+      fd.append("from_date", leaveForm.from);
+      fd.append("to_date", leaveForm.to);
+      fd.append("reason_type", leaveForm.reasonType);
+      fd.append("details", leaveForm.details || "");
+      if (leaveForm.attachment) fd.append("attachment", leaveForm.attachment);
+      const { data } = await API.post(`/classroom/classes/${id}/leave-requests`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      setLeaveHistory(h => [data, ...h]);
+      setLeaveModal("confirm");
     } catch (err) { console.error(err); }
   }
 
-  async function startMeeting() {
-    setMeetingLoading(true);
+  async function reviewLeave(leaveId, status) {
     try {
-      const { data } = await API.post(`/classroom/classes/${id}/meeting`, { title: "Live Class" });
-      setActiveMeeting(data.meeting);
+      const { data } = await API.patch(`/classroom/leave-requests/${leaveId}`, { status });
+      setLeaveRequests(prev => prev.map(r => r.id === leaveId ? data : r));
+      setLeaveDetailModal(prev => prev?.id === leaveId ? data : prev);
     } catch (err) { console.error(err); }
-    finally { setMeetingLoading(false); }
-  }
-
-  async function endMeeting() {
-    setMeetingLoading(true);
-    try {
-      await API.delete(`/classroom/classes/${id}/meeting`);
-      setActiveMeeting(null);
-    } catch (err) { console.error(err); }
-    finally { setMeetingLoading(false); }
   }
 
   async function createAttendanceSession() {
@@ -645,14 +839,46 @@ export default function ClassDetail() {
     }
   }
 
+  async function deleteMaterial(id) {
+    try {
+      await API.delete(`/classroom/materials/${id}`);
+      setMaterials(prev => prev.filter(m => m.id !== id));
+      if (selectedMat?.id === id) setSelectedMat(null);
+    } catch (e) {
+      alert(e.response?.data?.error || "Delete failed");
+    } finally {
+      setMatDeleteConfirm(null);
+      setMatMenu(null);
+    }
+  }
+
   function openEditMatModal() {
     const mat = selectedMat;
     setUploadForm({ title: mat.title, week: mat.week || 1, instructions: mat.instructions || "" });
     setUploadFile(null);
     setUploadExtraFiles([]);
     setDeleteAttachmentIds([]);
+    setRemoveMainFile(false);
     setUploadError("");
     // Pre-load existing YouTube videos
+    const existing = Array.isArray(mat.ai_resources) ? mat.ai_resources : [];
+    setSuggestedVideos(existing);
+    setSelectedVideoUrls(new Set(existing.map(v => v.url)));
+    setYtNextPageToken(null);
+    cachedInstructionText.current = "";
+    setMaterialEditId(mat.id);
+  }
+
+  function openEditMatById(id) {
+    const mat = materials.find(m => m.id === id);
+    if (!mat) return;
+    setSelectedMat(mat);
+    setUploadForm({ title: mat.title, week: mat.week || 1, instructions: mat.instructions || "" });
+    setUploadFile(null);
+    setUploadExtraFiles([]);
+    setDeleteAttachmentIds([]);
+    setRemoveMainFile(false);
+    setUploadError("");
     const existing = Array.isArray(mat.ai_resources) ? mat.ai_resources : [];
     setSuggestedVideos(existing);
     setSelectedVideoUrls(new Set(existing.map(v => v.url)));
@@ -666,28 +892,6 @@ export default function ClassDetail() {
       const { data } = await API.get(`/classroom/materials/${materialId}/assignments`);
       setMatAssignments(data || []);
     } catch {}
-  }
-
-  async function createMatAssignment() {
-    if (!matAssignForm.title.trim()) return;
-    setMatAssignSaving(true);
-    try {
-      const fd = new FormData();
-      fd.append("title", matAssignForm.title);
-      fd.append("instructions", matAssignForm.instructions);
-      if (matAssignForm.due_date) fd.append("due_date", matAssignForm.due_date);
-      fd.append("points", matAssignForm.points);
-      fd.append("material_id", selectedMat.id);
-      const { data } = await API.post(`/classroom/classes/${id}/assignments`, fd);
-      setMatAssignments(prev => [data, ...prev]);
-      setAssignments(prev => [data, ...prev]);
-      setMatAssignForm({ title: "", instructions: "", due_date: "", points: 100 });
-      setMatAssignOpen(false);
-    } catch (err) {
-      alert(err.response?.data?.error || "Failed to create assignment.");
-    } finally {
-      setMatAssignSaving(false);
-    }
   }
 
   async function openAssignment(assign) {
@@ -728,8 +932,8 @@ export default function ClassDetail() {
     try {
       const { data } = await API.post(`/classroom/assignments/${assignPage.id}/ai-check`, {
         answer: submitContent,
-        hasFile: !!submitFile,
-        fileName: submitFile?.name || null,
+        hasFile: submitFiles.length > 0,
+        fileName: submitFiles.map(f => f.name).join(", ") || null,
         lang,
       });
       setAiCheck({ loading: false, result: data });
@@ -785,7 +989,7 @@ export default function ClassDetail() {
     try {
       const fd = new FormData();
       if (submitContent) fd.append("content", submitContent);
-      if (submitFile) fd.append("file", submitFile);
+      submitFiles.forEach(f => fd.append("files", f));
       const { data } = await API.post(`/classroom/assignments/${target.id}/submit`, fd, {
         headers: { "Content-Type": "multipart/form-data" },
       });
@@ -799,7 +1003,7 @@ export default function ClassDetail() {
         setAiCheck(null);
       }
       setAssignDetail(d => d ? { ...d, my_submission: data } : d);
-      setSubmitFile(null);
+      setSubmitFiles([]);
       if (submitFileRef.current) submitFileRef.current.value = "";
     } catch (err) {
       alert(err.response?.data?.error || "Submission failed. Please try again.");
@@ -853,23 +1057,32 @@ export default function ClassDetail() {
 
   async function handleSuggestVideos(fileArg, useNextPage = false) {
     const fileToUse = fileArg !== undefined ? fileArg : uploadFile;
-    if (!fileToUse) return;
+    const usingManualQuery = !fileToUse && ytPromptQuery.trim();
+    if (!fileToUse && !usingManualQuery) return;
+    const seq = ++videoSearchSeq.current;
     setSuggestingVideos(true);
     setSuggestedVideos([]);
     try {
       const fd = new FormData();
       fd.append("title", uploadForm.title);
-      fd.append("file", fileToUse);
-      if (useNextPage && ytNextPageToken) fd.append("pageToken", ytNextPageToken);
+      if (usingManualQuery) {
+        fd.append("manualQuery", ytPromptQuery.trim());
+      } else {
+        fd.append("file", fileToUse);
+        if (useNextPage && ytNextPageToken) fd.append("pageToken", ytNextPageToken);
+        if (useNextPage) fd.append("forceRefresh", "1");
+      }
       if (ytLanguageHint.trim()) fd.append("languageHint", ytLanguageHint.trim());
-      const { data } = await API.post("/classroom/materials/suggest-youtube", fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const [{ data }] = await Promise.all([
+        API.post("/classroom/materials/suggest-youtube", fd, { headers: { "Content-Type": "multipart/form-data" } }),
+        new Promise(resolve => setTimeout(resolve, 600)),
+      ]);
+      if (seq !== videoSearchSeq.current) return;
       setSuggestedVideos(data.videos || []);
       setYtNextPageToken(data.nextPageToken || null);
       setSelectedVideoUrls(new Set());
     } catch { /* silent */ } finally {
-      setSuggestingVideos(false);
+      if (seq === videoSearchSeq.current) setSuggestingVideos(false);
     }
   }
 
@@ -880,11 +1093,14 @@ export default function ClassDetail() {
     setUploadFile(null);
     setUploadExtraFiles([]);
     setDeleteAttachmentIds([]);
+    setRemoveMainFile(false);
     setUploadError("");
     setSuggestedVideos([]);
     setYtNextPageToken(null);
     setSelectedVideoUrls(new Set());
+    setLinkedAssign(null);
     cachedInstructionText.current = "";
+    videoSearchSeq.current++;
     if (fileRef.current) fileRef.current.value = "";
     if (extraFileRef.current) extraFileRef.current.value = "";
   }
@@ -900,6 +1116,7 @@ export default function ClassDetail() {
       if (uploadFile) fd.append("file", uploadFile);
       uploadExtraFiles.forEach(f => fd.append("files", f));
       if (materialEditId && deleteAttachmentIds.length) fd.append("delete_file_ids", JSON.stringify(deleteAttachmentIds));
+      if (materialEditId && removeMainFile) fd.append("remove_main_file", "true");
       const selectedVids = suggestedVideos.filter(v => selectedVideoUrls.has(v.url));
       fd.append("ai_resources", JSON.stringify(selectedVids));
 
@@ -912,9 +1129,20 @@ export default function ClassDetail() {
         setMaterials(prev => prev.map(m => m.id === materialEditId ? { ...m, ...data } : m));
       } else {
         // Create mode — POST new material
-        await API.post(`/classroom/classes/${id}/materials`, fd, {
+        const { data: matData } = await API.post(`/classroom/classes/${id}/materials`, fd, {
           headers: { "Content-Type": "multipart/form-data" },
         });
+        // Optionally create a linked assignment in the same action
+        if (linkedAssign && linkedAssign.title.trim()) {
+          const afd = new FormData();
+          afd.append("title", linkedAssign.title.trim());
+          if (linkedAssign.due_date) afd.append("due_date", linkedAssign.due_date);
+          afd.append("points", String(linkedAssign.points || 100));
+          afd.append("material_id", String(matData.id));
+          await API.post(`/classroom/classes/${id}/assignments`, afd, {
+            headers: { "Content-Type": "multipart/form-data" },
+          });
+        }
         loadAll();
       }
       closeUploadModal();
@@ -972,16 +1200,14 @@ export default function ClassDetail() {
             {[
               { key: "stream", label: "Stream" },
               { key: "classwork", label: "Classwork" },
-              ...(isTeacher ? [{ key: "grades", label: "Grades" }] : []),
               { key: "attendance", label: "Attendance" },
               ...(isTeacher ? [{ key: "people", label: "People" }] : []),
             ].map(tab => (
               <button key={tab.key} onClick={() => {
                 goTab(tab.key);
-                if (tab.key === "stream") setStreamView("dashboard");
                 if (tab.key === "grades" && !gradesData) loadGrades();
                 if (tab.key === "attendance" && !attendanceSessions && !myAttendance) loadAttendance();
-                if (tab.key === "attendance") loadMeeting();
+                if (tab.key === "people") loadRichMembers();
               }} style={tabBtn(activeTab === tab.key)}>
                 {tab.label}
               </button>
@@ -991,133 +1217,121 @@ export default function ClassDetail() {
 
         <div style={{ flex: 1, padding: "28px 32px", background: "var(--bg)" }}>
 
-          {/* ── STREAM TAB ── */}
-          {activeTab === "stream" && streamView === "announcements" && (
-            <div>
-              <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
-                <button onClick={() => setStreamView("dashboard")} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "14px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px" }}>← Back</button>
-                <h3 style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)", margin: 0 }}>📢 Announcements</h3>
-              </div>
-              {isTeacher && (
-                <div style={{ ...announceCard, marginBottom: "16px" }}>
-                  <div style={{ display: "flex", gap: "12px" }}>
-                    <div style={{ ...avatarSm, background: "#3B37CC", color: "#fff", flexShrink: 0 }}>{myName[0].toUpperCase()}</div>
-                    <textarea value={announcement} onChange={e => setAnnouncement(e.target.value)} placeholder="Announce something to your class..." style={announceTextarea} rows={announcement ? 4 : 2} />
-                  </div>
-                  {announcement.trim() && (
-                    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "10px" }}>
-                      <button onClick={handlePost} disabled={posting} style={postBtn}>{posting ? "Posting..." : "Post"}</button>
+          {/* ── STUDENT NOTICE BOXES (teacher notes) ── */}
+          {!isTeacher && classNotices.length > 0 && (
+            <div style={{ marginBottom: "20px", display: "flex", flexDirection: "column", gap: "10px" }}>
+              {classNotices.map(n => (
+                <div key={n.id} style={{ display: "flex", gap: "12px", background: "rgba(251,146,60,0.12)", border: "1px solid rgba(251,146,60,0.4)", borderRadius: "14px", padding: "14px 16px", alignItems: "flex-start" }}>
+                  <span style={{ fontSize: "20px", flexShrink: 0 }}>⚠️</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)" }}>{n.title}</div>
+                    <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px", lineHeight: 1.5 }}>{n.message}</div>
+                    <div style={{ fontSize: "10px", color: "var(--text-faint)", marginTop: "6px" }}>
+                      {new Date(n.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
                     </div>
-                  )}
+                  </div>
+                  <button onClick={() => dismissNotice(n.id)} style={{ background: "none", border: "none", color: "#9A3412", fontSize: "14px", cursor: "pointer", flexShrink: 0, padding: "0 4px" }}>✕</button>
                 </div>
-              )}
-              {posts.length === 0
-                ? <div style={{ textAlign: "center", padding: "48px 0", color: "var(--text-faint)" }}><div style={{ fontSize: "32px", marginBottom: "8px" }}>📢</div><p>No announcements yet.</p></div>
-                : posts.map(post => (
-                  <PostCard key={post.id} post={post} myName={myName} isTeacher={isTeacher}
-                    onEdit={p => setEditingPost({ id: p.id, content: p.content })}
-                    onDelete={handleDeletePost}
-                    expandedComments={expandedComments} setExpandedComments={setExpandedComments}
-                    commentInputs={commentInputs} setCommentInputs={setCommentInputs}
-                    submittingComment={submittingComment} handleComment={handleComment} />
-                ))
-              }
+              ))}
             </div>
           )}
 
-          {activeTab === "stream" && streamView === "dashboard" && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 280px", gap: "20px", alignItems: "start" }}>
+          {/* ── STREAM TAB ── */}
+          {activeTab === "stream" && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 260px", gap: "24px", alignItems: "start" }}>
 
-              {/* ── LEFT MAIN ── */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+              {/* ── LEFT: Facebook-style feed ── */}
+              <div style={{ minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>
+                  <h3 style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)", margin: 0 }}>Stream</h3>
+                  <span style={{ fontSize: "12px", color: "var(--text-faint)" }}>· {classInfo.name}</span>
+                </div>
 
-                {/* Announcement post box — teacher only */}
-                {isTeacher && (
-                  <div style={announceCard}>
-                    <div style={{ display: "flex", gap: "12px" }}>
-                      <div style={{ ...avatarSm, background: "#3B37CC", color: "#fff", flexShrink: 0 }}>
-                        {myName[0].toUpperCase()}
-                      </div>
+                {/* Composer — everyone can post */}
+                <div style={fbComposerCard}>
+                  <div style={{ display: "flex", gap: "14px", alignItems: announcement ? "flex-start" : "center" }}>
+                    <div style={{ ...fbAvatar, width: "46px", height: "46px", fontSize: "17px", flexShrink: 0 }}>{myName[0].toUpperCase()}</div>
+                    {announcement ? (
                       <textarea
                         value={announcement}
                         onChange={e => setAnnouncement(e.target.value)}
-                        placeholder="Announce something to your class..."
-                        style={announceTextarea}
-                        rows={announcement ? 4 : 2}
+                        placeholder="What's on your mind?"
+                        style={{ flex: 1, border: "1.5px solid var(--border)", borderRadius: "12px", outline: "none", fontSize: "14px", color: "var(--text)", resize: "none", background: "var(--surface-alt)", fontFamily: "inherit", lineHeight: 1.7, minHeight: "90px", padding: "12px 16px" }}
+                        rows={4}
+                        autoFocus
                       />
-                    </div>
-                    {announcement.trim() && (
-                      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "10px" }}>
-                        <button onClick={handlePost} disabled={posting} style={postBtn}>
-                          {posting ? "Posting..." : "Post"}
-                        </button>
+                    ) : (
+                      <div onClick={() => setAnnouncement(" ")} style={fbComposerInput}>
+                        What's on your mind?
                       </div>
                     )}
                   </div>
-                )}
 
-                {/* Announcement section — compact rows like e-Class */}
-                <StreamSection
-                  icon="📢" title="Announcement"
-                  onMore={() => setStreamView("announcements")}
-                  empty={posts.length === 0}
-                  emptyMsg={isTeacher ? "Write an announcement above." : "No announcements yet."}
-                >
-                  {posts.slice(0, 4).map(post => (
-                    <StreamRow
-                      key={post.id}
-                      label={post.content?.slice(0, 70) + (post.content?.length > 70 ? "…" : "")}
-                      date={new Date(post.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                      actions={isTeacher ? (
-                        <div style={{ display: "flex", gap: "4px", flexShrink: 0 }}>
-                          <button onClick={e => { e.stopPropagation(); setEditingPost({ id: post.id, content: post.content }); }} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: "13px", padding: "0 3px" }}>✏️</button>
-                          <button onClick={e => { e.stopPropagation(); handleDeletePost(post.id); }} style={{ background: "none", border: "none", cursor: "pointer", color: "#ef4444", fontSize: "13px", padding: "0 3px" }}>🗑️</button>
+                  {/* Image preview */}
+                  {postImagePreview && (
+                    <div style={{ position: "relative", marginTop: "12px", borderRadius: "12px", overflow: "hidden", display: "inline-block", maxWidth: "100%" }}>
+                      <img src={postImagePreview} alt="preview" style={{ maxWidth: "100%", maxHeight: "300px", borderRadius: "12px", display: "block" }} />
+                      <button onClick={() => { setPostImage(null); URL.revokeObjectURL(postImagePreview); setPostImagePreview(null); }}
+                        style={{ position: "absolute", top: "8px", right: "8px", background: "rgba(0,0,0,0.55)", border: "none", borderRadius: "50%", width: "28px", height: "28px", color: "#fff", fontSize: "14px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+                    </div>
+                  )}
+
+                  {(announcement.trim() || postImage) && (
+                    <>
+                      <div style={{ borderTop: "1px solid var(--border)", margin: "12px 0 10px" }} />
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        {/* Photo button */}
+                        <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "var(--text-muted)", padding: "6px 10px", borderRadius: "8px", background: "var(--surface-alt)" }}>
+                          <span>🖼</span> Photo
+                          <input type="file" accept="image/*" style={{ display: "none" }} onChange={e => {
+                            const f = e.target.files[0];
+                            if (!f) return;
+                            if (postImagePreview) URL.revokeObjectURL(postImagePreview);
+                            setPostImage(f);
+                            setPostImagePreview(URL.createObjectURL(f));
+                            e.target.value = "";
+                          }} />
+                        </label>
+                        <div style={{ display: "flex", gap: "8px" }}>
+                          <button onClick={() => { setAnnouncement(""); setPostImage(null); if (postImagePreview) { URL.revokeObjectURL(postImagePreview); setPostImagePreview(null); } }} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "13px", color: "var(--text-muted)", padding: "7px 14px" }}>Cancel</button>
+                          <button onClick={handlePost} disabled={posting} style={postBtn}>{posting ? "Posting..." : "Post"}</button>
                         </div>
-                      ) : null}
-                      onClick={() => setStreamView("announcements")}
-                    />
-                  ))}
-                </StreamSection>
+                      </div>
+                    </>
+                  )}
 
-                {/* Material section */}
-                <StreamSection
-                  icon="📁" title="Material"
-                  onMore={() => goTab("classwork")}
-                  empty={materials.length === 0}
-                  emptyMsg="No materials uploaded yet."
-                >
-                  {materials.slice(0, 5).map(mat => (
-                    <StreamRow
-                      key={mat.id}
-                      label={mat.title}
-                      date={new Date(mat.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                      onClick={() => { goTab("classwork"); setClassworkTab("lessons"); }}
-                    />
-                  ))}
-                </StreamSection>
+                  {/* Photo button when composer just opened (no text yet) */}
+                  {!announcement.trim() && !postImage && (
+                    <div style={{ display: "flex", gap: "8px", marginTop: "12px", paddingTop: "12px", borderTop: "1px solid var(--border)" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", cursor: "pointer", fontSize: "13px", color: "var(--text-muted)", padding: "7px 14px", borderRadius: "8px", background: "var(--surface-alt)", flex: 1, justifyContent: "center" }}>
+                        <span>🖼</span> Photo / Video
+                        <input type="file" accept="image/*,video/*" style={{ display: "none" }} onChange={e => {
+                          const f = e.target.files[0];
+                          if (!f) return;
+                          setPostImage(f);
+                          setPostImagePreview(URL.createObjectURL(f));
+                          setAnnouncement(" ");
+                          e.target.value = "";
+                        }} />
+                      </label>
+                    </div>
+                  )}
+                </div>
 
-                {/* Assignments section */}
-                <StreamSection
-                  icon="✏️" title="Assignments"
-                  onMore={() => { goTab("classwork"); setClassworkTab("assignments"); }}
-                  empty={assignments.filter(a => !a.is_draft).length === 0}
-                  emptyMsg="No assignments yet."
-                >
-                  {assignments.filter(a => !a.is_draft).slice(0, 4).map(a => {
-                    const now = new Date();
-                    const due = a.due_date ? new Date(a.due_date) : null;
-                    const status = due && due < now ? "Finished" : "In Progress";
-                    return (
-                      <StreamRow
-                        key={a.id}
-                        label={a.title}
-                        badge={status}
-                        badgeColor={status === "Finished" ? "var(--text-muted)" : "#3B37CC"}
-                        onClick={() => { goTab("classwork"); setClassworkTab("assignments"); }}
-                      />
-                    );
-                  })}
-                </StreamSection>
+                {posts.length === 0
+                  ? <div style={{ textAlign: "center", padding: "48px 0", color: "var(--text-faint)" }}><div style={{ fontSize: "32px", marginBottom: "8px" }}>📢</div><p>No posts yet.</p></div>
+                  : posts.map(post => (
+                    <PostCard key={post.id} post={post} myName={myName} myId={myId} isTeacher={isTeacher}
+                      onEdit={p => setEditingPost({ id: p.id, content: p.content })}
+                      onDelete={handleDeletePost}
+                      onLike={handleLike}
+                      onPin={handlePin}
+                      expandedComments={expandedComments} setExpandedComments={setExpandedComments}
+                      commentInputs={commentInputs} setCommentInputs={setCommentInputs}
+                      submittingComment={submittingComment} handleComment={handleComment}
+                      onCommentUpdate={handleCommentUpdate} onCommentDelete={handleCommentDelete} />
+                  ))
+                }
               </div>
 
               {/* ── RIGHT SIDEBAR ── */}
@@ -1131,14 +1345,13 @@ export default function ClassDetail() {
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                     <div style={{ textAlign: "center" }}>
                       <div style={{ fontSize: "11px", color: "var(--text-muted)", marginBottom: "4px" }}>Activity</div>
-                      <div style={{ fontSize: "28px", fontWeight: 800, color: "#3B37CC" }}>{streamStats?.totalAssignments ?? "—"}</div>
+                      <div style={{ fontSize: "28px", fontWeight: 800, color: "var(--primary)" }}>{streamStats?.totalAssignments ?? "—"}</div>
                       <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>case</div>
                     </div>
-                    {/* Donut chart */}
                     <div style={{ position: "relative", width: "80px", height: "80px" }}>
                       <svg viewBox="0 0 36 36" style={{ width: "80px", height: "80px", transform: "rotate(-90deg)" }}>
                         <circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--border)" strokeWidth="3.5" />
-                        <circle cx="18" cy="18" r="15.9" fill="none" stroke="#3B37CC" strokeWidth="3.5"
+                        <circle cx="18" cy="18" r="15.9" fill="none" stroke="var(--primary)" strokeWidth="3.5"
                           strokeDasharray={`${streamStats?.submissionRate ?? 0} ${100 - (streamStats?.submissionRate ?? 0)}`}
                           strokeLinecap="round" />
                       </svg>
@@ -1149,7 +1362,7 @@ export default function ClassDetail() {
                   </div>
                 </div>
 
-                {/* Important (latest announcement) */}
+                {/* Important (pinned/latest posts) */}
                 {posts.length > 0 && (
                   <div style={sideCard}>
                     <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)", marginBottom: "10px" }}>Important</div>
@@ -1166,7 +1379,7 @@ export default function ClassDetail() {
                 {classInfo.code && (
                   <div style={{ background: "var(--surface)", border: "2px dashed var(--border)", borderRadius: "12px", padding: "14px", textAlign: "center" }}>
                     <div style={{ fontSize: "10px", fontWeight: 700, color: "var(--text-faint)", marginBottom: "6px", textTransform: "uppercase", letterSpacing: "1px" }}>Class Code</div>
-                    <div style={{ fontSize: "22px", fontWeight: 800, color: "#3B37CC", letterSpacing: "4px" }}>{classInfo.code}</div>
+                    <div style={{ fontSize: "22px", fontWeight: 800, color: "var(--primary)", letterSpacing: "4px" }}>{classInfo.code}</div>
                     <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "4px" }}>Share with students</div>
                   </div>
                 )}
@@ -1187,37 +1400,45 @@ export default function ClassDetail() {
             </div>
           )}
 
+
           {/* ── CLASSWORK TAB ── */}
           {activeTab === "classwork" && (
             <div style={{ display: "grid", gridTemplateColumns: (selectedMat && !isTeacher) ? "1fr 320px" : "1fr", gap: "24px", alignItems: "start" }}>
               {/* Left: material list */}
               <div>
 
-                {/* Teacher action buttons */}
-                {isTeacher && (
-                  <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginBottom: "20px" }}>
-                    <button onClick={() => setAssignModal(true)} style={{ background: "var(--surface)", color: "#3B37CC", border: "1.5px solid #3B37CC", borderRadius: "8px", padding: "8px 16px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
-                      + Assignment
+                {/* Teacher action buttons — hidden when viewing a material */}
+                {isTeacher && !selectedMat && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", marginBottom: "20px" }}>
+                    {/* AI Tutor status chip */}
+                    <button onClick={() => setTutorSetupOpen(true)} style={{ display: "flex", alignItems: "center", gap: "8px", background: tutorConfig?.enabled ? "rgba(34,197,94,0.12)" : "var(--surface-alt)", border: `1.5px solid ${tutorConfig?.enabled ? "rgba(34,197,94,0.4)" : "var(--border)"}`, borderRadius: "20px", padding: "6px 14px", fontSize: "12px", fontWeight: 700, color: tutorConfig?.enabled ? "#22c55e" : "var(--text-muted)", cursor: "pointer" }}>
+                      🤖 AI Tutor {tutorConfig?.enabled ? "● Active" : "Setup"}
                     </button>
-                    <button onClick={() => setUploadModal(true)} style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "8px 16px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
-                      + Material
-                    </button>
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <button onClick={() => setAssignModal(true)} style={{ background: "var(--surface)", color: "var(--primary)", border: "1.5px solid var(--primary)", borderRadius: "8px", padding: "8px 16px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
+                        + Assignment
+                      </button>
+                      <button onClick={() => setUploadModal(true)} style={{ background: "var(--primary)", color: "#fff", border: "none", borderRadius: "8px", padding: "8px 16px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
+                        + Material
+                      </button>
+                    </div>
                   </div>
                 )}
 
                 {/* Student full-page assignment view */}
                 {assignPage && !isTeacher ? (
-                  <div style={{ background: "#f8f9fa", minHeight: "calc(100vh - 120px)", margin: "-8px -8px 0", padding: "0" }}>
+                  <div style={{ background: "var(--bg)", minHeight: "calc(100vh - 120px)", margin: "-8px -8px 0", padding: "0" }}>
                     {/* Top bar */}
-                    <div style={{ background: "#fff", borderBottom: "1px solid #e5e7eb", padding: "12px 24px", display: "flex", alignItems: "center", gap: "12px" }}>
-                      <button onClick={() => { setAssignPage(null); setAssignPageDetail(null); setEditing(false); setAiCheck(null); }}
-                        style={{ background: "none", border: "none", cursor: "pointer", color: "#5f6368", fontSize: "20px", display: "flex", alignItems: "center", padding: "4px", borderRadius: "50%" }}>←</button>
+                    <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "12px 24px", display: "flex", alignItems: "center", gap: "12px" }}>
                       <div style={{ width: "36px", height: "36px", background: "#1a73e8", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                        <span style={{ fontSize: "18px" }}>📝</span>
+                        <Icon name="note" size={18} alt="" style={{ filter: "brightness(0) invert(1)" }} />
                       </div>
                       <div>
-                        <div style={{ fontSize: "16px", fontWeight: 600, color: "#202124" }}>{assignPage.title}</div>
-                        <div style={{ fontSize: "12px", color: "#5f6368" }}>{classInfo?.name}</div>
+                        <div style={{ fontSize: "16px", fontWeight: 600, color: "var(--text)" }}>{assignPage.title}</div>
+                        <button onClick={() => { setAssignPage(null); setAssignPageDetail(null); setEditing(false); setAiCheck(null); }}
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: "12px", padding: 0, display: "flex", alignItems: "center", gap: "4px" }}>
+                          ← {classInfo?.name}
+                        </button>
                       </div>
                     </div>
 
@@ -1227,20 +1448,20 @@ export default function ClassDetail() {
                       {/* LEFT — main content */}
                       <div style={{ flex: 1, minWidth: 0 }}>
                         {/* Assignment header */}
-                        <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #e0e0e0", padding: "24px 28px", marginBottom: "16px" }}>
-                          <div style={{ fontSize: "22px", fontWeight: 400, color: "#202124", marginBottom: "8px" }}>{assignPage.title}</div>
-                          <div style={{ display: "flex", gap: "16px", alignItems: "center", fontSize: "13px", color: "#5f6368", marginBottom: "4px" }}>
+                        <div style={{ background: "var(--surface)", borderRadius: "8px", border: "1px solid var(--border)", padding: "24px 28px", marginBottom: "16px" }}>
+                          <div style={{ fontSize: "22px", fontWeight: 400, color: "var(--text)", marginBottom: "8px" }}>{assignPage.title}</div>
+                          <div style={{ display: "flex", gap: "16px", alignItems: "center", fontSize: "13px", color: "var(--text-muted)", marginBottom: "4px" }}>
                             <span>{classInfo?.name}</span>
                             <span>·</span>
                             <span>{assignPage.due_date ? `Due ${formatDate(assignPage.due_date)}` : "No due date"}</span>
                             <span>·</span>
                             <span>{assignPage.points ? `${assignPage.points} points` : "Not graded"}</span>
                           </div>
-                          <hr style={{ border: "none", borderTop: "1px solid #e0e0e0", margin: "16px 0" }} />
+                          <hr style={{ border: "none", borderTop: "1px solid var(--border)", margin: "16px 0" }} />
                           {assignPage.instructions ? (
-                            <div style={{ fontSize: "14px", color: "#202124", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{assignPage.instructions}</div>
+                            <div style={{ fontSize: "14px", color: "var(--text)", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{assignPage.instructions}</div>
                           ) : (
-                            <div style={{ fontSize: "14px", color: "#9aa0a6" }}>No instructions provided.</div>
+                            <div style={{ fontSize: "14px", color: "var(--text-faint)" }}>No instructions provided.</div>
                           )}
 
                           {/* Teacher files */}
@@ -1248,13 +1469,13 @@ export default function ClassDetail() {
                             <div style={{ marginTop: "20px", display: "flex", flexWrap: "wrap", gap: "10px" }}>
                               {(assignPageDetail?.files || assignPage.files).map(f => (
                                 <a key={f.id} href={`http://localhost:5001/uploads/${f.file_path}`} target="_blank" rel="noreferrer"
-                                  style={{ display: "flex", alignItems: "center", gap: "10px", background: "#f8f9fa", border: "1px solid #e0e0e0", borderRadius: "8px", padding: "10px 14px", textDecoration: "none", minWidth: "200px" }}>
+                                  style={{ display: "flex", alignItems: "center", gap: "10px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "8px", padding: "10px 14px", textDecoration: "none", minWidth: "200px" }}>
                                   <div style={{ width: "36px", height: "36px", background: "#4285f4", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                                    <span style={{ fontSize: "18px" }}>📄</span>
+                                    <Icon name="file" size={18} alt="" style={{ filter: "brightness(0) invert(1)" }} />
                                   </div>
                                   <div>
-                                    <div style={{ fontSize: "13px", fontWeight: 500, color: "#202124", maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.file_name}</div>
-                                    <div style={{ fontSize: "11px", color: "#5f6368" }}>PDF</div>
+                                    <div style={{ fontSize: "13px", fontWeight: 500, color: "var(--text)", maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.file_name}</div>
+                                    <div style={{ fontSize: "11px", color: "var(--text-muted)" }}>PDF</div>
                                   </div>
                                 </a>
                               ))}
@@ -1263,18 +1484,18 @@ export default function ClassDetail() {
                         </div>
 
                         {/* Class comments */}
-                        <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #e0e0e0", padding: "20px 24px" }}>
-                          <div style={{ fontSize: "14px", fontWeight: 500, color: "#202124", marginBottom: "14px" }}>Class comments</div>
+                        <div style={{ background: "var(--surface)", borderRadius: "8px", border: "1px solid var(--border)", padding: "20px 24px" }}>
+                          <div style={{ fontSize: "14px", fontWeight: 500, color: "var(--text)", marginBottom: "14px" }}>Class comments</div>
                           {comments.length === 0
-                            ? <div style={{ fontSize: "13px", color: "#9aa0a6" }}>No class comments yet.</div>
+                            ? <div style={{ fontSize: "13px", color: "var(--text-faint)" }}>No class comments yet.</div>
                             : comments.map(c => (
                               <div key={c.id} style={{ display: "flex", gap: "10px", marginBottom: "14px" }}>
-                                <div style={{ width: "32px", height: "32px", background: "#3B37CC", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "13px", fontWeight: 700, color: "#fff" }}>
+                                <div style={{ width: "32px", height: "32px", background: "var(--primary)", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "13px", fontWeight: 700, color: "#fff" }}>
                                   {c.author_name?.[0]?.toUpperCase()}
                                 </div>
                                 <div style={{ flex: 1 }}>
-                                  <div style={{ fontSize: "12px", fontWeight: 600, color: "#202124" }}>{c.author_name}</div>
-                                  <div style={{ fontSize: "13px", color: "#374151", marginTop: "2px" }}>
+                                  <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--text)" }}>{c.author_name}</div>
+                                  <div style={{ fontSize: "13px", color: "var(--text-muted)", marginTop: "2px" }}>
                                     <CommentContent comment={c} isMine={c.author_id === myId}
                                       onUpdate={updated => setComments(prev => prev.map(x => x.id === c.id ? updated : x))}
                                       onDelete={() => setComments(prev => prev.filter(x => x.id !== c.id))} />
@@ -1284,14 +1505,16 @@ export default function ClassDetail() {
                             ))
                           }
                           <div style={{ display: "flex", gap: "10px", marginTop: "12px", alignItems: "center" }}>
-                            <div style={{ width: "32px", height: "32px", background: "#3B37CC", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "13px", fontWeight: 700, color: "#fff" }}>
+                            <div style={{ width: "32px", height: "32px", background: "var(--primary)", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, fontSize: "13px", fontWeight: 700, color: "#fff" }}>
                               {members.find(m => !m.is_teacher)?.name?.[0]?.toUpperCase() || "S"}
                             </div>
                             <input placeholder="Add class comment..." value={commentInput} onChange={e => setCommentInput(e.target.value)}
                               onKeyDown={e => e.key === "Enter" && sendComment(assignPage.id)}
-                              style={{ flex: 1, border: "none", borderBottom: "1px solid #e0e0e0", outline: "none", fontSize: "14px", padding: "6px 0", color: "#202124", background: "transparent" }} />
+                              style={{ flex: 1, border: "none", borderBottom: "1px solid var(--border)", outline: "none", fontSize: "14px", padding: "6px 0", color: "var(--text)", background: "transparent" }} />
                             <button onClick={() => sendComment(assignPage.id)} disabled={commentSending || !commentInput.trim()}
-                              style={{ background: "none", border: "none", cursor: commentInput.trim() ? "pointer" : "default", color: commentInput.trim() ? "#1a73e8" : "#9aa0a6", fontSize: "20px", padding: "4px" }}>➤</button>
+                              style={{ background: "none", border: "none", cursor: commentInput.trim() ? "pointer" : "default", padding: "4px", opacity: commentInput.trim() ? 1 : 0.4 }}>
+                              <Icon name="sent" size={20} alt="Send" />
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -1304,28 +1527,28 @@ export default function ClassDetail() {
                           const canEdit = !pastDue || !sub;
 
                           const statusLabel = (() => {
-                            if (!sub) return { text: "Assigned", color: "#1a73e8", bg: "#e8f0fe" };
-                            if (sub.status === "graded") return { text: "Graded", color: "#137333", bg: "#e6f4ea" };
-                            if (sub.status === "returned") return { text: "Returned", color: "#b45309", bg: "#fef3c7" };
-                            if (sub.status === "late") return { text: "Late", color: "#c5221f", bg: "#fce8e6" };
-                            return { text: "Turned in", color: "#137333", bg: "#e6f4ea" };
+                            if (!sub) return { text: "Assigned", color: "#1a73e8", bg: "rgba(26,115,232,0.12)" };
+                            if (sub.status === "graded") return { text: "Graded", color: "#10b981", bg: "rgba(16,185,129,0.12)" };
+                            if (sub.status === "returned") return { text: "Returned", color: "#f59e0b", bg: "rgba(245,158,11,0.12)" };
+                            if (sub.status === "late") return { text: "Late", color: "#ef4444", bg: "rgba(239,68,68,0.12)" };
+                            return { text: "Turned in", color: "#10b981", bg: "rgba(16,185,129,0.12)" };
                           })();
 
                           return (
                             <>
                               {/* Your work card */}
-                              <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #e0e0e0", overflow: "hidden" }}>
-                                <div style={{ padding: "14px 18px", borderBottom: "1px solid #f1f3f4", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                                  <span style={{ fontSize: "14px", fontWeight: 600, color: "#202124" }}>Your work</span>
+                              <div style={{ background: "var(--surface)", borderRadius: "8px", border: "1px solid var(--border)", overflow: "hidden" }}>
+                                <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                  <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>Your work</span>
                                   <span style={{ fontSize: "12px", fontWeight: 600, color: statusLabel.color, background: statusLabel.bg, padding: "3px 10px", borderRadius: "12px" }}>{statusLabel.text}</span>
                                 </div>
 
                                 <div style={{ padding: "16px 18px" }}>
                                   {/* Graded display */}
                                   {sub?.status === "graded" && (
-                                    <div style={{ textAlign: "center", marginBottom: "16px", padding: "12px", background: "#e6f4ea", borderRadius: "8px" }}>
-                                      <div style={{ fontSize: "28px", fontWeight: 700, color: "#137333" }}>{sub.grade}<span style={{ fontSize: "14px", color: "#5f6368" }}>/{assignPage.points}</span></div>
-                                      {sub.grade_comment && <div style={{ fontSize: "12px", color: "#374151", marginTop: "6px", fontStyle: "italic" }}>"{sub.grade_comment}"</div>}
+                                    <div style={{ textAlign: "center", marginBottom: "16px", padding: "12px", background: "rgba(16,185,129,0.10)", borderRadius: "8px" }}>
+                                      <div style={{ fontSize: "28px", fontWeight: 700, color: "#10b981" }}>{sub.grade}<span style={{ fontSize: "14px", color: "var(--text-muted)" }}>/{assignPage.points}</span></div>
+                                      {sub.grade_comment && <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "6px", fontStyle: "italic" }}>"{sub.grade_comment}"</div>}
                                     </div>
                                   )}
 
@@ -1333,16 +1556,16 @@ export default function ClassDetail() {
                                   {sub && !editing && (
                                     <div style={{ marginBottom: "12px" }}>
                                       {sub.content && (
-                                        <div style={{ background: "#f8f9fa", border: "1px solid #e0e0e0", borderRadius: "8px", padding: "10px 14px", marginBottom: "8px", fontSize: "13px", color: "#202124" }}>
+                                        <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "8px", padding: "10px 14px", marginBottom: "8px", fontSize: "13px", color: "var(--text)" }}>
                                           {sub.content}
                                         </div>
                                       )}
-                                      {sub.file_path && (
-                                        <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "#f8f9fa", border: "1px solid #e0e0e0", borderRadius: "8px", padding: "10px 14px" }}>
-                                          <span style={{ fontSize: "18px" }}>📎</span>
-                                          <span style={{ fontSize: "13px", color: "#202124", fontWeight: 500 }}>File attached</span>
-                                        </div>
-                                      )}
+                                      {(sub.submission_files?.length > 0 ? sub.submission_files : sub.file_path ? [{ file_name: "Attached file", file_path: sub.file_path }] : []).map((f, i) => (
+                                        <a key={i} href={`http://localhost:5001/uploads/${f.file_path}`} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center", gap: "8px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "8px", padding: "10px 14px", textDecoration: "none", marginBottom: i < (sub.submission_files?.length || 1) - 1 ? "6px" : "0" }}>
+                                          <Icon name="attach" size={18} alt="" />
+                                          <span style={{ fontSize: "13px", color: "#1a73e8", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.file_name}</span>
+                                        </a>
+                                      ))}
                                     </div>
                                   )}
 
@@ -1353,44 +1576,56 @@ export default function ClassDetail() {
                                         value={submitContent}
                                         onChange={e => { setSubmitContent(e.target.value); setAiCheck(null); }}
                                         placeholder="Write your answer here..."
-                                        style={{ width: "100%", border: "1px solid #e0e0e0", borderRadius: "8px", padding: "10px 12px", fontSize: "13px", resize: "vertical", minHeight: "100px", outline: "none", boxSizing: "border-box", color: "#202124", fontFamily: "inherit" }}
+                                        style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "10px 12px", fontSize: "13px", resize: "vertical", minHeight: "100px", outline: "none", boxSizing: "border-box", color: "var(--text)", background: "var(--surface-alt)", fontFamily: "inherit" }}
                                       />
-                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", background: "#f8f9fa", border: "1px solid #e0e0e0", borderRadius: "8px", padding: "10px 14px", cursor: "pointer" }}>
-                                        <span style={{ fontSize: "16px" }}>📎</span>
-                                        <span style={{ fontSize: "13px", color: "#1a73e8", fontWeight: 500 }}>{submitFile ? submitFile.name : "Attach file"}</span>
-                                        <input type="file" ref={submitFileRef} onChange={e => setSubmitFile(e.target.files[0])} style={{ display: "none" }} />
+                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "8px", padding: "10px 14px", cursor: "pointer" }}>
+                                        <Icon name="attach" size={16} alt="" />
+                                        <span style={{ fontSize: "13px", color: "#1a73e8", fontWeight: 500 }}>Attach files</span>
+                                        <input type="file" multiple ref={submitFileRef} onChange={e => setSubmitFiles(prev => [...prev, ...Array.from(e.target.files)])} style={{ display: "none" }} />
                                       </label>
+                                      {submitFiles.length > 0 && (
+                                        <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                                          {submitFiles.map((f, i) => (
+                                            <div key={i} style={{ display: "flex", alignItems: "center", gap: "8px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "8px", padding: "7px 12px" }}>
+                                              <Icon name="attach" size={14} alt="" />
+                                              <span style={{ fontSize: "12px", color: "var(--text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
+                                              <button onClick={() => setSubmitFiles(prev => prev.filter((_, idx) => idx !== i))} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", padding: "0 2px", fontSize: "14px", lineHeight: 1 }}>×</button>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
                                     </div>
                                   )}
 
                                   {/* Past due + no submission */}
                                   {!canEdit && !sub && (
-                                    <div style={{ fontSize: "13px", color: "#9aa0a6", marginBottom: "12px", textAlign: "center" }}>Submission period expired.</div>
+                                    <div style={{ fontSize: "13px", color: "var(--text-faint)", marginBottom: "12px", textAlign: "center" }}>Submission period expired.</div>
                                   )}
 
                                   {/* AI check */}
                                   {(editing || (!sub && canEdit)) && (
                                     <div style={{ marginBottom: "10px" }}>
                                       <button onClick={checkWithAI} disabled={aiCheck?.loading}
-                                        style={{ width: "100%", background: "linear-gradient(135deg,#6366f1,#8b5cf6)", color: "#fff", border: "none", borderRadius: "8px", padding: "9px", fontSize: "12px", fontWeight: 600, cursor: "pointer", opacity: aiCheck?.loading ? 0.7 : 1 }}>
-                                        {aiCheck?.loading ? "🤖 Checking..." : "🤖 Check with AI"}
+                                        style={{ width: "100%", background: "linear-gradient(135deg,var(--primary),var(--primary-light))", color: "#fff", border: "none", borderRadius: "8px", padding: "9px", fontSize: "12px", fontWeight: 600, cursor: "pointer", opacity: aiCheck?.loading ? 0.7 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                                        <Icon name="bot" size={16} alt="" style={{ filter: "brightness(0) invert(1)" }} />
+                                        {aiCheck?.loading ? "Checking..." : "Check with AI"}
                                       </button>
                                       {aiCheck?.result && (
                                         <div style={{ marginTop: "8px", borderRadius: "8px", overflow: "hidden", border: `2px solid ${aiCheck.result.isComplete ? "#22c55e" : "#f59e0b"}` }}>
                                           <div style={{ background: aiCheck.result.isComplete ? "#22c55e" : "#f59e0b", padding: "8px 12px", display: "flex", alignItems: "center", gap: "8px" }}>
-                                            <span>{aiCheck.result.isComplete ? "✅" : "⚠️"}</span>
+                                            <Icon name={aiCheck.result.isComplete ? "checkmark" : "error"} size={16} alt="" style={{ filter: "brightness(0) invert(1)" }} />
                                             <div style={{ fontSize: "12px", fontWeight: 700, color: "#fff" }}>
                                               {aiCheck.result.isComplete ? "Ready to submit" : "Incomplete"}
                                               {aiCheck.result.score != null && ` · ${aiCheck.result.score}%`}
                                             </div>
                                           </div>
                                           {aiCheck.result.missing?.length > 0 && (
-                                            <div style={{ background: "#fff8ed", padding: "8px 12px" }}>
-                                              {aiCheck.result.missing.map((m, i) => <div key={i} style={{ fontSize: "12px", color: "#78350f" }}>• {m}</div>)}
+                                            <div style={{ background: "rgba(245,158,11,0.08)", padding: "8px 12px" }}>
+                                              {aiCheck.result.missing.map((m, i) => <div key={i} style={{ fontSize: "12px", color: "#f59e0b" }}>• {m}</div>)}
                                             </div>
                                           )}
-                                          <div style={{ background: "#fff", padding: "8px 12px" }}>
-                                            <div style={{ fontSize: "12px", color: "#374151", lineHeight: 1.6 }}>{aiCheck.result.feedback}</div>
+                                          <div style={{ background: "var(--surface-alt)", padding: "8px 12px" }}>
+                                            <div style={{ fontSize: "12px", color: "var(--text-muted)", lineHeight: 1.6 }}>{aiCheck.result.feedback}</div>
                                           </div>
                                         </div>
                                       )}
@@ -1400,19 +1635,19 @@ export default function ClassDetail() {
                                   {/* Action buttons */}
                                   {sub && !editing && sub.status !== "graded" && canEdit && (
                                     <button onClick={() => { setEditing(true); setSubmitContent(sub.content || ""); setAiCheck(null); }}
-                                      style={{ width: "100%", background: "#fff", color: "#1a73e8", border: "1px solid #1a73e8", borderRadius: "20px", padding: "9px", fontSize: "13px", fontWeight: 600, cursor: "pointer", marginBottom: "8px" }}>
+                                      style={{ width: "100%", background: "var(--surface)", color: "var(--primary)", border: "1px solid var(--primary)", borderRadius: "20px", padding: "9px", fontSize: "13px", fontWeight: 600, cursor: "pointer", marginBottom: "8px" }}>
                                       Unsubmit
                                     </button>
                                   )}
                                   {editing && (
                                     <button onClick={() => setEditing(false)}
-                                      style={{ width: "100%", background: "#fff", color: "#5f6368", border: "1px solid #e0e0e0", borderRadius: "20px", padding: "9px", fontSize: "13px", fontWeight: 600, cursor: "pointer", marginBottom: "8px" }}>
+                                      style={{ width: "100%", background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "20px", padding: "9px", fontSize: "13px", fontWeight: 600, cursor: "pointer", marginBottom: "8px" }}>
                                       Cancel
                                     </button>
                                   )}
                                   {(editing || (!sub && canEdit)) && (
-                                    <button onClick={submitAssignment} disabled={submitting || (!submitContent.trim() && !submitFile)}
-                                      style={{ width: "100%", background: submitting || (!submitContent.trim() && !submitFile) ? "#c5cae9" : "#1a73e8", color: "#fff", border: "none", borderRadius: "20px", padding: "10px", fontSize: "13px", fontWeight: 700, cursor: submitting || (!submitContent.trim() && !submitFile) ? "not-allowed" : "pointer" }}>
+                                    <button onClick={submitAssignment} disabled={submitting || (!submitContent.trim() && submitFiles.length === 0)}
+                                      style={{ width: "100%", background: submitting || (!submitContent.trim() && submitFiles.length === 0) ? "var(--border)" : "var(--primary)", color: "#fff", border: "none", borderRadius: "20px", padding: "10px", fontSize: "13px", fontWeight: 700, cursor: submitting || (!submitContent.trim() && submitFiles.length === 0) ? "not-allowed" : "pointer" }}>
                                       {submitting ? "Turning in..." : editing ? "Save" : "Turn in"}
                                     </button>
                                   )}
@@ -1420,14 +1655,14 @@ export default function ClassDetail() {
                               </div>
 
                               {/* Private comments */}
-                              <div style={{ background: "#fff", borderRadius: "8px", border: "1px solid #e0e0e0", padding: "16px 18px" }}>
-                                <div style={{ fontSize: "13px", fontWeight: 600, color: "#202124", marginBottom: "12px" }}>Private comments</div>
+                              <div style={{ background: "var(--surface)", borderRadius: "8px", border: "1px solid var(--border)", padding: "16px 18px" }}>
+                                <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)", marginBottom: "12px" }}>Private comments</div>
                                 {comments.length === 0
-                                  ? <div style={{ fontSize: "13px", color: "#9aa0a6", marginBottom: "10px" }}>No private comments.</div>
+                                  ? <div style={{ fontSize: "13px", color: "var(--text-faint)", marginBottom: "10px" }}>No private comments.</div>
                                   : comments.map(c => (
                                     <div key={c.id} style={{ marginBottom: "10px" }}>
-                                      <div style={{ fontSize: "11px", fontWeight: 600, color: "#5f6368" }}>{c.author_name}</div>
-                                      <div style={{ fontSize: "13px", color: "#202124", marginTop: "2px" }}>
+                                      <div style={{ fontSize: "11px", fontWeight: 600, color: "var(--text-muted)" }}>{c.author_name}</div>
+                                      <div style={{ fontSize: "13px", color: "var(--text)", marginTop: "2px" }}>
                                         <CommentContent comment={c} isMine={c.author_id === myId}
                                           onUpdate={updated => setComments(prev => prev.map(x => x.id === c.id ? updated : x))}
                                           onDelete={() => setComments(prev => prev.filter(x => x.id !== c.id))} />
@@ -1435,12 +1670,14 @@ export default function ClassDetail() {
                                     </div>
                                   ))
                                 }
-                                <div style={{ display: "flex", gap: "8px", alignItems: "center", borderTop: "1px solid #f1f3f4", paddingTop: "10px" }}>
+                                <div style={{ display: "flex", gap: "8px", alignItems: "center", borderTop: "1px solid var(--border)", paddingTop: "10px" }}>
                                   <input placeholder={`Add private comment to teacher...`} value={commentInput} onChange={e => setCommentInput(e.target.value)}
                                     onKeyDown={e => e.key === "Enter" && sendComment(assignPage.id)}
-                                    style={{ flex: 1, border: "none", borderBottom: "1px solid #e0e0e0", outline: "none", fontSize: "13px", padding: "4px 0", color: "#202124", background: "transparent" }} />
+                                    style={{ flex: 1, border: "none", borderBottom: "1px solid var(--border)", outline: "none", fontSize: "13px", padding: "4px 0", color: "var(--text)", background: "transparent" }} />
                                   <button onClick={() => sendComment(assignPage.id)} disabled={commentSending || !commentInput.trim()}
-                                    style={{ background: "none", border: "none", cursor: commentInput.trim() ? "pointer" : "default", color: commentInput.trim() ? "#1a73e8" : "#9aa0a6", fontSize: "18px" }}>➤</button>
+                                    style={{ background: "none", border: "none", cursor: commentInput.trim() ? "pointer" : "default", opacity: commentInput.trim() ? 1 : 0.4 }}>
+                                    <Icon name="sent" size={18} alt="Send" />
+                                  </button>
                                 </div>
                               </div>
                             </>
@@ -1476,8 +1713,8 @@ export default function ClassDetail() {
                         return topics.map(topic => (
                           <div key={topic || "__none__"}>
                             {topic && (
-                              <div style={{ background: "var(--primary-tint)", padding: "6px 16px", fontSize: "12px", fontWeight: 700, color: "#3B37CC", borderBottom: "1px solid #e0e7ff" }}>
-                                📂 {topic}
+                              <div style={{ background: "var(--primary-tint)", padding: "6px 16px", fontSize: "12px", fontWeight: 700, color: "var(--primary)", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: "6px" }}>
+                                <Icon name="opened-folder" size={14} alt="" /> {topic}
                               </div>
                             )}
                             {visible.filter(a => (a.topic || "") === topic).map((a, idx) => {
@@ -1488,9 +1725,9 @@ export default function ClassDetail() {
                               const isUnread = !seenAssignIds.has(a.id);
                               return (
                                 <div key={a.id} onClick={() => openAssignment(a)}
-                                  style={{ display: "grid", gridTemplateColumns: "32px 1fr 100px 80px 80px 150px", gap: "0", padding: "12px 16px", borderBottom: "1px solid var(--surface-alt)", cursor: "pointer", alignItems: "center", transition: "background 0.1s", background: isUnread ? "#fefbff" : "transparent" }}
+                                  style={{ display: "grid", gridTemplateColumns: "32px 1fr 100px 80px 80px 150px", gap: "0", padding: "12px 16px", borderBottom: "1px solid var(--border)", cursor: "pointer", alignItems: "center", transition: "background 0.1s", background: isUnread ? "var(--primary-tint)" : "transparent" }}
                                   onMouseEnter={e => e.currentTarget.style.background = "var(--bg)"}
-                                  onMouseLeave={e => e.currentTarget.style.background = isUnread ? "#fefbff" : "transparent"}
+                                  onMouseLeave={e => e.currentTarget.style.background = isUnread ? "var(--primary-tint)" : "transparent"}
                                 >
                                   <div style={{ position: "relative" }}>
                                     <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{idx + 1}</div>
@@ -1499,20 +1736,20 @@ export default function ClassDetail() {
                                   <div>
                                     <div style={{ fontSize: "13px", fontWeight: isUnread ? 700 : 600, color: "var(--text)", display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
                                       {a.title}
-                                      {isUnread && !a.is_draft && <span style={{ fontSize: "10px", fontWeight: 800, color: "#ef4444", background: "#fef2f2", padding: "1px 6px", borderRadius: "10px" }}>NEW</span>}
-                                      {a.is_draft && <span style={{ fontSize: "10px", fontWeight: 700, color: "#92400e", background: "#fef3c7", padding: "1px 6px", borderRadius: "10px" }}>DRAFT</span>}
+                                      {isUnread && !a.is_draft && <span style={{ fontSize: "10px", fontWeight: 800, color: "#ef4444", background: "rgba(239,68,68,0.12)", padding: "1px 6px", borderRadius: "10px" }}>NEW</span>}
+                                      {a.is_draft && <span style={{ fontSize: "10px", fontWeight: 700, color: "#f59e0b", background: "rgba(245,158,11,0.12)", padding: "1px 6px", borderRadius: "10px" }}>DRAFT</span>}
                                     </div>
                                     {isTeacher && <div style={{ fontSize: "11px", color: "var(--text-faint)" }}>{a.turned_in_count || 0} turned in</div>}
                                   </div>
                                   <div style={{ textAlign: "center" }}>
-                                    <span style={{ fontSize: "11px", fontWeight: 700, color: inProgress ? "#22c55e" : "var(--text-faint)", background: inProgress ? "#f0fdf4" : "var(--surface-alt)", padding: "3px 8px", borderRadius: "20px" }}>
+                                    <span style={{ fontSize: "11px", fontWeight: 700, color: inProgress ? "#22c55e" : "var(--text-faint)", background: inProgress ? "rgba(34,197,94,0.12)" : "var(--surface-alt)", padding: "3px 8px", borderRadius: "20px" }}>
                                       {inProgress ? "In Progress" : "Finished"}
                                     </span>
                                   </div>
                                   <div style={{ textAlign: "center", fontSize: "18px" }}>
                                     {isTeacher
                                       ? <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>{a.turned_in_count || 0}</span>
-                                      : submitted ? <span style={{ color: sub.status === "graded" ? "#22c55e" : "#3B37CC" }}>✓</span>
+                                      : submitted ? <Icon name="checkmark" size={14} alt="Submitted" />
                                       : <span style={{ color: "var(--border)" }}>—</span>}
                                   </div>
                                   <div style={{ textAlign: "center", fontSize: "12px", color: "var(--text-muted)" }}>{a.points}</div>
@@ -1520,9 +1757,9 @@ export default function ClassDetail() {
                                     <span>{a.due_date ? formatDate(a.due_date) : "—"}</span>
                                     {isTeacher && (
                                       <div style={{ display: "flex", gap: "3px" }}>
-                                        <button onClick={e => { e.stopPropagation(); setTopicModal({ type: "assignment", id: a.id, current: a.topic || "" }); setTopicInput(a.topic || ""); }} style={{ fontSize: "10px", padding: "2px 6px", background: "var(--surface-alt)", color: "var(--text-muted)", border: "none", borderRadius: "6px", cursor: "pointer" }} title="Set topic">📂</button>
-                                        <button onClick={e => { e.stopPropagation(); openSubmissionStats(a.id); }} style={{ fontSize: "10px", padding: "2px 6px", background: "var(--primary-tint)", color: "#3B37CC", border: "none", borderRadius: "6px", cursor: "pointer" }} title="Submission stats">📊</button>
-                                        {a.is_draft && <button onClick={e => { e.stopPropagation(); publishDraft(a.id); }} style={{ fontSize: "10px", fontWeight: 700, color: "#fff", background: "#3B37CC", border: "none", padding: "2px 8px", borderRadius: "10px", cursor: "pointer" }}>Publish</button>}
+                                        <button onClick={e => { e.stopPropagation(); setTopicModal({ type: "assignment", id: a.id, current: a.topic || "" }); setTopicInput(a.topic || ""); }} style={{ display: "flex", padding: "2px 6px", background: "var(--surface-alt)", border: "none", borderRadius: "6px", cursor: "pointer" }} title="Set topic"><Icon name="opened-folder" size={12} alt="" /></button>
+                                        <button onClick={e => { e.stopPropagation(); openSubmissionStats(a.id); }} style={{ display: "flex", padding: "2px 6px", background: "var(--primary-tint)", border: "none", borderRadius: "6px", cursor: "pointer" }} title="Submission stats"><Icon name="bar-chart" size={12} alt="" /></button>
+                                        {a.is_draft && <button onClick={e => { e.stopPropagation(); publishDraft(a.id); }} style={{ fontSize: "10px", fontWeight: 700, color: "#fff", background: "var(--primary)", border: "none", padding: "2px 8px", borderRadius: "10px", cursor: "pointer" }}>Publish</button>}
                                       </div>
                                     )}
                                   </div>
@@ -1558,8 +1795,8 @@ export default function ClassDetail() {
                       </div>
                       {isTeacher && materialEditId !== selectedMat.id && (
                         <button onClick={openEditMatModal}
-                          style={{ background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.35)", color: "#fff", borderRadius: "8px", padding: "5px 14px", fontSize: "12px", fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
-                          ✏️ Edit
+                          style={{ background: "rgba(255,255,255,0.18)", border: "1px solid rgba(255,255,255,0.35)", color: "#fff", borderRadius: "8px", padding: "5px 14px", fontSize: "12px", fontWeight: 700, cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", gap: "6px" }}>
+                          <Icon name="edit" size={13} alt="" style={{ filter: "brightness(0) invert(1)" }} /> Edit
                         </button>
                       )}
                     </div>
@@ -1573,7 +1810,7 @@ export default function ClassDetail() {
                             <span style={{ fontSize: "12px", color: "var(--text-faint)", fontWeight: 600 }}>WEEK</span>
                             <input type="number" min="1" max="20" value={uploadForm.week}
                               onChange={e => setUploadForm(f => ({ ...f, week: e.target.value }))}
-                              style={{ width: "56px", border: "1px solid var(--border)", borderRadius: "6px", padding: "4px 8px", fontSize: "13px", fontWeight: 600, color: "#3B37CC", textAlign: "center", outline: "none" }} />
+                              style={{ width: "56px", border: "1px solid var(--border)", borderRadius: "6px", padding: "4px 8px", fontSize: "13px", fontWeight: 600, color: "var(--primary)", textAlign: "center", outline: "none" }} />
                           </div>
                         </div>
 
@@ -1586,19 +1823,37 @@ export default function ClassDetail() {
 
                         <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "16px 20px" }}>
                           <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", display: "block", marginBottom: "10px" }}>Attach PDF (optional)</span>
+
+                          {/* Existing PDF — show with remove toggle */}
+                          {selectedMat?.file_url && !uploadFile && (
+                            <div style={{ display: "flex", alignItems: "center", gap: "12px", background: removeMainFile ? "rgba(239,68,68,0.06)" : "var(--primary-tint)", border: `1px solid ${removeMainFile ? "#fca5a5" : "var(--border)"}`, borderRadius: "10px", padding: "10px 14px", marginBottom: "10px", opacity: removeMainFile ? 0.6 : 1 }}>
+                              <Icon name="file" size={20} alt="" />
+                              <div style={{ flex: 1, textDecoration: removeMainFile ? "line-through" : "none" }}>
+                                <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>{selectedMat.file_name || selectedMat.title}</div>
+                                <div style={{ fontSize: "11px", color: "var(--text-faint)" }}>Current PDF</div>
+                              </div>
+                              <button onClick={() => setRemoveMainFile(r => !r)}
+                                style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 700, fontSize: "12px", color: removeMainFile ? "#22c55e" : "#ef4444" }}>
+                                {removeMainFile ? "↩ Restore" : "× Remove"}
+                              </button>
+                            </div>
+                          )}
+
+                          {/* New file chosen */}
                           {uploadFile ? (
-                            <div style={{ display: "flex", alignItems: "center", gap: "12px", background: "#f8f9ff", border: "1px solid #c7d2fe", borderRadius: "10px", padding: "10px 14px" }}>
-                              <span style={{ fontSize: "20px" }}>📑</span>
+                            <div style={{ display: "flex", alignItems: "center", gap: "12px", background: "var(--primary-tint)", border: "1px solid var(--border)", borderRadius: "10px", padding: "10px 14px" }}>
+                              <Icon name="file" size={20} alt="" />
                               <div style={{ flex: 1 }}>
                                 <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>{uploadFile.name}</div>
                                 <div style={{ fontSize: "11px", color: "var(--text-faint)" }}>{(uploadFile.size / 1024).toFixed(0)} KB</div>
                               </div>
                               <button onClick={() => { setUploadFile(null); if (fileRef.current) fileRef.current.value = ""; }}
-                                style={{ background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", fontSize: "16px" }}>✕</button>
+                                style={{ background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", display: "flex" }}><Icon name="multiply" size={14} alt="Remove" /></button>
                             </div>
-                          ) : (
-                            <label style={{ display: "flex", alignItems: "center", justifyContent: "center", border: "2px dashed #c7d2fe", borderRadius: "10px", padding: "16px", cursor: "pointer", color: "var(--text-muted)", gap: "8px" }}>
-                              <span style={{ fontSize: "13px", fontWeight: 600 }}>📎 Click to replace the attached PDF</span>
+                          ) : (removeMainFile || !selectedMat?.file_url) && (
+                            <label style={{ display: "flex", alignItems: "center", justifyContent: "center", border: "2px dashed var(--border)", borderRadius: "10px", padding: "16px", cursor: "pointer", color: "var(--text-muted)", gap: "8px" }}>
+                              <Icon name="attach" size={16} alt="" />
+                              <span style={{ fontSize: "13px", fontWeight: 600 }}>{selectedMat?.file_url ? "Attach replacement PDF" : "Click to attach a PDF"}</span>
                               <input type="file" accept="application/pdf" ref={fileRef} onChange={e => {
                                 const f = e.target.files[0];
                                 if (!f) return;
@@ -1615,7 +1870,7 @@ export default function ClassDetail() {
                             <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
                               {selectedMat.files.map(f => (
                                 <div key={f.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: deleteAttachmentIds.includes(f.id) ? "var(--text-faint)" : "var(--text-muted)", background: deleteAttachmentIds.includes(f.id) ? "#fef2f2" : "var(--surface-alt)", padding: "8px 12px", borderRadius: "8px", border: `1px solid ${deleteAttachmentIds.includes(f.id) ? "#fca5a5" : "var(--border)"}`, textDecoration: deleteAttachmentIds.includes(f.id) ? "line-through" : "none" }}>
-                                  <span>📄 {f.file_name}</span>
+                                  <span style={{ display: "flex", alignItems: "center", gap: "6px" }}><Icon name="file" size={14} alt="" /> {f.file_name}</span>
                                   <button type="button" onClick={() => setDeleteAttachmentIds(prev => prev.includes(f.id) ? prev.filter(x => x !== f.id) : [...prev, f.id])}
                                     style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 700, fontSize: "12px", color: deleteAttachmentIds.includes(f.id) ? "#22c55e" : "#ef4444" }}>
                                     {deleteAttachmentIds.includes(f.id) ? "↩ Restore" : "× Remove"}
@@ -1628,10 +1883,10 @@ export default function ClassDetail() {
                           {uploadExtraFiles.length > 0 && (
                             <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
                               {uploadExtraFiles.map((f, i) => (
-                                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: "var(--text)", background: "#f8f9ff", padding: "8px 12px", borderRadius: "8px", border: "1px solid #c7d2fe" }}>
-                                  <span>📎 {f.name}</span>
+                                <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: "var(--text)", background: "var(--primary-tint)", padding: "8px 12px", borderRadius: "8px", border: "1px solid var(--border)" }}>
+                                  <span style={{ display: "flex", alignItems: "center", gap: "6px" }}><Icon name="attach" size={14} alt="" /> {f.name}</span>
                                   <button type="button" onClick={() => setUploadExtraFiles(prev => prev.filter((_, idx) => idx !== i))}
-                                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: "14px" }}>✕</button>
+                                    style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", display: "flex" }}><Icon name="multiply" size={12} alt="Remove" /></button>
                                 </div>
                               ))}
                             </div>
@@ -1644,20 +1899,20 @@ export default function ClassDetail() {
                               e.target.value = "";
                             }} />
                           <button type="button" onClick={() => extraFileRef.current?.click()}
-                            style={{ fontSize: "13px", color: "#3B37CC", background: "var(--primary-tint)", border: "1px solid #a5b4fc", borderRadius: "8px", padding: "7px 14px", cursor: "pointer", fontWeight: 600 }}>
+                            style={{ fontSize: "13px", color: "var(--primary)", background: "var(--primary-tint)", border: "1px solid var(--border)", borderRadius: "8px", padding: "7px 14px", cursor: "pointer", fontWeight: 600 }}>
                             + Add files
                           </button>
                         </div>
 
                         {uploadError && (
-                          <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px", padding: "10px 14px", color: "#dc2626", fontSize: "13px" }}>
+                          <div style={{ background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "8px", padding: "10px 14px", color: "#ef4444", fontSize: "13px" }}>
                             {uploadError}
                           </div>
                         )}
 
                         <div style={{ display: "flex", gap: "10px" }}>
                           <button onClick={handleUpload} disabled={uploading || !uploadForm.title.trim()}
-                            style={{ background: uploading || !uploadForm.title.trim() ? "#c7d2fe" : "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 20px", fontSize: "13px", fontWeight: 700, cursor: uploading || !uploadForm.title.trim() ? "not-allowed" : "pointer" }}>
+                            style={{ background: uploading || !uploadForm.title.trim() ? "var(--primary-tint)" : "var(--primary)", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 20px", fontSize: "13px", fontWeight: 700, cursor: uploading || !uploadForm.title.trim() ? "not-allowed" : "pointer" }}>
                             {uploading ? "Saving..." : "Save Changes"}
                           </button>
                           <button onClick={closeUploadModal}
@@ -1674,74 +1929,83 @@ export default function ClassDetail() {
                     <div style={{ marginBottom: "10px", fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "1px" }}>
                       Reference Materials
                     </div>
-                    {selectedMat.file_url ? (() => {
-                      const fileName = selectedMat.file_name || selectedMat.title;
-                      const ext = (selectedMat.file_url.split(".").pop() || "").toLowerCase();
-                      const isPdf = ext === "pdf";
-                      const kind = {
-                        pdf: { label: "PDF" },
-                        docx: { label: "Word" },
-                        pptx: { label: "PowerPoint" },
-                        png: { label: "Image" }, jpg: { label: "Image" },
-                        jpeg: { label: "Image" }, webp: { label: "Image" }, gif: { label: "Image" },
-                      }[ext] || { label: "File" };
-                      const openPreview = () => navigate(`/classroom/${id}/material/${selectedMat.id}`, { state: { backgroundLocation: location } });
-                      const thumbUrl = isPdf ? `http://localhost:5001${selectedMat.file_url}` : null;
+                    {(() => {
+                      const hasMain = !!selectedMat.file_url;
+                      const hasExtra = selectedMat.files?.length > 0;
+                      if (!hasMain && !hasExtra) return <p style={{ fontSize: "13px", color: "var(--text-faint)" }}>No file attached.</p>;
+
+                      const mainExt = hasMain ? (selectedMat.file_url.split(".").pop() || "").toLowerCase() : "";
+                      const isPdf = mainExt === "pdf";
+                      const isImg = ["png","jpg","jpeg","webp","gif"].includes(mainExt);
+
                       return (
-                        <div
-                          onClick={openPreview}
-                          role="button" tabIndex={0}
-                          onKeyDown={e => e.key === "Enter" && openPreview()}
-                          style={{ display: "flex", border: "1px solid var(--border)", borderRadius: "12px", overflow: "hidden", maxWidth: "460px", cursor: "pointer", background: "var(--surface)", transition: "box-shadow 0.15s" }}
-                          onMouseEnter={e => e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.08)"}
-                          onMouseLeave={e => e.currentTarget.style.boxShadow = "none"}
-                        >
-                          <div style={{ flex: 1, padding: "14px 16px", minWidth: 0 }}>
-                            <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginBottom: "4px" }}>{fileName}</div>
-                            <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{kind.label}</div>
-                          </div>
-                          <div style={{ width: "120px", flexShrink: 0, background: "var(--surface-alt)", display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", borderLeft: "1px solid var(--border)" }}>
-                            {isPdf ? (
-                              <object data={thumbUrl} type="application/pdf" style={{ width: "120px", height: "80px", pointerEvents: "none" }}>
-                                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "80px", gap: "4px" }}>
-                                  <span style={{ fontSize: "28px" }}>📄</span>
-                                  <span style={{ fontSize: "10px", color: "var(--text-faint)" }}>PDF</span>
-                                </div>
-                              </object>
-                            ) : (
-                              <span style={{ fontSize: "32px" }}>📄</span>
-                            )}
-                          </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: "10px" }}>
+                          {hasMain && (
+                            <FileCard
+                              name={selectedMat.file_name || selectedMat.title}
+                              label={extLabel(mainExt)}
+                              onClick={() => navigate(`/classroom/${id}/material/${selectedMat.id}`, { state: { backgroundLocation: location } })}
+                              thumbContent={
+                                isPdf ? (
+                                  <object data={`http://localhost:5001${selectedMat.file_url}`} type="application/pdf" style={{ width: "120px", height: "80px", pointerEvents: "none" }}>
+                                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "80px", gap: "4px" }}>
+                                      <Icon name="file" size={28} alt="" />
+                                      <span style={{ fontSize: "10px", color: "var(--text-faint)" }}>PDF</span>
+                                    </div>
+                                  </object>
+                                ) : isImg ? (
+                                  <img src={`http://localhost:5001${selectedMat.file_url}`} alt={selectedMat.title} style={{ width: "120px", height: "80px", objectFit: "cover" }} />
+                                ) : (
+                                  <Icon name="file" size={32} alt="" />
+                                )
+                              }
+                            />
+                          )}
+                          {hasExtra && selectedMat.files.map(f => {
+                            const ext = (f.file_name || "").split(".").pop().toLowerCase();
+                            const fIsImg = ["png","jpg","jpeg","webp","gif"].includes(ext);
+                            const fIsPdf = ext === "pdf";
+                            const fUrl = `http://localhost:5001/uploads/${f.file_path}`;
+                            const fIcon = ext === "docx" || ext === "doc" ? "note" : ext === "pptx" || ext === "ppt" ? "bar-chart" : "attach";
+                            return (
+                              <FileCard key={f.id}
+                                name={f.file_name}
+                                label={extLabel(ext)}
+                                href={fUrl}
+                                thumbContent={
+                                  fIsImg ? (
+                                    <img src={fUrl} alt={f.file_name} style={{ width: "120px", height: "80px", objectFit: "cover" }} />
+                                  ) : fIsPdf ? (
+                                    <object data={fUrl} type="application/pdf" style={{ width: "120px", height: "80px", pointerEvents: "none" }}>
+                                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "80px", gap: "4px" }}>
+                                        <Icon name="file" size={28} alt="" />
+                                        <span style={{ fontSize: "10px", color: "var(--text-faint)" }}>PDF</span>
+                                      </div>
+                                    </object>
+                                  ) : (
+                                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "80px", gap: "4px" }}>
+                                      <Icon name={fIcon} size={28} alt="" />
+                                      <span style={{ fontSize: "10px", color: "var(--text-faint)" }}>{extLabel(ext)}</span>
+                                    </div>
+                                  )
+                                }
+                              />
+                            );
+                          })}
                         </div>
                       );
-                    })() : (
-                      selectedMat.files?.length > 0 ? null : (
-                        <p style={{ fontSize: "13px", color: "var(--text-faint)" }}>No file attached.</p>
-                      )
-                    )}
-
-                    {selectedMat.files?.length > 0 && (
-                      <div style={{ marginTop: "12px", display: "flex", flexWrap: "wrap", gap: "10px" }}>
-                        {selectedMat.files.map(f => (
-                          <a key={f.id} href={`http://localhost:5001/uploads/${f.file_path}`} target="_blank" rel="noreferrer"
-                            style={{ display: "flex", alignItems: "center", gap: "10px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "8px", padding: "10px 14px", textDecoration: "none", minWidth: "200px" }}>
-                            <span style={{ fontSize: "20px" }}>📎</span>
-                            <div style={{ fontSize: "13px", fontWeight: 500, color: "var(--text)", maxWidth: "180px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.file_name}</div>
-                          </a>
-                        ))}
-                      </div>
-                    )}
+                    })()}
 
                     {/* AI suggested YouTube resources */}
                     {selectedMat.ai_resources?.length > 0 && (
                       <div style={{ marginTop: "24px" }}>
-                        <div style={{ marginBottom: "10px", fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "1px" }}>
-                          🎬 Related YouTube Videos
+                        <div style={{ marginBottom: "10px", fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "1px", display: "flex", alignItems: "center", gap: "6px" }}>
+                          <Icon name="video" size={13} alt="" /> Related YouTube Videos
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
                           {selectedMat.ai_resources.map((r, i) => (
                             <a key={i} href={r.url} target="_blank" rel="noopener noreferrer"
-                              style={{ display: "flex", alignItems: "center", gap: "12px", background: "#f8f9ff", border: "1px solid #e0e7ff", borderRadius: "12px", overflow: "hidden", textDecoration: "none" }}>
+                              style={{ display: "flex", alignItems: "center", gap: "12px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "12px", overflow: "hidden", textDecoration: "none" }}>
                               {r.thumbnail ? (
                                 <img src={r.thumbnail} alt={r.title}
                                   style={{ width: "120px", height: "68px", objectFit: "cover", flexShrink: 0 }} />
@@ -1766,48 +2030,26 @@ export default function ClassDetail() {
                     {/* ── Assignments for this material ── */}
                     <div style={{ marginTop: "28px" }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
-                        <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "1px" }}>✏️ Assignments</div>
+                        <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "1px", display: "flex", alignItems: "center", gap: "6px" }}><Icon name="note" size={13} alt="" /> Assignments</div>
                         {isTeacher && (
                           <button onClick={() => setMatAssignOpen(o => !o)}
-                            style={{ fontSize: "12px", fontWeight: 700, color: "#3B37CC", background: "#eef2ff", border: "1px solid #c7d2fe", borderRadius: "8px", padding: "4px 12px", cursor: "pointer" }}>
+                            style={{ fontSize: "12px", fontWeight: 700, color: "var(--primary)", background: "var(--primary-tint)", border: "1px solid var(--primary-tint)", borderRadius: "8px", padding: "4px 12px", cursor: "pointer" }}>
                             + Add Assignment
                           </button>
                         )}
                       </div>
 
-                      {/* Teacher: inline create form */}
+                      {/* Teacher: inline create form — its own component so typing
+                          doesn't re-render the whole page (and the PDF thumbnail
+                          above, which visibly flickers if it does). */}
                       {isTeacher && matAssignOpen && (
-                        <div style={{ background: "var(--surface)", border: "1px solid #c7d2fe", borderRadius: "12px", padding: "16px", marginBottom: "14px" }}>
-                          <input placeholder="Assignment title *" value={matAssignForm.title}
-                            onChange={e => setMatAssignForm(f => ({ ...f, title: e.target.value }))}
-                            style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 12px", fontSize: "13px", marginBottom: "10px", boxSizing: "border-box", background: "var(--surface)", color: "var(--text)" }} />
-                          <textarea placeholder="Instructions (optional)" value={matAssignForm.instructions}
-                            onChange={e => setMatAssignForm(f => ({ ...f, instructions: e.target.value }))}
-                            rows={2}
-                            style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 12px", fontSize: "13px", marginBottom: "10px", resize: "vertical", boxSizing: "border-box", background: "var(--surface)", color: "var(--text)" }} />
-                          <div style={{ display: "flex", gap: "10px", marginBottom: "12px" }}>
-                            <div style={{ flex: 1 }}>
-                              <div style={{ fontSize: "11px", color: "var(--text-faint)", marginBottom: "4px" }}>Due date</div>
-                              <input type="datetime-local" value={matAssignForm.due_date}
-                                onChange={e => setMatAssignForm(f => ({ ...f, due_date: e.target.value }))}
-                                style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "7px 10px", fontSize: "12px", boxSizing: "border-box", background: "var(--surface)", color: "var(--text)" }} />
-                            </div>
-                            <div>
-                              <div style={{ fontSize: "11px", color: "var(--text-faint)", marginBottom: "4px" }}>Points</div>
-                              <input type="number" value={matAssignForm.points} min={0} max={1000}
-                                onChange={e => setMatAssignForm(f => ({ ...f, points: e.target.value }))}
-                                style={{ width: "80px", border: "1px solid var(--border)", borderRadius: "8px", padding: "7px 10px", fontSize: "12px", boxSizing: "border-box", background: "var(--surface)", color: "var(--text)" }} />
-                            </div>
-                          </div>
-                          <div style={{ display: "flex", gap: "8px", justifyContent: "flex-end" }}>
-                            <button onClick={() => setMatAssignOpen(false)}
-                              style={{ fontSize: "12px", color: "var(--text-faint)", background: "none", border: "1px solid var(--border)", borderRadius: "8px", padding: "6px 14px", cursor: "pointer" }}>Cancel</button>
-                            <button onClick={createMatAssignment} disabled={matAssignSaving || !matAssignForm.title.trim()}
-                              style={{ fontSize: "12px", fontWeight: 700, color: "#fff", background: "#3B37CC", border: "none", borderRadius: "8px", padding: "6px 16px", cursor: "pointer", opacity: matAssignSaving ? 0.6 : 1 }}>
-                              {matAssignSaving ? "Saving…" : "Create"}
-                            </button>
-                          </div>
-                        </div>
+                        <MaterialAssignmentForm classId={id} materialId={selectedMat.id}
+                          onCreated={data => {
+                            setMatAssignments(prev => [data, ...prev]);
+                            setAssignments(prev => [data, ...prev]);
+                            setMatAssignOpen(false);
+                          }}
+                          onCancel={() => setMatAssignOpen(false)} />
                       )}
 
                       {/* Assignment list */}
@@ -1833,11 +2075,11 @@ export default function ClassDetail() {
                                 </div>
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px", flexShrink: 0 }}>
                                   {isTeacher ? (
-                                    <span style={{ fontSize: "11px", color: "#3B37CC", fontWeight: 600 }}>{a.turned_in_count || 0} turned in</span>
+                                    <span style={{ fontSize: "11px", color: "var(--primary)", fontWeight: 600 }}>{a.turned_in_count || 0} turned in</span>
                                   ) : submitted ? (
-                                    <span style={{ fontSize: "11px", fontWeight: 700, color: "#16a34a", background: "#dcfce7", padding: "2px 8px", borderRadius: "10px" }}>✓ Submitted</span>
+                                    <span style={{ fontSize: "11px", fontWeight: 700, color: "#10b981", background: "rgba(16,185,129,0.12)", padding: "2px 8px", borderRadius: "10px", display: "inline-flex", alignItems: "center", gap: "4px" }}><Icon name="checkmark" size={11} alt="" /> Submitted</span>
                                   ) : (
-                                    <span style={{ fontSize: "11px", fontWeight: 700, color: "#ea580c", background: "#fff7ed", padding: "2px 8px", borderRadius: "10px" }}>Pending</span>
+                                    <span style={{ fontSize: "11px", fontWeight: 700, color: "#f97316", background: "rgba(249,115,22,0.12)", padding: "2px 8px", borderRadius: "10px" }}>Pending</span>
                                   )}
                                   <span style={{ fontSize: "16px", color: "var(--text-faint)" }}>›</span>
                                 </div>
@@ -1848,16 +2090,25 @@ export default function ClassDetail() {
                       )}
                     </div>
 
+                    {/* ── Private comments about this lesson ── */}
+                    <div style={{ marginTop: "28px" }}>
+                      <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}><Icon name="chat" size={13} alt="" /> Private Comments</div>
+                      <PrivateCommentsPanel materialId={selectedMat.id} isTeacher={isTeacher} myId={myId}
+                        containerStyle={isTeacher
+                          ? { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "4px 16px" }
+                          : { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "14px", padding: "16px" }} />
+                    </div>
+
                   </div>
                 ) : (
                   /* ── Material list ── */
                   <>
                     {/* Hint: select a material to use AI */}
                     {aiHint && (
-                      <div style={{ background: "var(--primary-tint)", border: "2px solid #3B37CC", borderRadius: "10px", padding: "12px 16px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "10px" }}>
-                        <span style={{ fontSize: "20px" }}>👆</span>
+                      <div style={{ background: "var(--primary-tint)", border: "2px solid var(--primary)", borderRadius: "10px", padding: "12px 16px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "10px" }}>
+                        <Icon name="hand-cursor" size={20} alt="" />
                         <div>
-                          <div style={{ fontSize: "13px", fontWeight: 700, color: "#3B37CC" }}>Select a material below</div>
+                          <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--primary)" }}>Select a material below</div>
                           <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>Click any material to activate AI Study Mentor</div>
                         </div>
                         <button onClick={() => setAiHint(false)} style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", fontSize: "16px" }}>×</button>
@@ -1871,11 +2122,12 @@ export default function ClassDetail() {
                     ) : (
                       Object.entries(weekGroups).sort((a, b) => Number(a[0]) - Number(b[0])).map(([week, mats]) => (
                         <div key={week}>
-                          <div style={weekLabel}>📚 Week {week}</div>
+                          <div style={{ ...weekLabel, display: "flex", alignItems: "center", gap: "6px" }}><Icon name="book" size={14} alt="" /> Week {week}</div>
                           {mats.map(mat => (
-                            <div key={mat.id} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", marginBottom: "10px", overflow: "hidden" }}>
+                            <div key={mat.id} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", marginBottom: "10px", overflow: "hidden", position: "relative" }}>
                               {/* Material row — click to open detail */}
                               <div
+                                onContextMenu={isTeacher ? e => { e.preventDefault(); setMatMenu({ id: mat.id, x: Math.min(e.clientX, window.innerWidth - 184), y: e.clientY }); } : undefined}
                                 onClick={async () => {
                                   setSelectedMat(mat);
                                   markMatSeen(mat.id);
@@ -1889,7 +2141,7 @@ export default function ClassDetail() {
                                     if (action !== "chat") {
                                       setAiLoading(true);
                                       try {
-                                        const { data } = await API.post(`/classroom/materials/${mat.id}/ai`, { action });
+                                        const { data } = await API.post(`/classroom/materials/${mat.id}/ai`, { action, lang });
                                         setAiResult(data.data);
                                       } catch {
                                         setAiResult({ error: "AI unavailable. Check GROQ_API_KEY in backend .env" });
@@ -1899,56 +2151,82 @@ export default function ClassDetail() {
                                     }
                                   }
                                 }}
-                                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", cursor: "pointer", background: !seenMatIds.has(mat.id) ? "#fefbff" : "transparent" }}
+                                style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", cursor: "pointer", background: !seenMatIds.has(mat.id) ? "var(--primary-tint)" : "transparent" }}
                                 onMouseEnter={e => e.currentTarget.style.background = "var(--bg)"}
-                                onMouseLeave={e => e.currentTarget.style.background = !seenMatIds.has(mat.id) ? "#fefbff" : "transparent"}
+                                onMouseLeave={e => e.currentTarget.style.background = !seenMatIds.has(mat.id) ? "var(--primary-tint)" : "transparent"}
                               >
                                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                                   <div style={{ position: "relative" }}>
-                                    <div style={matIcon}><span>📄</span></div>
-                                    {!seenMatIds.has(mat.id) && <span style={{ position: "absolute", top: "-3px", right: "-3px", width: "8px", height: "8px", borderRadius: "50%", background: "#ef4444", border: "2px solid #fff", display: "block" }} />}
+                                    <div style={matIcon}><Icon name="file" size={18} alt="" /></div>
+                                    {!seenMatIds.has(mat.id) && <span style={{ position: "absolute", top: "-3px", right: "-3px", width: "8px", height: "8px", borderRadius: "50%", background: "#ef4444", border: "2px solid var(--surface)", display: "block" }} />}
                                   </div>
                                   <div>
                                     <div style={{ fontSize: "14px", fontWeight: !seenMatIds.has(mat.id) ? 700 : 600, color: "var(--text)", display: "flex", alignItems: "center", gap: "6px" }}>
                                       {mat.title}
-                                      {!seenMatIds.has(mat.id) && <span style={{ fontSize: "10px", fontWeight: 800, color: "#ef4444", background: "#fef2f2", padding: "1px 6px", borderRadius: "10px" }}>NEW</span>}
+                                      {!seenMatIds.has(mat.id) && <span style={{ fontSize: "10px", fontWeight: 800, color: "#ef4444", background: "rgba(239,68,68,0.10)", padding: "1px 6px", borderRadius: "10px" }}>NEW</span>}
                                     </div>
                                     <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>Posted {formatDate(mat.created_at)}</div>
                                   </div>
                                 </div>
                                 <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                                  {mat.topic && <span style={{ fontSize: "11px", background: "var(--primary-tint)", color: "#3B37CC", padding: "2px 8px", borderRadius: "10px", fontWeight: 600 }}>📂 {mat.topic}</span>}
+                                  {mat.topic && <span style={{ fontSize: "11px", background: "var(--primary-tint)", color: "var(--primary)", padding: "2px 8px", borderRadius: "10px", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "4px" }}><Icon name="opened-folder" size={11} alt="" /> {mat.topic}</span>}
                                   {isTeacher && (
                                     <button onClick={e => { e.stopPropagation(); setTopicModal({ type: "material", id: mat.id, current: mat.topic || "" }); setTopicInput(mat.topic || ""); }}
-                                      style={{ fontSize: "11px", padding: "2px 7px", background: "var(--surface-alt)", color: "var(--text-muted)", border: "none", borderRadius: "6px", cursor: "pointer" }}>
-                                      📂 Topic
+                                      style={{ fontSize: "11px", padding: "2px 7px", background: "var(--surface-alt)", color: "var(--text-muted)", border: "none", borderRadius: "6px", cursor: "pointer", display: "inline-flex", alignItems: "center", gap: "4px" }}>
+                                      <Icon name="opened-folder" size={11} alt="" /> Topic
                                     </button>
                                   )}
-                                  <span style={{ color: "var(--text-faint)", fontSize: "12px" }}>›</span>
+                                  {isTeacher && (
+                                    <button
+                                      onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setMatMenu({ id: mat.id, x: r.right - 180, y: r.bottom + 4 }); }}
+                                      style={{ width: "26px", height: "26px", border: "none", background: "var(--surface-alt)", borderRadius: "6px", cursor: "pointer", fontSize: "14px", color: "var(--text-muted)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}
+                                    >⋮</button>
+                                  )}
+                                  <button
+                                    onClick={e => { e.stopPropagation(); setExpandedMats(prev => { const n = new Set(prev); n.has(mat.id) ? n.delete(mat.id) : n.add(mat.id); return n; }); }}
+                                    style={{ width: "26px", height: "26px", border: "none", background: "none", cursor: "pointer", color: "var(--text-faint)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "16px", transition: "transform 0.2s", transform: expandedMats.has(mat.id) ? "rotate(90deg)" : "rotate(0deg)" }}
+                                  >›</button>
                                 </div>
                               </div>
-                              {/* YouTube resource thumbnails — compact strip */}
-                              {mat.ai_resources?.length > 0 && (
-                                <div style={{ borderTop: "1px solid var(--surface-alt)", padding: "10px 16px", background: "#fafbff" }}>
-                                  <div style={{ fontSize: "11px", color: "var(--text-faint)", fontWeight: 700, marginBottom: "8px" }}>🎬 Related Videos</div>
-                                  <div style={{ display: "flex", gap: "8px", overflowX: "auto" }}>
-                                    {mat.ai_resources.map((r, i) => (
-                                      <a key={i} href={r.url} target="_blank" rel="noopener noreferrer"
-                                        onClick={e => e.stopPropagation()}
-                                        style={{ display: "flex", flexDirection: "column", flexShrink: 0, width: "140px", textDecoration: "none", borderRadius: "8px", overflow: "hidden", border: "1px solid #e0e7ff" }}>
-                                        {r.thumbnail ? (
-                                          <img src={r.thumbnail} alt={r.title} style={{ width: "140px", height: "79px", objectFit: "cover" }} />
-                                        ) : (
-                                          <div style={{ width: "140px", height: "79px", background: "#ff0000", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                                            <span style={{ fontSize: "20px", color: "#fff" }}>▶</span>
-                                          </div>
-                                        )}
-                                        <div style={{ padding: "4px 6px", background: "var(--surface)" }}>
-                                          <div style={{ fontSize: "10px", fontWeight: 600, color: "var(--text)", lineHeight: "1.3", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.title}</div>
-                                        </div>
-                                      </a>
-                                    ))}
-                                  </div>
+                              {/* Expanded panel — always shown when expanded */}
+                              {expandedMats.has(mat.id) && (
+                                <div style={{ borderTop: "1px solid var(--border)", padding: "10px 16px", background: "var(--surface-alt)" }}>
+                                  {/* PDF link */}
+                                  {mat.file_path && (
+                                    <a href={`http://localhost:5001/uploads/${mat.file_path}`} target="_blank" rel="noopener noreferrer"
+                                      onClick={e => e.stopPropagation()}
+                                      style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "var(--primary)", fontWeight: 600, marginBottom: mat.ai_resources?.length > 0 ? "10px" : "0", textDecoration: "none" }}>
+                                      <Icon name="attach" size={12} alt="" /> View PDF
+                                    </a>
+                                  )}
+                                  {/* YouTube videos */}
+                                  {mat.ai_resources?.length > 0 ? (
+                                    <>
+                                      <div style={{ fontSize: "11px", color: "var(--text-faint)", fontWeight: 700, marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}><Icon name="video" size={12} alt="" /> Related Videos</div>
+                                      <div style={{ display: "flex", gap: "8px", overflowX: "auto" }}>
+                                        {mat.ai_resources.map((r, i) => (
+                                          <a key={i} href={r.url} target="_blank" rel="noopener noreferrer"
+                                            onClick={e => e.stopPropagation()}
+                                            style={{ display: "flex", flexDirection: "column", flexShrink: 0, width: "140px", textDecoration: "none", borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border)" }}>
+                                            {r.thumbnail ? (
+                                              <img src={r.thumbnail} alt={r.title} style={{ width: "140px", height: "79px", objectFit: "cover" }} />
+                                            ) : (
+                                              <div style={{ width: "140px", height: "79px", background: "#ff0000", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                                <span style={{ fontSize: "20px", color: "#fff" }}>▶</span>
+                                              </div>
+                                            )}
+                                            <div style={{ padding: "4px 6px", background: "var(--surface)" }}>
+                                              <div style={{ fontSize: "10px", fontWeight: 600, color: "var(--text)", lineHeight: "1.3", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{r.title}</div>
+                                            </div>
+                                          </a>
+                                        ))}
+                                      </div>
+                                    </>
+                                  ) : (
+                                    !mat.file_path && (
+                                      <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>No related videos.</div>
+                                    )
+                                  )}
                                 </div>
                               )}
                             </div>
@@ -1970,7 +2248,7 @@ export default function ClassDetail() {
               <div style={aiMentorPanel}>
                 {/* Header */}
                 <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "6px" }}>
-                  <div style={aiAvatarStyle}>🤖</div>
+                  <div style={aiAvatarStyle}><Icon name="bot" size={20} alt="" /></div>
                   <div>
                     <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)" }}>AI Study Mentor</div>
                     <div style={{ fontSize: "12px", color: "#22c55e", fontWeight: 600 }}>● ACTIVE NOW</div>
@@ -1983,17 +2261,18 @@ export default function ClassDetail() {
 
                 {/* 4 Feature Cards */}
                 {[
-                  { key: "highlights", icon: "✏️", title: "Smart Highlighting", desc: "Automatically identify key formulas and concepts in today's notes." },
-                  { key: "summary",    icon: "📋", title: "Auto-Summary",       desc: "Generate a 5-bullet summary of this material." },
-                  { key: "quiz",       icon: "❓", title: "Practice Quiz",      desc: "3-question flash quiz based on this material." },
-                  { key: "chat",       icon: "💬", title: "Level_Up Chat",      desc: "Ask questions at your own pace with AI powered answers." },
+                  { key: "highlights", icon: "edit", title: "Smart Highlighting", desc: "Automatically identify key formulas and concepts in today's notes." },
+                  { key: "summary",    icon: "clipboard", title: "Auto-Summary",       desc: "Generate a 5-bullet summary of this material." },
+                  { key: "quiz",       icon: "question-mark", title: "Practice Quiz",      desc: "3-question flash quiz based on this material." },
+                  { key: "chat",       icon: "chat", title: "Level_Up Chat",      desc: "Ask questions at your own pace with AI powered answers." },
+                  ...(tutorConfig?.enabled ? [{ key: "tutor", icon: "bot", title: "🎓 AI Tutor", desc: "Hint-only mode — teacher configured. AI guides you with clues, never gives direct answers." }] : []),
                 ].map(f => (
                   <div
                     key={f.key}
                     onClick={() => openAI(f.key)}
-                    style={{ ...aiFeatureCard, border: aiModal === f.key ? "2px solid #3B37CC" : "1px solid var(--border)", background: aiModal === f.key ? "var(--primary-tint)" : "#fff" }}
+                    style={{ ...aiFeatureCard, border: aiModal === f.key ? "2px solid var(--primary)" : "1px solid var(--border)", background: aiModal === f.key ? "var(--primary-tint)" : "var(--surface)" }}
                   >
-                    <div style={{ fontSize: "22px", marginBottom: "6px" }}>{f.icon}</div>
+                    <div style={{ marginBottom: "6px" }}><Icon name={f.icon} size={22} alt="" /></div>
                     <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)", marginBottom: "4px" }}>{f.title}</div>
                     <div style={{ fontSize: "12px", color: "var(--text-muted)", lineHeight: 1.5 }}>{f.desc}</div>
                   </div>
@@ -2012,77 +2291,81 @@ export default function ClassDetail() {
                 <div style={{ textAlign: "center", padding: "60px", color: "var(--text-faint)" }}>No grade data yet.</div>
               ) : gradesData.role === "student" ? (
                 /* ── Student Grades View ── */
-                <div style={{ maxWidth: "680px" }}>
-                  {/* Score summary card */}
-                  <div style={{ background: "linear-gradient(135deg, #3B37CC, #6366F1)", borderRadius: "16px", padding: "28px", marginBottom: "24px", color: "#fff", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <div>
-                      <div style={{ fontSize: "13px", opacity: 0.8, marginBottom: "4px" }}>Overall Grade</div>
-                      <div style={{ fontSize: "48px", fontWeight: 800, lineHeight: 1 }}>
-                        {gradesData.percentage !== null ? `${gradesData.percentage}%` : "—"}
-                      </div>
-                      <div style={{ fontSize: "13px", opacity: 0.8, marginTop: "6px" }}>
-                        {gradesData.totalEarned} / {gradesData.totalPossible} points
-                      </div>
-                    </div>
-                    <div style={{ fontSize: "64px" }}>
-                      {gradesData.percentage === null ? "📋" : gradesData.percentage >= 90 ? "🏆" : gradesData.percentage >= 75 ? "⭐" : gradesData.percentage >= 60 ? "👍" : "📚"}
-                    </div>
-                  </div>
+                (() => {
+                  const pct = gradesData.percentage;
+                  const letterGrade = pct === null ? "—" : pct >= 90 ? "A" : pct >= 80 ? "B" : pct >= 70 ? "C" : pct >= 60 ? "D" : "F";
+                  return (
+                    <div style={{ maxWidth: "700px" }}>
+                      <div style={{ display: "flex", gap: "14px" }}>
+                        {/* Left card — overall grade */}
+                        <div style={{ width: "150px", flexShrink: 0, background: "linear-gradient(150deg,var(--primary),var(--primary-light))", borderRadius: "14px", padding: "18px 14px", color: "#fff", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: "2px" }}>
+                          <div style={{ fontSize: "28px", fontWeight: 800, lineHeight: 1 }}>{pct !== null ? `${pct}%` : "—"}</div>
+                          <div style={{ fontSize: "10px", opacity: 0.8, marginBottom: "10px" }}>Overall grade</div>
+                          <div style={{ fontSize: "32px", fontWeight: 900, background: "rgba(255,255,255,0.18)", borderRadius: "10px", padding: "4px 16px", lineHeight: 1.2 }}>{letterGrade}</div>
+                          <div style={{ fontSize: "10px", opacity: 0.7, marginTop: "8px" }}>{gradesData.totalEarned}/{gradesData.totalPossible} pts</div>
+                        </div>
 
-                  {/* Assignment rows */}
-                  {gradesData.rows.length === 0 ? (
-                    <p style={{ color: "var(--text-faint)", textAlign: "center", padding: "24px" }}>No assignments yet.</p>
-                  ) : gradesData.rows.map(row => {
-                    const pct = row.grade !== null ? Math.round((row.grade / row.points) * 100) : null;
-                    const color = row.status === "graded" ? (pct >= 75 ? "#22c55e" : pct >= 50 ? "#f59e0b" : "#ef4444") : row.status === "turned_in" || row.status === "late" ? "#3B37CC" : "var(--text-faint)";
-                    return (
-                      <div key={row.assignment_id} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px 20px", marginBottom: "8px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                          <div style={{ width: "40px", height: "40px", borderRadius: "10px", background: color + "15", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px" }}>
-                            {row.status === "graded" ? "✅" : row.status === "turned_in" ? "📤" : row.status === "late" ? "⏰" : "📝"}
-                          </div>
-                          <div>
-                            <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{row.title}</div>
-                            <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>
-                              {row.due_date ? `Due ${formatDate(row.due_date)}` : "No due date"}
-                              {row.grade_comment && ` • "${row.grade_comment}"`}
-                            </div>
-                          </div>
-                        </div>
-                        <div style={{ textAlign: "right" }}>
-                          {row.grade !== null ? (
-                            <>
-                              <div style={{ fontSize: "18px", fontWeight: 800, color }}>{row.grade}<span style={{ fontSize: "13px", color: "var(--text-faint)", fontWeight: 400 }}>/{row.points}</span></div>
-                              <div style={{ fontSize: "11px", color }}>{pct}%</div>
-                            </>
-                          ) : (
-                            <span style={{ fontSize: "12px", fontWeight: 600, color, background: color + "15", padding: "4px 12px", borderRadius: "20px" }}>
-                              {row.status === "assigned" ? "Pending" : row.status === "turned_in" ? "Submitted" : row.status === "late" ? "Late" : row.status}
-                            </span>
-                          )}
+                        {/* Right — assignment rows */}
+                        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "8px" }}>
+                          {gradesData.rows.length === 0 ? (
+                            <p style={{ color: "var(--text-faint)", textAlign: "center", padding: "24px" }}>No assignments yet.</p>
+                          ) : gradesData.rows.map(row => {
+                            const rPct = row.grade !== null ? Math.round((row.grade / row.points) * 100) : null;
+                            const pillLetter = rPct === null ? null : rPct >= 90 ? "A" : rPct >= 80 ? "B" : rPct >= 70 ? "C" : rPct >= 60 ? "D" : "F";
+                            const pillStyle = rPct !== null
+                              ? (rPct >= 75 ? { bg: "#DCFCE7", text: "#16A34A" } : rPct >= 50 ? { bg: "#FEF9C3", text: "#D97706" } : { bg: "#FEE2E2", text: "#DC2626" })
+                              : row.status === "turned_in" ? { bg: "var(--primary-tint)", text: "var(--primary)" }
+                              : row.status === "late" ? { bg: "#FEF9C3", text: "#D97706" }
+                              : { bg: "#F1F5F9", text: "#64748B" };
+                            const pillText = rPct !== null
+                              ? `${pillLetter} · ${rPct}%`
+                              : row.status === "turned_in" ? "Submitted"
+                              : row.status === "late" ? "Late"
+                              : "Pending";
+                            return (
+                              <div key={row.assignment_id} style={{ background: "#F8FAFC", border: "1px solid var(--border)", borderRadius: "10px", padding: "9px 13px", fontSize: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.title}</div>
+                                  {row.due_date && <div style={{ fontSize: "10px", color: "var(--text-faint)", marginTop: "2px" }}>Due {formatDate(row.due_date)}</div>}
+                                </div>
+                                <span style={{ fontSize: "11px", fontWeight: 700, padding: "4px 10px", borderRadius: "999px", background: pillStyle.bg, color: pillStyle.text, flexShrink: 0 }}>
+                                  {pillText}
+                                </span>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
+                    </div>
+                  );
+                })()
               ) : (
                 /* ── Teacher Grade Book View ── */
                 <div>
                   {/* Class average banner */}
-                  <div style={{ background: "linear-gradient(135deg, #3B37CC, #6366F1)", borderRadius: "14px", padding: "20px 28px", marginBottom: "24px", display: "flex", alignItems: "center", gap: "24px", color: "#fff" }}>
-                    <div>
-                      <div style={{ fontSize: "12px", opacity: 0.8 }}>Class Average</div>
-                      <div style={{ fontSize: "36px", fontWeight: 800 }}>{gradesData.classAvg !== null ? `${gradesData.classAvg}%` : "—"}</div>
+                  <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "14px", padding: "18px 28px", marginBottom: "24px", display: "flex", alignItems: "center", gap: "22px", boxShadow: "0 4px 20px rgba(15,23,42,0.06)" }}>
+                    <div style={{
+                      width: "60px", height: "60px", borderRadius: "50%", flexShrink: 0, padding: "5px", boxSizing: "border-box",
+                      background: gradesData.classAvg !== null
+                        ? `conic-gradient(var(--primary) ${gradesData.classAvg}%, var(--border) ${gradesData.classAvg}% 100%)`
+                        : "var(--border)",
+                    }}>
+                      <div style={{ width: "100%", height: "100%", borderRadius: "50%", background: "var(--surface)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "13px", fontWeight: 800, color: "var(--text)" }}>
+                        {gradesData.classAvg !== null ? `${gradesData.classAvg}%` : "—"}
+                      </div>
                     </div>
-                    <div style={{ width: "1px", height: "48px", background: "rgba(255,255,255,0.3)" }} />
                     <div>
-                      <div style={{ fontSize: "12px", opacity: 0.8 }}>Students</div>
-                      <div style={{ fontSize: "28px", fontWeight: 700 }}>{gradesData.rows.length}</div>
+                      <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-muted)" }}>Class Average</div>
                     </div>
-                    <div style={{ width: "1px", height: "48px", background: "rgba(255,255,255,0.3)" }} />
+                    <div style={{ width: "1px", height: "40px", background: "var(--border)" }} />
                     <div>
-                      <div style={{ fontSize: "12px", opacity: 0.8 }}>Assignments</div>
-                      <div style={{ fontSize: "28px", fontWeight: 700 }}>{gradesData.assignments.length}</div>
+                      <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "2px" }}>Students</div>
+                      <div style={{ fontSize: "26px", fontWeight: 700, color: "var(--text)" }}>{gradesData.rows.length}</div>
+                    </div>
+                    <div style={{ width: "1px", height: "40px", background: "var(--border)" }} />
+                    <div>
+                      <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "2px" }}>Assignments</div>
+                      <div style={{ fontSize: "26px", fontWeight: 700, color: "var(--text)" }}>{gradesData.assignments.length}</div>
                     </div>
                   </div>
 
@@ -2100,7 +2383,7 @@ export default function ClassDetail() {
                             {gradesData.rows.map(row => (
                               <th key={row.student_id} style={{ padding: "10px 8px", textAlign: "center", fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", borderBottom: "1px solid var(--border)", minWidth: "90px" }}>
                                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
-                                  <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "#3B37CC", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", fontWeight: 700 }}>
+                                  <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "var(--primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", fontWeight: 700 }}>
                                     {row.name[0].toUpperCase()}
                                   </div>
                                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "80px", display: "block" }}>{row.name}</span>
@@ -2111,17 +2394,19 @@ export default function ClassDetail() {
                         </thead>
                         <tbody>
                           {gradesData.assignments.map((a, i) => (
-                            <tr key={a.id} style={{ background: i % 2 === 0 ? "#fff" : "#fafafa" }}>
+                            <tr key={a.id} style={{ background: i % 2 === 0 ? "var(--surface)" : "var(--surface-alt)" }}>
                               {/* Sticky assignment name */}
-                              <td style={{ padding: "12px 16px", borderBottom: "1px solid var(--surface-alt)", borderRight: "2px solid var(--border)", position: "sticky", left: 0, background: i % 2 === 0 ? "#fff" : "#fafafa", zIndex: 1 }}>
+                              <td style={{ padding: "12px 16px", borderBottom: "1px solid var(--surface-alt)", borderRight: "2px solid var(--border)", position: "sticky", left: 0, background: i % 2 === 0 ? "var(--surface)" : "var(--surface-alt)", zIndex: 1 }}>
                                 <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)", marginBottom: "2px" }}>{a.title}</div>
                                 <div style={{ fontSize: "11px", color: "var(--text-faint)" }}>{a.points} pts{a.due_date ? ` · Due ${new Date(a.due_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}` : ""}</div>
                               </td>
                               {gradesData.rows.map(row => {
                                 const g = row.grades.find(g => g.assignment_id === a.id);
                                 const pct = g?.grade !== null && g?.grade !== undefined ? Math.round((g.grade / a.points) * 100) : null;
-                                const bg = !g || g.grade === null ? "transparent" : pct >= 75 ? "#f0fdf4" : pct >= 50 ? "#fefce8" : "#fef2f2";
-                                const col = !g || g.grade === null ? "var(--border)" : pct >= 75 ? "#15803d" : pct >= 50 ? "#92400e" : "#dc2626";
+                                // Same semantic colors as the student view, tinted at 15% alpha for the
+                                // cell background so both light and dark surfaces stay legible underneath.
+                                const col = !g || g.grade === null ? "var(--text-faint)" : pct >= 75 ? "#22c55e" : pct >= 50 ? "#f59e0b" : "#ef4444";
+                                const bg = !g || g.grade === null ? "transparent" : col + "15";
                                 return (
                                   <td key={row.student_id} style={{ padding: "12px 8px", textAlign: "center", borderBottom: "1px solid var(--surface-alt)", background: bg }}>
                                     {g?.grade !== null && g?.grade !== undefined ? (
@@ -2130,7 +2415,7 @@ export default function ClassDetail() {
                                         <div style={{ fontSize: "10px", color: col, opacity: 0.8 }}>{pct}%</div>
                                       </div>
                                     ) : (
-                                      <span style={{ fontSize: "15px", color: g?.status === "turned_in" || g?.status === "late" ? "#3B37CC" : "var(--border)" }}>
+                                      <span style={{ fontSize: "15px", color: g?.status === "turned_in" || g?.status === "late" ? "var(--primary)" : "var(--border)" }}>
                                         {g?.status === "turned_in" ? "✓" : g?.status === "late" ? "⏰" : "—"}
                                       </span>
                                     )}
@@ -2140,17 +2425,17 @@ export default function ClassDetail() {
                             </tr>
                           ))}
                           {/* Overall row */}
-                          <tr style={{ background: "var(--primary-tint)", borderTop: "2px solid #a5b4fc" }}>
+                          <tr style={{ background: "var(--primary-tint)", borderTop: "2px solid var(--border)" }}>
                             <td style={{ padding: "12px 16px", borderRight: "2px solid var(--border)", position: "sticky", left: 0, background: "var(--primary-tint)", zIndex: 1 }}>
-                              <span style={{ fontSize: "13px", fontWeight: 700, color: "#3B37CC" }}>Overall</span>
+                              <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--primary)" }}>Overall</span>
                             </td>
                             {gradesData.rows.map(row => (
                               <td key={row.student_id} style={{ padding: "12px 8px", textAlign: "center" }}>
                                 {row.percentage !== null ? (
-                                  <span style={{ fontSize: "14px", fontWeight: 800, color: row.percentage >= 75 ? "#15803d" : row.percentage >= 50 ? "#92400e" : "#dc2626" }}>
+                                  <span style={{ fontSize: "14px", fontWeight: 800, color: row.percentage >= 75 ? "#22c55e" : row.percentage >= 50 ? "#f59e0b" : "#ef4444" }}>
                                     {row.percentage}%
                                   </span>
-                                ) : <span style={{ color: "var(--border)" }}>—</span>}
+                                ) : <span style={{ color: "var(--text-faint)" }}>—</span>}
                               </td>
                             ))}
                           </tr>
@@ -2166,39 +2451,6 @@ export default function ClassDetail() {
           {/* ── ATTENDANCE TAB ── */}
           {activeTab === "attendance" && (
             <div>
-              {/* Meeting banner */}
-              {activeMeeting ? (
-                <div style={{ background: "linear-gradient(135deg,#3B37CC,#6366f1)", borderRadius: "12px", padding: "16px 20px", marginBottom: "20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                    <span style={{ fontSize: "22px" }}>📹</span>
-                    <div>
-                      <div style={{ color: "#fff", fontWeight: 700, fontSize: "15px" }}>{activeMeeting.title}</div>
-                      <div style={{ color: "rgba(255,255,255,0.75)", fontSize: "12px" }}>{lang === "en" ? `Started by ${activeMeeting.host_name}` : `${activeMeeting.host_name} မှ စတင်`}</div>
-                    </div>
-                  </div>
-                  <div style={{ display: "flex", gap: "8px" }}>
-                    <a href={activeMeeting.room_url} target="_blank" rel="noopener noreferrer" style={{ background: "var(--surface)", color: "#3B37CC", border: "none", borderRadius: "8px", padding: "8px 18px", fontWeight: 700, fontSize: "13px", cursor: "pointer", textDecoration: "none" }}>
-                      {lang === "en" ? "Join Meeting" : "ဝင်မည်"}
-                    </a>
-                    {isTeacher && (
-                      <button onClick={endMeeting} disabled={meetingLoading} style={{ background: "rgba(255,255,255,0.2)", color: "#fff", border: "1px solid rgba(255,255,255,0.4)", borderRadius: "8px", padding: "8px 14px", fontWeight: 600, fontSize: "13px", cursor: "pointer" }}>
-                        {lang === "en" ? "End" : "ပိတ်မည်"}
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ) : isTeacher && (
-                <div style={{ background: "var(--bg)", borderRadius: "12px", padding: "16px 20px", marginBottom: "20px", display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px dashed var(--border)" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                    <span style={{ fontSize: "20px" }}>📹</span>
-                    <span style={{ fontSize: "14px", color: "var(--text-muted)" }}>{lang === "en" ? "No active meeting" : "လက်ရှိ Meeting မရှိသေးပါ"}</span>
-                  </div>
-                  <button onClick={startMeeting} disabled={meetingLoading} style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "8px 18px", fontWeight: 700, fontSize: "13px", cursor: "pointer" }}>
-                    {meetingLoading ? "..." : lang === "en" ? "▶ Start Meeting" : "▶ Meeting စတင်မည်"}
-                  </button>
-                </div>
-              )}
-
               {/* Attendance section */}
               {attendanceLoading ? (
                 <div style={{ textAlign: "center", padding: "40px", color: "var(--text-faint)" }}>Loading...</div>
@@ -2221,6 +2473,58 @@ export default function ClassDetail() {
                   const pendingCount = (attendanceSessions || []).filter(s => !s.total || Number(s.total) === 0).length;
                   return (
                     <div>
+                      {/* Leave Requests section */}
+                      <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", padding: "18px 20px", marginBottom: "20px" }}>
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
+                          <div style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text)" }}>
+                            {lang === "en" ? "Leave Requests" : "ကြိုတင်ခွင့်တောင်းချက်များ"}
+                            {leaveRequests.filter(r => r.status === "pending").length > 0 && (
+                              <span style={{ marginLeft: "8px", background: "rgba(245,158,11,0.12)", color: "#f59e0b", fontSize: "10px", fontWeight: 700, padding: "2px 8px", borderRadius: "999px" }}>
+                                {leaveRequests.filter(r => r.status === "pending").length} {lang === "en" ? "pending" : "ဆိုင်းငံ့"}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {leaveRequests.length === 0 ? (
+                          <div style={{ textAlign: "center", padding: "20px 0", color: "var(--text-faint)", fontSize: "12.5px" }}>
+                            {lang === "en" ? "No leave requests yet" : "ကြိုတင်ခွင့်တောင်းချက် မရှိသေးပါ"}
+                          </div>
+                        ) : (
+                          <div style={{ display: "flex", flexDirection: "column" }}>
+                            {leaveRequests.map((req, i) => {
+                              const icons = { medical: "🩺", family: "👪", travel: "✈️", other: "📝" };
+                              const reasonLabels = { medical: lang === "en" ? "Medical" : "ကျန်းမာရေး", family: lang === "en" ? "Family" : "မိသားစု", travel: lang === "en" ? "Travel" : "ခရီးသွား", other: lang === "en" ? "Other" : "အခြား" };
+                              const fromD = req.from_date?.slice(0,10);
+                              const toD = req.to_date?.slice(0,10);
+                              const dateStr = fromD === toD
+                                ? new Date(fromD + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+                                : `${new Date(fromD + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(toD + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+                              return (
+                                <div key={req.id} onClick={() => setLeaveDetailModal(req)} style={{ display: "flex", alignItems: "center", gap: "12px", padding: "12px 0", borderBottom: i < leaveRequests.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer", borderRadius: "8px" }}
+                                  onMouseEnter={e => e.currentTarget.style.background = "var(--surface-alt)"}
+                                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                                  <div style={{ width: "34px", height: "34px", borderRadius: "50%", background: "var(--primary-tint)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "15px", flexShrink: 0 }}>{icons[req.reason_type] || "📝"}</div>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontSize: "12.5px", fontWeight: 600, color: "var(--text)" }}>{req.student_name || "Student"}</div>
+                                    <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "1px" }}>{reasonLabels[req.reason_type] || req.reason_type} · {dateStr}</div>
+                                    {req.details && <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "1px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{req.details}</div>}
+                                  </div>
+                                  {req.status === "pending" ? (
+                                    <span style={{ fontSize: "10px", fontWeight: 700, padding: "4px 10px", borderRadius: "999px", flexShrink: 0, background: "rgba(245,158,11,0.12)", color: "#f59e0b" }}>
+                                      {lang === "en" ? "Pending" : "ဆိုင်းငံ့"}
+                                    </span>
+                                  ) : (
+                                    <span style={{ fontSize: "10px", fontWeight: 700, padding: "4px 10px", borderRadius: "999px", flexShrink: 0, background: req.status === "approved" ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.1)", color: req.status === "approved" ? "#22c55e" : "#ef4444" }}>
+                                      {req.status === "approved" ? (lang === "en" ? "Approved" : "အတည်ပြုပြီး") : (lang === "en" ? "Rejected" : "ငြင်းပယ်ပြီး")}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
                       {/* Stats row */}
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "14px", marginBottom: "24px" }}>
                         {[
@@ -2228,9 +2532,9 @@ export default function ClassDetail() {
                           { num: avgRate !== null ? avgRate + "%" : "—", lbl: lang === "en" ? "Avg Attendance" : "ပျမ်းမျှ တက်ရောက်မှု", color: avgRate !== null ? (avgRate >= 75 ? "#0F9D6E" : "#E1483F") : undefined },
                           { num: pendingCount, lbl: lang === "en" ? "Pending" : "မမှတ်ရသေးသော", color: pendingCount > 0 ? "#D97706" : undefined },
                         ].map(({ num, lbl, color }) => (
-                          <div key={lbl} style={{ background: "#EEF0FF", borderRadius: "16px", padding: "16px 18px" }}>
+                          <div key={lbl} style={{ background: "var(--primary-tint)", borderRadius: "16px", padding: "16px 18px" }}>
                             <div style={{ fontSize: "22px", fontWeight: 700, color: color || "var(--text)" }}>{num}</div>
-                            <div style={{ fontSize: "12px", color: "#6B6B85", marginTop: "2px" }}>{lbl}</div>
+                            <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "2px" }}>{lbl}</div>
                           </div>
                         ))}
                       </div>
@@ -2262,9 +2566,9 @@ export default function ClassDetail() {
                               const isToday = dateStr === todayStr;
                               const isWeekend = [0, 6].includes(new Date(calYear, calMonth, day).getDay());
                               const hasSavedRecords = session && Number(session.total) > 0;
-                              const cellBg = isSelected ? "#3B37CC"
+                              const cellBg = isSelected ? "var(--primary)"
                                 : session ? (hasSavedRecords ? "#22c55e" : "#f59e0b")
-                                : isToday ? "#EEF0FF" : "transparent";
+                                : isToday ? "var(--primary-tint)" : "transparent";
                               const cellColor = isSelected ? "#fff"
                                 : session ? "#fff"
                                 : isWeekend ? "#A6A6BF" : "var(--text)";
@@ -2373,12 +2677,11 @@ export default function ClassDetail() {
                                     {wSessions.map(s => {
                                       const isHighlighted = calSelectedDate && s.session_date?.slice(0, 10) === calSelectedDate;
                                       const isRenaming = renamingSessionId === s.id;
-                                      const menuOpen = sessionMenuOpen === s.id;
                                       return (
                                         <div key={s.id} style={{ position: "relative" }}>
                                           {isRenaming ? (
                                             /* Inline rename row */
-                                            <div style={{ display: "flex", gap: "6px", padding: "8px 10px", borderRadius: "12px", background: "#EEF0FF", border: "1px solid rgba(91,95,233,0.2)", marginBottom: "2px" }}>
+                                            <div style={{ display: "flex", gap: "6px", padding: "8px 10px", borderRadius: "12px", background: "var(--primary-tint)", border: "1px solid rgba(91,95,233,0.2)", marginBottom: "2px" }}>
                                               <input autoFocus value={renamingTitle} onChange={e => setRenamingTitle(e.target.value)}
                                                 onKeyDown={async e => {
                                                   if (e.key === "Enter") {
@@ -2402,11 +2705,12 @@ export default function ClassDetail() {
                                             </div>
                                           ) : (
                                             <div onClick={() => openAttendanceSession(s.id, Number(s.total) > 0)}
+                                              onContextMenu={isTeacher ? e => { e.preventDefault(); setSessCtxMenu({ id: s.id, x: Math.min(e.clientX, window.innerWidth - 184), y: e.clientY }); } : undefined}
                                               style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 10px", borderRadius: "12px", cursor: "pointer", transition: "background 0.12s", marginBottom: "2px",
-                                                background: isHighlighted ? "#EEF0FF" : "transparent",
+                                                background: isHighlighted ? "var(--primary-tint)" : "transparent",
                                                 border: isHighlighted ? "1px solid rgba(91,95,233,0.18)" : "1px solid transparent" }}
                                               onMouseEnter={e => { if (!isHighlighted) e.currentTarget.style.background = "#F7F7FC"; }}
-                                              onMouseLeave={e => { e.currentTarget.style.background = isHighlighted ? "#EEF0FF" : "transparent"; }}>
+                                              onMouseLeave={e => { e.currentTarget.style.background = isHighlighted ? "var(--primary-tint)" : "transparent"; }}>
                                               <div style={{ minWidth: 0, flex: 1 }}>
                                                 <div style={{ fontSize: "10.5px", color: isHighlighted ? "#5B5FE9" : "#A6A6BF", marginBottom: "2px", fontWeight: isHighlighted ? 700 : 400 }}>
                                                   {s.session_date ? new Date(s.session_date.slice(0, 10) + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : ""}
@@ -2418,40 +2722,16 @@ export default function ClassDetail() {
                                               </div>
                                               <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0, marginLeft: "8px" }}>
                                                 <span style={{ fontSize: "10px", fontWeight: 700, padding: "3px 8px", borderRadius: "999px",
-                                                  background: Number(s.total) > 0 ? "#E6F7EF" : "#FFF3E0",
-                                                  color: Number(s.total) > 0 ? "#0F9D6E" : "#D97706" }}>
+                                                  background: Number(s.total) > 0 ? "rgba(34,197,94,0.12)" : "rgba(249,115,22,0.12)",
+                                                  color: Number(s.total) > 0 ? "#22c55e" : "#f97316" }}>
                                                   {Number(s.total) > 0 ? (lang === "en" ? "Taken ✓" : "မှတ်ပြီး") : (lang === "en" ? "Pending" : "မမှတ်ရသေး")}
                                                 </span>
                                                 {/* ⋮ menu button */}
-                                                <button onClick={e => { e.stopPropagation(); setSessionMenuOpen(menuOpen ? null : s.id); }}
-                                                  style={{ width: "24px", height: "24px", borderRadius: "6px", border: "none", background: menuOpen ? "rgba(11,11,30,0.08)" : "transparent", color: "#A6A6BF", cursor: "pointer", fontSize: "14px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                                <button onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setSessCtxMenu({ id: s.id, x: r.right - 180, y: r.bottom + 4 }); }}
+                                                  style={{ width: "24px", height: "24px", borderRadius: "6px", border: "none", background: "transparent", color: "#A6A6BF", cursor: "pointer", fontSize: "14px", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                                                   ⋮
                                                 </button>
                                               </div>
-                                            </div>
-                                          )}
-
-                                          {/* Dropdown menu */}
-                                          {menuOpen && !isRenaming && (
-                                            <div onClick={e => e.stopPropagation()}
-                                              style={{ position: "absolute", right: "8px", top: "100%", zIndex: 50, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", boxShadow: "0 8px 24px rgba(11,11,30,0.12)", minWidth: "140px", overflow: "hidden" }}>
-                                              <button onClick={() => { setRenamingSessionId(s.id); setRenamingTitle(s.title); setSessionMenuOpen(null); }}
-                                                style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%", padding: "10px 14px", border: "none", background: "transparent", color: "var(--text)", fontSize: "13px", fontWeight: 600, cursor: "pointer", textAlign: "left" }}
-                                                onMouseEnter={e => e.currentTarget.style.background = "var(--bg)"}
-                                                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                                                ✏️ {lang === "en" ? "Rename" : "ခေါင်းစဉ်ပြင်"}
-                                              </button>
-                                              <div style={{ height: "1px", background: "var(--border)", margin: "0 10px" }} />
-                                              <button onClick={async () => {
-                                                setSessionMenuOpen(null);
-                                                await deleteAttendanceSession(s.id);
-                                                if (calSelectedDate === s.session_date?.slice(0, 10)) setCalSelectedDate(null);
-                                              }}
-                                                style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%", padding: "10px 14px", border: "none", background: "transparent", color: "#E1483F", fontSize: "13px", fontWeight: 600, cursor: "pointer", textAlign: "left" }}
-                                                onMouseEnter={e => e.currentTarget.style.background = "#FFF0F0"}
-                                                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
-                                                🗑 {lang === "en" ? "Delete" : "ဖျက်မည်"}
-                                              </button>
                                             </div>
                                           )}
                                         </div>
@@ -2487,16 +2767,16 @@ export default function ClassDetail() {
                     const todayStr = new Date().toISOString().slice(0, 10);
                     const statusLabel = s => s === "present" ? (lang === "en" ? "Present" : "တက်ရောက်") : s === "late" ? (lang === "en" ? "Late" : "နောက်ကျ") : s === "absent" ? (lang === "en" ? "Absent" : "မတက်") : "—";
                     const statusColor = s => s === "present" ? "#16a34a" : s === "late" ? "#d97706" : s === "absent" ? "#dc2626" : "var(--text-faint)";
-                    const statusBg = s => s === "present" ? "#dcfce7" : s === "late" ? "#fff3e0" : "#fee2e2";
+                    const statusBg = s => s === "present" ? "rgba(34,197,94,0.15)" : s === "late" ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.1)";
                     return (
                       <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
 
                         {/* Warning banner — only when < 85% */}
                         {myAttendance.rate !== null && myAttendance.rate < 85 && (
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "14px", padding: "14px 18px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "14px", padding: "14px 18px" }}>
                             <div>
-                              <div style={{ fontSize: "13px", fontWeight: 700, color: "#dc2626" }}>⚠ {lang === "en" ? "Attendance below requirement" : "တက်ရောက်မှုနှုန်း လိုအပ်ချက်အောက်"}</div>
-                              <div style={{ fontSize: "11px", color: "#991b1b", marginTop: "3px" }}>{lang === "en" ? `Your attendance is at ${rate}%, below the 85% minimum.` : `တက်ရောက်မှုနှုန်း ${rate}% ဖြစ်ပြီး 85% လိုအပ်ချက်အောက်ဖြစ်နေသည်။`}</div>
+                              <div style={{ fontSize: "13px", fontWeight: 700, color: "#ef4444" }}>⚠ {lang === "en" ? "Attendance below requirement" : "တက်ရောက်မှုနှုန်း လိုအပ်ချက်အောက်"}</div>
+                              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "3px" }}>{lang === "en" ? `Your attendance is at ${rate}%, below the 85% minimum.` : `တက်ရောက်မှုနှုန်း ${rate}% ဖြစ်ပြီး 85% လိုအပ်ချက်အောက်ဖြစ်နေသည်။`}</div>
                             </div>
                             <button style={{ background: "#dc2626", color: "#fff", border: "none", padding: "8px 14px", borderRadius: "9px", fontSize: "11.5px", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", marginLeft: "14px" }}>
                               {lang === "en" ? "View details" : "အသေးစိတ်"}
@@ -2505,12 +2785,12 @@ export default function ClassDetail() {
                         )}
 
                         {/* Entry card */}
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#EEF0FF", borderRadius: "14px", padding: "16px 20px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--primary-tint)", borderRadius: "14px", padding: "16px 20px" }}>
                           <div>
                             <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)" }}>{lang === "en" ? "Can't make it to class?" : "ကျောင်းမတက်နိုင်ဘူးလား?"}</div>
                             <div style={{ fontSize: "11.5px", color: "var(--text-faint)", marginTop: "2px" }}>{lang === "en" ? "Let your teacher know in advance and avoid an unexplained absence" : "ကြိုတင် အကြောင်းကြားပြီး ရှင်းမပြသော ပျက်ကွက်ကို ရှောင်ပါ"}</div>
                           </div>
-                          <button onClick={() => { setLeaveModal("form"); setLeaveForm({ from: new Date().toISOString().slice(0,10), to: new Date().toISOString().slice(0,10), reasonType: "medical", details: "" }); }}
+                          <button onClick={() => { setLeaveModal("form"); setLeaveForm({ from: new Date().toISOString().slice(0,10), to: new Date().toISOString().slice(0,10), reasonType: "medical", details: "", attachment: null }); }}
                             style={{ background: "#0F172A", color: "#fff", border: "none", borderRadius: "9px", padding: "10px 18px", fontSize: "12px", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", marginLeft: "16px" }}>
                             {lang === "en" ? "Request leave" : "ကြိုတင်တောင်းဆိုမည်"}
                           </button>
@@ -2519,7 +2799,7 @@ export default function ClassDetail() {
                         {/* Ring card + Stat strip */}
                         <div style={{ display: "flex", gap: "14px" }}>
                           {/* Ring */}
-                          <div style={{ width: "200px", flexShrink: 0, background: "linear-gradient(150deg,#4F46E5,#818CF8)", borderRadius: "16px", padding: "18px 16px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: "8px" }}>
+                          <div style={{ width: "200px", flexShrink: 0, background: "linear-gradient(150deg,var(--primary),var(--primary-light))", borderRadius: "16px", padding: "18px 16px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: "8px" }}>
                             <svg width="80" height="80" viewBox="0 0 76 76">
                               <circle cx="38" cy="38" r={r34} fill="none" stroke="rgba(255,255,255,0.22)" strokeWidth="8"/>
                               <circle cx="38" cy="38" r={r34} fill="none" stroke="#fff" strokeWidth="8"
@@ -2573,9 +2853,9 @@ export default function ClassDetail() {
                                   <div key={day} onClick={() => st ? setCalStudentSelDate(isSel ? null : ds) : null} style={{
                                     width: "36px", height: "36px", borderRadius: "8px", fontSize: "12px", display: "flex", alignItems: "center", justifyContent: "center",
                                     cursor: st ? "pointer" : "default", fontWeight: st ? 700 : 500,
-                                    background: isSel ? "#4F46E5" : st === "present" ? "#22c55e" : st === "late" ? "#f59e0b" : st === "absent" ? "#ef4444" : isToday ? "#EEF0FF" : "#F8F9FB",
-                                    color: (isSel || st) ? "#fff" : isToday ? "#4F46E5" : "var(--text)",
-                                    border: isToday && !st && !isSel ? "1.5px solid #4F46E5" : "none",
+                                    background: isSel ? "var(--primary)" : st === "present" ? "#22c55e" : st === "late" ? "#f59e0b" : st === "absent" ? "#ef4444" : isToday ? "var(--primary-tint)" : "var(--surface-alt)",
+                                    color: (isSel || st) ? "#fff" : isToday ? "var(--primary)" : "var(--text)",
+                                    border: isToday && !st && !isSel ? "1.5px solid var(--primary)" : "none",
                                   }}>{day}</div>
                                 );
                               })}
@@ -2600,7 +2880,7 @@ export default function ClassDetail() {
                                   </div>
                                 ))}
                                 <button onClick={() => { const r = dayRows[0]; setDisputeModal({ title: r.title, session_date: calStudentSelDate, status: r.status }); setDisputeForm({ requested: "present", reason: "" }); }}
-                                  style={{ marginTop: "8px", background: "none", border: "none", padding: 0, fontSize: "10.5px", fontWeight: 600, color: "#4F46E5", cursor: "pointer" }}>
+                                  style={{ marginTop: "8px", background: "none", border: "none", padding: 0, fontSize: "10.5px", fontWeight: 600, color: "var(--primary)", cursor: "pointer" }}>
                                   {lang === "en" ? "This looks wrong? Request a review →" : "မမှန်ဘူးလား? ပြင်ဆင်တောင်းဆိုမည် →"}
                                 </button>
                               </div>
@@ -2621,7 +2901,7 @@ export default function ClassDetail() {
                                 </div>
                                 <div style={{ fontSize: "10px", color: "var(--text-faint)", display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
                                   {r.session_date && new Date(r.session_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                                  <span style={{ color: "#4F46E5", fontWeight: 600 }}>Review</span>
+                                  <span style={{ color: "var(--primary)", fontWeight: 600 }}>Review</span>
                                 </div>
                               </div>
                             ))}
@@ -2637,7 +2917,7 @@ export default function ClassDetail() {
                                 <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "3px" }}>{disputeModal.title}{disputeModal.session_date && ` — ${new Date(disputeModal.session_date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}`}</div>
                               </div>
                               <div style={{ padding: "16px 20px" }}>
-                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fef2f2", borderRadius: "9px", padding: "9px 13px", marginBottom: "14px" }}>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "rgba(239,68,68,0.08)", borderRadius: "9px", padding: "9px 13px", marginBottom: "14px" }}>
                                   <span style={{ fontSize: "11px", color: "var(--text-faint)" }}>{lang === "en" ? "Currently marked as" : "လက်ရှိ မှတ်တမ်း"}</span>
                                   <span style={{ fontSize: "10px", fontWeight: 700, padding: "3px 10px", borderRadius: "999px", background: statusBg(disputeModal.status), color: statusColor(disputeModal.status) }}>{statusLabel(disputeModal.status)}</span>
                                 </div>
@@ -2667,16 +2947,30 @@ export default function ClassDetail() {
                             {leaveHistory.map((req, i) => {
                               const icons = { medical: "🩺", family: "👪", travel: "✈️", other: "📝" };
                               const reasonLabels = { medical: lang === "en" ? "Medical" : "ကျန်းမာရေး", family: lang === "en" ? "Family event" : "မိသားစု", travel: lang === "en" ? "Travel" : "ခရီးသွား", other: lang === "en" ? "Other" : "အခြား" };
+                              const rType = req.reason_type || req.reasonType || "other";
+                              const fromD = req.from_date || req.from;
+                              const toD = req.to_date || req.to;
                               return (
                                 <div key={i} style={{ display: "flex", alignItems: "center", gap: "14px", padding: "13px 0", borderBottom: i < leaveHistory.length - 1 ? "1px solid var(--border)" : "none" }}>
-                                  <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "#EEF0FF", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "16px", flexShrink: 0 }}>{icons[req.reasonType] || "📝"}</div>
+                                  <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "var(--primary-tint)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "16px", flexShrink: 0 }}>{icons[rType] || "📝"}</div>
                                   <div style={{ flex: 1 }}>
-                                    <div style={{ fontSize: "12.5px", fontWeight: 600, color: "var(--text)" }}>{reasonLabels[req.reasonType]} — {classInfo?.name || ""}</div>
-                                    <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "1px" }}>{req.from === req.to ? new Date(req.from + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : `${new Date(req.from + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(req.to + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</div>
+                                    <div style={{ fontSize: "12.5px", fontWeight: 600, color: "var(--text)" }}>{reasonLabels[rType]} — {classInfo?.name || ""}</div>
+                                    <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "1px" }}>{fromD === toD ? new Date(fromD + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" }) : `${new Date(fromD + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(toD + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</div>
+                                    {req.attachment && (
+                                      <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "1px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>📎 {req.attachment.name}</div>
+                                    )}
                                   </div>
                                   <div style={{ textAlign: "right", flexShrink: 0 }}>
-                                    <span style={{ fontSize: "10px", fontWeight: 700, padding: "4px 10px", borderRadius: "999px", background: "#fff3e0", color: "#b45309" }}>{lang === "en" ? "Pending" : "စောင့်ဆိုင်း"}</span>
-                                    <div style={{ fontSize: "10px", color: "var(--text-faint)", marginTop: "3px" }}>{lang === "en" ? "Sent today" : "ယနေ့ပေးပို့"}</div>
+                                    {(() => {
+                                      const s = req.status || "pending";
+                                      const cfg = s === "approved"
+                                        ? { bg: "rgba(34,197,94,0.12)", color: "#22c55e", label: lang === "en" ? "Approved" : "အတည်ပြု" }
+                                        : s === "rejected"
+                                        ? { bg: "rgba(239,68,68,0.1)", color: "#ef4444", label: lang === "en" ? "Rejected" : "ငြင်းပယ်" }
+                                        : { bg: "#fff3e0", color: "#b45309", label: lang === "en" ? "Pending" : "စောင့်ဆိုင်း" };
+                                      return <span style={{ fontSize: "10px", fontWeight: 700, padding: "4px 10px", borderRadius: "999px", background: cfg.bg, color: cfg.color }}>{cfg.label}</span>;
+                                    })()}
+                                    <div style={{ fontSize: "10px", color: "var(--text-faint)", marginTop: "3px" }}>{req.created_at ? new Date(req.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : (lang === "en" ? "Sent today" : "ယနေ့ပေးပို့")}</div>
                                   </div>
                                 </div>
                               );
@@ -2693,7 +2987,7 @@ export default function ClassDetail() {
                                 <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "3px" }}>{lang === "en" ? "Let your teacher know in advance" : "ဆရာ/ဆရာမကို ကြိုတင် အကြောင်းကြားပါ"}</div>
                               </div>
                               <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: "12px" }}>
-                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+                                <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: "10px" }}>
                                   <div>
                                     <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "From" : "မှ"}</label>
                                     <input type="date" value={leaveForm.from} onChange={e => setLeaveForm(p => ({ ...p, from: e.target.value, to: e.target.value > p.to ? e.target.value : p.to }))}
@@ -2707,7 +3001,7 @@ export default function ClassDetail() {
                                 </div>
                                 <div>
                                   <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "Reason" : "အကြောင်းရင်း"}</label>
-                                  <select value={leaveForm.reasonType} onChange={e => setLeaveForm(p => ({ ...p, reasonType: e.target.value }))}
+                                  <select value={leaveForm.reasonType} onChange={e => setLeaveForm(p => ({ ...p, reasonType: e.target.value, attachment: e.target.value === "medical" ? p.attachment : null }))}
                                     style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)" }}>
                                     <option value="medical">{lang === "en" ? "Medical" : "ကျန်းမာရေး"}</option>
                                     <option value="family">{lang === "en" ? "Family event" : "မိသားစုကိစ္စ"}</option>
@@ -2721,10 +3015,29 @@ export default function ClassDetail() {
                                     placeholder={lang === "en" ? "e.g. Doctor appointment at 9am" : "ဥပမာ — နံနက် ၉ နာရီ ဆေးပြမည်"}
                                     style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)", height: "60px", resize: "none", boxSizing: "border-box" }} />
                                 </div>
+                                {leaveForm.reasonType === "medical" && (
+                                  <div>
+                                    <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "Hospital note / medical certificate (optional)" : "ဆေးရုံစာ / ဆေးလက်မှတ် (ရွေးချယ်နိုင်)"}</label>
+                                    {leaveForm.attachment ? (
+                                      <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px" }}>
+                                        <Icon name="attach" size={16} alt="" />
+                                        <span style={{ fontSize: "12px", color: "var(--text)", fontWeight: 500, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{leaveForm.attachment.name}</span>
+                                        <button type="button" onClick={() => setLeaveForm(p => ({ ...p, attachment: null }))}
+                                          style={{ background: "none", border: "none", color: "var(--text-faint)", fontSize: "14px", fontWeight: 700, cursor: "pointer", padding: "0 2px", lineHeight: 1 }}>×</button>
+                                      </div>
+                                    ) : (
+                                      <label style={{ display: "flex", alignItems: "center", gap: "8px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", cursor: "pointer" }}>
+                                        <Icon name="attach" size={16} alt="" />
+                                        <span style={{ fontSize: "12px", color: "#1a73e8", fontWeight: 500 }}>{lang === "en" ? "Attach file" : "ဖိုင်တွဲရန်"}</span>
+                                        <input type="file" accept="image/*,.pdf" onChange={e => setLeaveForm(p => ({ ...p, attachment: e.target.files[0] || null }))} style={{ display: "none" }} />
+                                      </label>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                               <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", padding: "14px 20px", borderTop: "1px solid var(--border)" }}>
                                 <button onClick={() => setLeaveModal(null)} style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Cancel" : "မလုပ်တော့"}</button>
-                                <button onClick={() => { setLeaveHistory(h => [...h, { ...leaveForm }]); setLeaveModal("confirm"); }}
+                                <button onClick={submitLeaveRequest}
                                   style={{ background: "#0F172A", color: "#fff", border: "none", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Submit request" : "တောင်းဆိုမည်"}</button>
                               </div>
                             </div>
@@ -2735,7 +3048,7 @@ export default function ClassDetail() {
                         {leaveModal === "confirm" && (
                           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
                             <div style={{ background: "var(--surface)", borderRadius: "16px", width: "360px", overflow: "hidden", boxShadow: "0 24px 60px rgba(15,23,42,0.2)", padding: "34px 24px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: "12px" }}>
-                              <div style={{ width: "52px", height: "52px", borderRadius: "50%", background: "#dcfce7", color: "#16a34a", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "22px" }}>✓</div>
+                              <div style={{ width: "52px", height: "52px", borderRadius: "50%", background: "rgba(34,197,94,0.15)", color: "#22c55e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "22px" }}>✓</div>
                               <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)" }}>{lang === "en" ? "Request sent" : "တောင်းဆိုချက် ပေးပို့ပြီး"}</div>
                               <div style={{ fontSize: "12px", color: "var(--text-faint)", maxWidth: "270px" }}>{lang === "en" ? "Your teacher will review this request. You'll be notified once it's approved or declined." : "ဆရာ/ဆရာမ စစ်ဆေးပြီး အတည်ပြုချက် သို့မဟုတ် ငြင်းပယ်ချက် ပြန်ကြားပါမည်။"}</div>
                               <button onClick={() => setLeaveModal(null)} style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 20px", fontSize: "12px", fontWeight: 600, cursor: "pointer", marginTop: "4px" }}>{lang === "en" ? "Done" : "ပြီးပြီ"}</button>
@@ -2748,6 +3061,115 @@ export default function ClassDetail() {
                   })()}
                 </div>
               )}
+
+              {/* Leave Request Detail Modal (teacher) */}
+              {leaveDetailModal && (() => {
+                const req = leaveDetailModal;
+                const icons = { medical: "🩺", family: "👪", travel: "✈️", other: "📝" };
+                const reasonLabels = { medical: lang === "en" ? "Medical" : "ကျန်းမာရေး", family: lang === "en" ? "Family event" : "မိသားစု", travel: lang === "en" ? "Travel" : "ခရီးသွား", other: lang === "en" ? "Other" : "အခြား" };
+                const fromD = req.from_date?.slice(0,10);
+                const toD = req.to_date?.slice(0,10);
+                const dateStr = fromD === toD
+                  ? new Date(fromD + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })
+                  : `${new Date(fromD + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })} – ${new Date(toD + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+                const submittedOn = req.created_at ? new Date(req.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+                return (
+                  <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1200 }}
+                    onClick={() => setLeaveDetailModal(null)}>
+                    <div onClick={e => e.stopPropagation()} style={{ background: "var(--surface)", borderRadius: "20px", width: "440px", overflow: "hidden", boxShadow: "0 24px 60px rgba(0,0,0,0.25)" }}>
+                      {/* Header */}
+                      <div style={{ padding: "20px 24px 16px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                          <div style={{ width: "42px", height: "42px", borderRadius: "50%", background: "var(--primary-tint)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px" }}>{icons[req.reason_type] || "📝"}</div>
+                          <div>
+                            <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)" }}>{req.student_name || "Student"}</div>
+                            <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "1px" }}>{req.student_email || ""}</div>
+                          </div>
+                        </div>
+                        <button onClick={() => setLeaveDetailModal(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)", lineHeight: 1 }}>×</button>
+                      </div>
+
+                      {/* Body */}
+                      <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "14px" }}>
+                        {/* Reason */}
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{lang === "en" ? "Reason" : "အကြောင်းရင်း"}</span>
+                          <span style={{ fontSize: "12px", color: "var(--text)", fontWeight: 600 }}>{reasonLabels[req.reason_type] || req.reason_type}</span>
+                        </div>
+                        {/* Date */}
+                        <div style={{ display: "flex", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{lang === "en" ? "Date" : "နေ့ရက်"}</span>
+                          <span style={{ fontSize: "12px", color: "var(--text)" }}>{dateStr}</span>
+                        </div>
+                        {/* Submitted */}
+                        {submittedOn && (
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{lang === "en" ? "Submitted" : "တင်သွင်းချိန်"}</span>
+                            <span style={{ fontSize: "12px", color: "var(--text-faint)" }}>{submittedOn}</span>
+                          </div>
+                        )}
+                        {/* Details */}
+                        {req.details && (
+                          <div>
+                            <div style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600, marginBottom: "6px" }}>{lang === "en" ? "Details" : "အသေးစိတ်"}</div>
+                            <div style={{ background: "var(--surface-alt)", borderRadius: "10px", padding: "12px 14px", fontSize: "13px", color: "var(--text)", lineHeight: 1.6 }}>{req.details}</div>
+                          </div>
+                        )}
+                        {/* Attachment */}
+                        {req.attachment_path && (() => {
+                          const url = `http://localhost:5001/uploads/${req.attachment_path}`;
+                          const isImage = /\.(png|jpe?g|gif|webp)$/i.test(req.attachment_path);
+                          return (
+                            <div>
+                              <div style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600, marginBottom: "8px" }}>{lang === "en" ? "Attachment" : "ပူးတွဲဖိုင်"}</div>
+                              {isImage ? (
+                                <a href={url} target="_blank" rel="noreferrer">
+                                  <img src={url} alt="attachment" style={{ width: "100%", maxHeight: "240px", objectFit: "contain", borderRadius: "10px", border: "1px solid var(--border)", background: "var(--surface-alt)", cursor: "pointer" }} />
+                                </a>
+                              ) : (
+                                <a href={url} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center", gap: "10px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "10px", padding: "12px 14px", textDecoration: "none" }}>
+                                  <span style={{ fontSize: "20px" }}>📄</span>
+                                  <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--primary)" }}>{lang === "en" ? "View attached file" : "ဖိုင်ကြည့်ရန်"}</span>
+                                </a>
+                              )}
+                            </div>
+                          );
+                        })()}
+                        {/* Status badge */}
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                          <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{lang === "en" ? "Status" : "အခြေအနေ"}</span>
+                          <span style={{ fontSize: "11px", fontWeight: 700, padding: "4px 12px", borderRadius: "999px",
+                            background: req.status === "approved" ? "rgba(34,197,94,0.12)" : req.status === "rejected" ? "rgba(239,68,68,0.1)" : "rgba(245,158,11,0.12)",
+                            color: req.status === "approved" ? "#16a34a" : req.status === "rejected" ? "#dc2626" : "#b45309" }}>
+                            {req.status === "approved" ? (lang === "en" ? "Approved" : "အတည်ပြုပြီး") : req.status === "rejected" ? (lang === "en" ? "Rejected" : "ငြင်းပယ်ပြီး") : (lang === "en" ? "Pending" : "ဆိုင်းငံ့")}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Footer actions */}
+                      {req.status === "pending" && (
+                        <div style={{ padding: "14px 24px", borderTop: "1px solid var(--border)", display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+                          <button onClick={() => { reviewLeave(req.id, "rejected"); setLeaveDetailModal(r => ({ ...r, status: "rejected" })); }}
+                            style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "10px", padding: "10px 20px", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
+                            {lang === "en" ? "Reject" : "ငြင်းပယ်မည်"}
+                          </button>
+                          <button onClick={() => { reviewLeave(req.id, "approved"); setLeaveDetailModal(r => ({ ...r, status: "approved" })); }}
+                            style={{ background: "#16a34a", color: "#fff", border: "none", borderRadius: "10px", padding: "10px 20px", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
+                            {lang === "en" ? "Approve" : "အတည်ပြုမည်"}
+                          </button>
+                        </div>
+                      )}
+                      {req.status !== "pending" && (
+                        <div style={{ padding: "14px 24px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end" }}>
+                          <button onClick={() => setLeaveDetailModal(null)} style={{ background: "var(--surface-alt)", color: "var(--text-muted)", border: "none", borderRadius: "10px", padding: "10px 20px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>
+                            {lang === "en" ? "Close" : "ပိတ်မည်"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* New Session Modal */}
               {newSessionModal && (
@@ -2766,7 +3188,7 @@ export default function ClassDetail() {
                     </div>
                     <div style={{ display: "flex", gap: "10px", marginTop: "20px", justifyContent: "flex-end" }}>
                       <button onClick={() => setNewSessionModal(false)} style={{ background: "var(--surface-alt)", color: "var(--text-muted)", border: "none", borderRadius: "8px", padding: "9px 18px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Cancel" : "မလုပ်တော့ပါ"}</button>
-                      <button onClick={createAttendanceSession} style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 18px", fontWeight: 700, cursor: "pointer" }}>{lang === "en" ? "Create" : "ဖန်တီးမည်"}</button>
+                      <button onClick={createAttendanceSession} style={{ background: "var(--primary)", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 18px", fontWeight: 700, cursor: "pointer" }}>{lang === "en" ? "Create" : "ဖန်တီးမည်"}</button>
                     </div>
                   </div>
                 </div>
@@ -2818,7 +3240,7 @@ export default function ClassDetail() {
                           {lang === "en" ? "Cancel" : "မလုပ်တော့"}
                         </button>
                         <button onClick={saveAttendance} disabled={savingAttendance}
-                          style={{ padding: "8px 22px", borderRadius: "8px", border: "none", background: "#3B37CC", color: "#fff", fontSize: "13px", fontWeight: 700, cursor: savingAttendance ? "default" : "pointer" }}>
+                          style={{ padding: "8px 22px", borderRadius: "8px", border: "none", background: "var(--primary)", color: "#fff", fontSize: "13px", fontWeight: 700, cursor: savingAttendance ? "default" : "pointer" }}>
                           {savingAttendance ? (lang === "en" ? "Saving…" : "သိမ်းနေသည်…") : lang === "en" ? "Save" : "သိမ်းမည်"}
                         </button>
                       </>
@@ -2850,7 +3272,7 @@ export default function ClassDetail() {
                         style={{ border: "none", background: "transparent", outline: "none", fontSize: "13px", color: "var(--text)", width: "100%" }} />
                     </div>
                     <button onClick={() => { const all = {}; activeSession.records.forEach(r => { all[r.student_id] = "present"; }); setSessionRecords(all); }}
-                      style={{ fontSize: "12px", fontWeight: 600, color: "#5B5FE9", background: "#EEF0FF", border: "none", borderRadius: "10px", padding: "10px 16px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                      style={{ fontSize: "12px", fontWeight: 600, color: "#5B5FE9", background: "var(--primary-tint)", border: "none", borderRadius: "10px", padding: "10px 16px", cursor: "pointer", whiteSpace: "nowrap" }}>
                       {lang === "en" ? "✓ Mark all present" : "✓ အားလုံး တက်ရောက်"}
                     </button>
                   </div>
@@ -2883,7 +3305,7 @@ export default function ClassDetail() {
                             <div>
                               <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
                                 <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{r.name}</span>
-                                {isChanged && <span style={{ fontSize: "9.5px", fontWeight: 700, color: "#5B5FE9", background: "#EEF0FF", padding: "2px 7px", borderRadius: "999px" }}>{lang === "en" ? "Changed" : "ပြောင်းလဲ"}</span>}
+                                {isChanged && <span style={{ fontSize: "9.5px", fontWeight: 700, color: "#5B5FE9", background: "var(--primary-tint)", padding: "2px 7px", borderRadius: "999px" }}>{lang === "en" ? "Changed" : "ပြောင်းလဲ"}</span>}
                               </div>
                               <div style={{ fontSize: "11.5px", color: "var(--text-faint)" }}>{r.email}</div>
                             </div>
@@ -2934,172 +3356,288 @@ export default function ClassDetail() {
           })()}
 
           {/* ── PEOPLE TAB ── */}
-          {activeTab === "people" && (
-            <div style={{ display: "grid", gridTemplateColumns: selectedStudent ? "320px 1fr" : "1fr", gap: "20px", alignItems: "start" }}>
-              {/* LEFT — member list */}
-              <div>
-                {/* Teacher section */}
-                <div style={{ marginBottom: "20px" }}>
-                  <h3 style={sectionHead}>Teachers</h3>
-                  {teacher ? (
-                    <div style={memberRow}>
-                      <div style={{ ...memberAvatar, background: "#3B37CC" }}>{teacher.name[0].toUpperCase()}</div>
+          {activeTab === "people" && (() => {
+            const gradeColor = pct => pct === null ? "var(--text-faint)" : pct >= 75 ? "#16A34A" : pct >= 50 ? "#D97706" : "#DC2626";
+            const filtered = richMembers || [];
+            const compact = !!selectedStudent;
+            const rowCols = compact ? "1fr" : "1fr 60px 60px 40px";
+            return (
+              <div style={{ display: "grid", gridTemplateColumns: compact ? "280px 1fr" : "1fr", gap: "20px", alignItems: "start" }}>
+                {/* LEFT — student list: full table normally, a narrow name-only rail once a student is open */}
+                <div>
+                  {!compact && teacher && (
+                    <div style={{ ...memberRow, marginBottom: "16px" }}>
+                      <div style={{ ...memberAvatar, background: "var(--primary)" }}>{teacher.name[0].toUpperCase()}</div>
                       <div>
                         <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{teacher.name}</div>
                         <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{teacher.email}</div>
                       </div>
                     </div>
-                  ) : <p style={{ color: "var(--text-faint)", fontSize: "14px" }}>No teacher.</p>}
-                </div>
-
-                {/* Students section */}
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
-                  <h3 style={{ ...sectionHead, margin: 0 }}>Students ({students.length})</h3>
-                  {isTeacher && (
-                    <button onClick={() => setInviteModal(true)}
-                      style={{ ...btnPrimary, fontSize: "12px", padding: "6px 14px" }}>
-                      + Invite
-                    </button>
                   )}
-                </div>
 
-                {students.length === 0 ? (
-                  <p style={{ color: "var(--text-faint)", fontSize: "14px" }}>No students enrolled yet.</p>
-                ) : students.map(s => (
-                  <div key={s.id}
-                    onClick={() => openStudentStats(s)}
-                    style={{
-                      ...memberRow, justifyContent: "space-between", cursor: "pointer",
-                      background: selectedStudent?.id === s.id ? "var(--primary-tint)" : "#fff",
-                      border: selectedStudent?.id === s.id ? "1.5px solid #3B37CC" : "1px solid var(--border)",
-                      transition: "all 0.15s",
-                    }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                      <div style={{ ...memberAvatar, background: selectedStudent?.id === s.id ? "#3B37CC" : "var(--border)", color: selectedStudent?.id === s.id ? "#fff" : "var(--text-muted)" }}>
-                        {s.name[0].toUpperCase()}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{s.name}</div>
-                        <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{s.email}</div>
-                      </div>
+                  {!compact && (
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "12px" }}>
+                      <button onClick={() => setInviteModal(true)} style={{ ...btnPrimary, fontSize: "12px", padding: "6px 14px", width: "auto" }}>+ Invite</button>
                     </div>
-                    {isTeacher && (
-                      <button onClick={e => { e.stopPropagation(); handleRemoveMember(s.id, s.name); }}
-                        style={{ fontSize: "11px", color: "#ef4444", background: "#fff5f5", border: "1px solid #fca5a5", borderRadius: "8px", padding: "3px 8px", cursor: "pointer", fontWeight: 600, flexShrink: 0 }}>
-                        Remove
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
+                  )}
 
-              {/* RIGHT — student detail panel */}
-              {selectedStudent && (
-                <div style={{ background: "var(--surface)", borderRadius: "14px", border: "1px solid var(--border)", padding: "20px", position: "sticky", top: "20px" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                      <div style={{ width: "44px", height: "44px", borderRadius: "50%", background: "#3B37CC", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px", fontWeight: 700 }}>
-                        {selectedStudent.name[0].toUpperCase()}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)" }}>{selectedStudent.name}</div>
-                        <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{selectedStudent.email}</div>
-                      </div>
-                    </div>
-                    <button onClick={() => setSelectedStudent(null)} style={{ background: "none", border: "none", fontSize: "18px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
+                  {/* Column header */}
+                  <div style={{ display: "grid", gridTemplateColumns: rowCols, gap: "8px", padding: "6px 14px", fontSize: "10px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.05em", borderBottom: "1px solid var(--border)" }}>
+                    <span>Name</span>
+                    {!compact && <span style={{ textAlign: "center" }}>Grade</span>}
+                    {!compact && <span style={{ textAlign: "center" }}>Att.</span>}
+                    {!compact && <span style={{ textAlign: "center" }}>Note</span>}
                   </div>
 
-                  {studentStatsLoading ? (
-                    <div style={{ textAlign: "center", padding: "32px", color: "var(--text-faint)" }}>Loading...</div>
-                  ) : studentStats ? (
-                    <>
-                      {/* Stats row - Assignment */}
-                      <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>Assignments</div>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "16px" }}>
-                        {[
-                          { label: lang === "en" ? "Submission" : "တင်သွင်းမှု", value: `${studentStats.stats.submissionRate}%`, color: studentStats.stats.submissionRate >= 80 ? "#22c55e" : studentStats.stats.submissionRate >= 50 ? "#f59e0b" : "#ef4444" },
-                          { label: lang === "en" ? "Submitted" : "တင်ပြီး", value: `${studentStats.stats.submittedCount}/${studentStats.stats.totalAssignments}`, color: "#3B37CC" },
-                          { label: lang === "en" ? "Avg Grade" : "ပျမ်းမျှ", value: studentStats.stats.avgGrade !== null ? `${studentStats.stats.avgGrade}%` : "—", color: "var(--text-muted)" },
-                        ].map(stat => (
-                          <div key={stat.label} style={{ background: "var(--surface-alt)", borderRadius: "10px", padding: "10px", textAlign: "center" }}>
-                            <div style={{ fontSize: "18px", fontWeight: 800, color: stat.color }}>{stat.value}</div>
-                            <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "2px" }}>{stat.label}</div>
-                          </div>
-                        ))}
+                  {richLoading ? (
+                    <div style={{ textAlign: "center", padding: "40px", color: "var(--text-faint)" }}>Loading...</div>
+                  ) : filtered.length === 0 ? (
+                    <div style={{ textAlign: "center", padding: "40px", color: "var(--text-faint)" }}>No students.</div>
+                  ) : filtered.map(row => (
+                    <div key={row.id} onClick={() => { openStudentStats(row); setSelectedStudent(row); }}
+                      style={{
+                        display: "grid", gridTemplateColumns: rowCols, gap: "8px",
+                        padding: "10px 14px", borderBottom: "1px solid var(--border)", cursor: "pointer",
+                        background: selectedStudent?.id === row.id ? "var(--primary-tint)" : "transparent",
+                        alignItems: "center",
+                      }}
+                      onMouseEnter={e => { if (selectedStudent?.id !== row.id) e.currentTarget.style.background = "var(--surface-alt)"; }}
+                      onMouseLeave={e => { e.currentTarget.style.background = selectedStudent?.id === row.id ? "var(--primary-tint)" : "transparent"; }}
+                    >
+                      {/* Name */}
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                        <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "var(--primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: 700, flexShrink: 0 }}>
+                          {row.name[0].toUpperCase()}
+                        </div>
+                        <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{row.name}</div>
                       </div>
 
-                      {/* Stats row - Attendance */}
-                      {studentStats.stats.totalSessions > 0 && (
-                        <>
-                          <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
-                            {lang === "en" ? "Attendance" : "တက်ရောက်မှု"}
-                          </div>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "8px", marginBottom: "16px" }}>
-                            {[
-                              { label: lang === "en" ? "Rate" : "နှုန်း", value: `${studentStats.stats.attendanceRate}%`, color: studentStats.stats.attendanceRate >= 80 ? "#22c55e" : studentStats.stats.attendanceRate >= 60 ? "#f59e0b" : "#ef4444" },
-                              { label: lang === "en" ? "Present" : "တက်", value: studentStats.stats.presentCount, color: "#22c55e" },
-                              { label: lang === "en" ? "Late" : "နောက်ကျ", value: studentStats.stats.lateCount, color: "#f59e0b" },
-                              { label: lang === "en" ? "Absent" : "မတက်", value: studentStats.stats.absentCount, color: "#ef4444" },
-                            ].map(stat => (
-                              <div key={stat.label} style={{ background: "var(--surface-alt)", borderRadius: "10px", padding: "8px", textAlign: "center" }}>
-                                <div style={{ fontSize: "16px", fontWeight: 800, color: stat.color }}>{stat.value}</div>
-                                <div style={{ fontSize: "10px", color: "var(--text-faint)", marginTop: "2px" }}>{stat.label}</div>
-                              </div>
-                            ))}
-                          </div>
-                          {/* Attendance history mini list */}
-                          <div style={{ maxHeight: "120px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "4px", marginBottom: "16px" }}>
-                            {studentStats.attendance.map((r, i) => (
-                              <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", background: "var(--surface-alt)", borderRadius: "6px" }}>
-                                <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-                                  <span style={{ fontWeight: 600 }}>{r.title}</span>
-                                  <span style={{ color: "var(--text-faint)", marginLeft: "8px" }}>{new Date(r.session_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-                                </div>
-                                <span style={{ fontSize: "10px", fontWeight: 700, padding: "2px 7px", borderRadius: "10px",
-                                  background: r.status === "present" ? "#f0fdf4" : r.status === "late" ? "#fefce8" : "#fef2f2",
-                                  color: r.status === "present" ? "#16a34a" : r.status === "late" ? "#d97706" : "#dc2626"
-                                }}>
-                                  {r.status === "present" ? (lang === "en" ? "Present" : "တက်") : r.status === "late" ? (lang === "en" ? "Late" : "နောက်ကျ") : (lang === "en" ? "Absent" : "မတက်")}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </>
+                      {!compact && (
+                        <div style={{ textAlign: "center", fontSize: "12px", fontWeight: 700, color: gradeColor(row.gradePct) }}>
+                          {row.gradePct !== null ? `${row.gradePct}%` : "—"}
+                        </div>
                       )}
 
-                      {/* Assignment list */}
-                      <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "8px" }}>
-                        {lang === "en" ? "Assignment Detail" : "အိမ်စာ အသေးစိတ်"}
+                      {!compact && (
+                        <div style={{ textAlign: "center", fontSize: "12px", fontWeight: 700, color: gradeColor(row.attPct) }}>
+                          {row.attPct !== null ? `${row.attPct}%` : "—"}
+                        </div>
+                      )}
+
+                      {!compact && (
+                        <div style={{ textAlign: "center" }}>
+                          <button onClick={e => { e.stopPropagation(); setNotePanel(row); setNoteCategory("concern"); setNoteMessage(""); }}
+                            style={{ width: "24px", height: "24px", borderRadius: "7px", background: "var(--primary-tint)", color: "var(--primary)", border: "none", cursor: "pointer", fontSize: "12px", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto" }}>
+                            ✎
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {/* RIGHT — member detail panel */}
+                {selectedStudent && (() => {
+                  const rich = (richMembers || []).find(r => r.id === selectedStudent.id);
+                  return (
+                    <div style={{ background: "var(--surface)", borderRadius: "16px", border: "1px solid var(--border)", overflow: "hidden", position: "sticky", top: "20px" }}>
+                      {/* Gradient header */}
+                      <div style={{ background: "linear-gradient(150deg,var(--primary),var(--primary-light))", padding: "18px 20px", display: "flex", alignItems: "center", gap: "14px" }}>
+                        <div style={{ width: "50px", height: "50px", borderRadius: "50%", background: "rgba(255,255,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px", fontWeight: 800, color: "#fff", flexShrink: 0 }}>
+                          {selectedStudent.name[0].toUpperCase()}
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: "15px", fontWeight: 700, color: "#fff" }}>{selectedStudent.name}</div>
+                          <div style={{ fontSize: "11px", color: "rgba(255,255,255,0.8)", marginTop: "2px" }}>Student</div>
+                        </div>
+                        <button onClick={() => setSelectedStudent(null)} style={{ background: "rgba(255,255,255,0.2)", border: "none", borderRadius: "8px", color: "#fff", fontSize: "14px", cursor: "pointer", padding: "4px 8px" }}>✕</button>
                       </div>
-                      <div style={{ maxHeight: "340px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px" }}>
-                        {studentStats.assignments.map(a => (
-                          <div key={a.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", background: "var(--surface-alt)", borderRadius: "8px", border: "1px solid var(--border)" }}>
-                            <div>
-                              <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>{a.title}</div>
-                              {a.submission?.grade !== null && a.submission?.grade !== undefined && (
-                                <div style={{ fontSize: "11px", color: "#3B37CC", marginTop: "2px" }}>
-                                  {a.submission.grade}/{a.points} pts ({Math.round((a.submission.grade/a.points)*100)}%)
-                                </div>
-                              )}
+
+                      <div style={{ padding: "16px 18px" }}>
+                        {/* Quick stats */}
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "14px" }}>
+                          {[
+                            { label: "Grade avg", value: rich?.gradePct !== null && rich?.gradePct !== undefined ? `${rich.gradePct}%` : "—", color: gradeColor(rich?.gradePct) },
+                            { label: "Attendance", value: rich?.attPct !== null && rich?.attPct !== undefined ? `${rich.attPct}%` : "—", color: gradeColor(rich?.attPct) },
+                            { label: "Pending", value: studentStats?.stats?.totalAssignments != null ? (studentStats.stats.totalAssignments - studentStats.stats.submittedCount) : "—", color: "var(--text-muted)" },
+                          ].map(stat => (
+                            <div key={stat.label} style={{ background: "#F8FAFC", border: "1px solid var(--border)", borderRadius: "10px", padding: "10px", textAlign: "center" }}>
+                              <div style={{ fontSize: "16px", fontWeight: 800, color: stat.color }}>{stat.value}</div>
+                              <div style={{ fontSize: "10px", color: "var(--text-faint)", marginTop: "2px" }}>{stat.label}</div>
                             </div>
-                            <span style={{
-                              fontSize: "10px", fontWeight: 700, padding: "3px 8px", borderRadius: "20px", flexShrink: 0,
-                              background: a.status === "missing" ? "#fef2f2" : a.status === "graded" ? "var(--primary-tint)" : "#f0fdf4",
-                              color: a.status === "missing" ? "#ef4444" : a.status === "graded" ? "#3B37CC" : "#22c55e",
-                            }}>
-                              {a.status === "missing" ? "Missing" : a.status === "graded" ? "Graded" : "Submitted"}
-                            </span>
+                          ))}
+                        </div>
+
+                        {/* Recent grades */}
+                        {studentStatsLoading ? (
+                          <div style={{ textAlign: "center", padding: "20px", color: "var(--text-faint)", fontSize: "12px" }}>Loading...</div>
+                        ) : studentStats?.assignments?.slice(0, 5).map(a => (
+                          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #F1F2F5", fontSize: "12px" }}>
+                            <span style={{ color: "var(--text-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginRight: "8px" }}>{a.title}</span>
+                            {a.submission?.grade != null
+                              ? <span style={{ fontWeight: 700, color: gradeColor(Math.round((a.submission.grade / a.points) * 100)) }}>{a.submission.grade}/{a.points}</span>
+                              : <span style={{ fontSize: "10px", fontWeight: 600, color: a.status === "missing" ? "#DC2626" : "var(--primary)", background: a.status === "missing" ? "#FEF2F2" : "var(--primary-tint)", padding: "2px 8px", borderRadius: "20px" }}>{a.status === "missing" ? "Missing" : "Submitted"}</span>
+                            }
                           </div>
                         ))}
+
+                        {/* Note button */}
+                        <button onClick={() => { setNotePanel(selectedStudent); setNoteCategory("reminder"); setNoteMessage(""); }}
+                          style={{ ...btnOutline, marginTop: "14px", fontSize: "12px", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                          ✎ Send a note
+                        </button>
                       </div>
-                    </>
-                  ) : null}
-                </div>
-              )}
-            </div>
-          )}
+                    </div>
+                  );
+                })()}
+              </div>
+            );
+          })()}
         </div>
       </div>
+
+      {/* Material context / three-dot menu */}
+      {matMenu && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 999 }} onClick={() => setMatMenu(null)} />
+          <div style={{
+            position: "fixed", top: matMenu.y, left: matMenu.x, zIndex: 1000,
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
+            borderRadius: "12px",
+            boxShadow: "0 8px 28px rgba(0,0,0,0.10), 0 2px 6px rgba(0,0,0,0.06)",
+            minWidth: "176px",
+            padding: "5px",
+          }}>
+            <button
+              onClick={() => { openEditMatById(matMenu.id); setMatMenu(null); }}
+              style={{ width: "100%", padding: "9px 12px", border: "none", background: "none", borderRadius: "8px", textAlign: "left", fontSize: "13px", fontWeight: 600, color: "var(--text)", cursor: "pointer", display: "flex", alignItems: "center", gap: "10px" }}
+              onMouseEnter={e => e.currentTarget.style.background = "var(--surface-alt)"}
+              onMouseLeave={e => e.currentTarget.style.background = "none"}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+              Edit lesson
+            </button>
+            <div style={{ height: "1px", background: "var(--border)", margin: "3px 0" }} />
+            <button
+              onClick={() => { setMatDeleteConfirm(matMenu.id); setMatMenu(null); }}
+              style={{ width: "100%", padding: "9px 12px", border: "none", background: "none", borderRadius: "8px", textAlign: "left", fontSize: "13px", fontWeight: 600, color: "#DC2626", cursor: "pointer", display: "flex", alignItems: "center", gap: "10px" }}
+              onMouseEnter={e => e.currentTarget.style.background = "#FEF2F2"}
+              onMouseLeave={e => e.currentTarget.style.background = "none"}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                <path d="M10 11v6M14 11v6"/>
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+              </svg>
+              Delete lesson
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Delete lesson confirm dialog */}
+      {matDeleteConfirm && (
+        <div style={overlayStyle} onClick={() => setMatDeleteConfirm(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "380px", padding: "28px 24px 24px", textAlign: "center" }}>
+            <div style={{ width: "52px", height: "52px", borderRadius: "50%", background: "#FEF2F2", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#DC2626" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                <path d="M10 11v6M14 11v6"/>
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+              </svg>
+            </div>
+            <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)", marginBottom: "8px" }}>Delete lesson?</div>
+            <div style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: "1.6", marginBottom: "24px" }}>
+              <span style={{ fontWeight: 600, color: "var(--text)" }}>"{materials.find(m => m.id === matDeleteConfirm)?.title}"</span>{" "}
+              will be permanently removed along with all its files and comments.
+            </div>
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button onClick={() => setMatDeleteConfirm(null)} style={{ ...btnOutline, flex: 1 }}>Cancel</button>
+              <button onClick={() => deleteMaterial(matDeleteConfirm)} style={{ flex: 1, background: "#DC2626", color: "#fff", border: "none", borderRadius: "8px", padding: "10px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Attendance session right-click context menu */}
+      {sessCtxMenu && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 999 }} onClick={() => setSessCtxMenu(null)} />
+          <div style={{
+            position: "fixed", top: sessCtxMenu.y, left: sessCtxMenu.x, zIndex: 1000,
+            background: "var(--surface)",
+            border: "1px solid var(--border)",
+            borderRadius: "12px",
+            boxShadow: "0 8px 28px rgba(0,0,0,0.10), 0 2px 6px rgba(0,0,0,0.06)",
+            minWidth: "176px",
+            padding: "5px",
+          }}>
+            <button
+              onClick={() => { const s = attendanceSessions?.find(x => x.id === sessCtxMenu.id); if (s) { setRenamingSessionId(s.id); setRenamingTitle(s.title); } setSessCtxMenu(null); }}
+              style={{ width: "100%", padding: "9px 12px", border: "none", background: "none", borderRadius: "8px", textAlign: "left", fontSize: "13px", fontWeight: 600, color: "var(--text)", cursor: "pointer", display: "flex", alignItems: "center", gap: "10px" }}
+              onMouseEnter={e => e.currentTarget.style.background = "var(--surface-alt)"}
+              onMouseLeave={e => e.currentTarget.style.background = "none"}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+              </svg>
+              {lang === "en" ? "Rename" : "ခေါင်းစဉ်ပြင်"}
+            </button>
+            <div style={{ height: "1px", background: "var(--border)", margin: "3px 0" }} />
+            <button
+              onClick={async () => { const sid = sessCtxMenu.id; const date = attendanceSessions?.find(x => x.id === sid)?.session_date?.slice(0, 10); setSessCtxMenu(null); await deleteAttendanceSession(sid); if (calSelectedDate === date) setCalSelectedDate(null); }}
+              style={{ width: "100%", padding: "9px 12px", border: "none", background: "none", borderRadius: "8px", textAlign: "left", fontSize: "13px", fontWeight: 600, color: "#DC2626", cursor: "pointer", display: "flex", alignItems: "center", gap: "10px" }}
+              onMouseEnter={e => e.currentTarget.style.background = "#FEF2F2"}
+              onMouseLeave={e => e.currentTarget.style.background = "none"}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                <path d="M10 11v6M14 11v6"/>
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+              </svg>
+              {lang === "en" ? "Delete session" : "ဖျက်မည်"}
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Send Note Panel */}
+      {notePanel && (
+        <div style={overlayStyle} onClick={() => setNotePanel(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "360px" }}>
+            <div style={{ marginBottom: "16px" }}>
+              <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)", marginBottom: "4px" }}>Send a note to {notePanel.name}</div>
+              <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>Appears as a notice on their dashboard</div>
+            </div>
+            <label style={lbl}>Category</label>
+            <select value={noteCategory} onChange={e => setNoteCategory(e.target.value)}
+              style={{ ...inp, marginBottom: "12px" }}>
+              <option value="concern">⚠ Attendance/Grade concern</option>
+              <option value="reminder">📌 General reminder</option>
+              <option value="positive">✅ Positive feedback</option>
+            </select>
+            <label style={lbl}>Message</label>
+            <textarea value={noteMessage} onChange={e => setNoteMessage(e.target.value)}
+              placeholder="e.g. Let's talk after class tomorrow"
+              style={{ ...inp, height: "72px", resize: "none", marginBottom: "16px" }} />
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button onClick={() => setNotePanel(null)} style={{ ...btnOutline, flex: 1 }}>Cancel</button>
+              <button onClick={sendNote} disabled={noteSending || !noteMessage.trim()}
+                style={{ ...btnPrimary, flex: 1, opacity: noteSending || !noteMessage.trim() ? 0.5 : 1 }}>
+                {noteSending ? "Sending..." : "Send note"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Invite Student Modal */}
       {inviteModal && (
@@ -3140,7 +3678,7 @@ export default function ClassDetail() {
       {editAssignModal && selectedAssign && (
         <div style={{ ...overlayStyle, zIndex: 1100 }} onClick={() => setEditAssignModal(false)}>
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "540px" }}>
-            <h2 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text)", margin: "0 0 20px" }}>✏️ Edit Assignment</h2>
+            <h2 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text)", margin: "0 0 20px", display: "flex", alignItems: "center", gap: "8px" }}><Icon name="edit" size={18} alt="" /> Edit Assignment</h2>
             <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
               <div>
                 <label style={lbl}>Title *</label>
@@ -3177,7 +3715,7 @@ export default function ClassDetail() {
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                     {selectedAssign.files.map(f => (
                       <div key={f.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: editDeleteFileIds.includes(f.id) ? "var(--text-faint)" : "var(--text-muted)", background: editDeleteFileIds.includes(f.id) ? "#fef2f2" : "var(--surface-alt)", padding: "4px 10px", borderRadius: "6px", border: `1px solid ${editDeleteFileIds.includes(f.id) ? "#fca5a5" : "var(--border)"}`, textDecoration: editDeleteFileIds.includes(f.id) ? "line-through" : "none" }}>
-                        <span>📄 {f.file_name}</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}><Icon name="file" size={13} alt="" /> {f.file_name}</span>
                         <button onClick={() => setEditDeleteFileIds(prev => prev.includes(f.id) ? prev.filter(x => x !== f.id) : [...prev, f.id])}
                           style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 700, fontSize: "12px", color: editDeleteFileIds.includes(f.id) ? "#22c55e" : "#ef4444" }}>
                           {editDeleteFileIds.includes(f.id) ? "↩ Restore" : "× Remove"}
@@ -3190,20 +3728,20 @@ export default function ClassDetail() {
               {/* New file attachments */}
               <div>
                 <label style={lbl}>Add New Attachments</label>
-                <div style={{ border: "1.5px dashed var(--border)", borderRadius: "10px", padding: "10px", background: "#fafafa" }}>
+                <div style={{ border: "1.5px dashed var(--border)", borderRadius: "10px", padding: "10px", background: "var(--surface-alt)" }}>
                   <input ref={editAssignFileRef} type="file" multiple style={{ display: "none" }}
                     onChange={e => setEditAssignFiles(prev => [...prev, ...Array.from(e.target.files)])} />
                   <button type="button" onClick={() => editAssignFileRef.current?.click()}
-                    style={{ fontSize: "13px", color: "#3B37CC", background: "var(--primary-tint)", border: "1px solid #a5b4fc", borderRadius: "8px", padding: "6px 14px", cursor: "pointer", fontWeight: 600 }}>
-                    📎 Add files
+                    style={{ fontSize: "13px", color: "var(--primary)", background: "var(--primary-tint)", border: "1px solid var(--border)", borderRadius: "8px", padding: "6px 14px", cursor: "pointer", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                    <Icon name="attach" size={14} alt="" /> Add files
                   </button>
                   {editAssignFiles.length > 0 && (
                     <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "4px" }}>
                       {editAssignFiles.map((f, i) => (
                         <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: "var(--text-muted)", background: "var(--surface)", padding: "4px 10px", borderRadius: "6px", border: "1px solid var(--border)" }}>
-                          <span>📄 {f.name}</span>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}><Icon name="file" size={13} alt="" /> {f.name}</span>
                           <button onClick={() => setEditAssignFiles(prev => prev.filter((_, j) => j !== i))}
-                            style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontWeight: 700, fontSize: "14px" }}>×</button>
+                            style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", display: "flex" }}><Icon name="multiply" size={12} alt="Remove" /></button>
                         </div>
                       ))}
                     </div>
@@ -3216,13 +3754,13 @@ export default function ClassDetail() {
               <button onClick={() => { setEditAssignModal(false); setEditAssignFiles([]); setEditDeleteFileIds([]); }} style={{ ...btnOutline, flex: 1 }}>Cancel</button>
               <button onClick={() => handleUpdateAssignment(true)}
                 disabled={editAssignSaving || !editAssignForm.title.trim()}
-                style={{ ...btnOutline, flex: 1, color: "var(--text-muted)", opacity: (!editAssignForm.title.trim() || editAssignSaving) ? 0.6 : 1 }}>
-                📄 Save as Draft
+                style={{ ...btnOutline, flex: 1, color: "var(--text-muted)", opacity: (!editAssignForm.title.trim() || editAssignSaving) ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                <Icon name="file" size={14} alt="" /> Save as Draft
               </button>
               <button onClick={() => handleUpdateAssignment(false)}
                 disabled={editAssignSaving || !editAssignForm.title.trim()}
-                style={{ ...btnPrimary, flex: 1, opacity: (!editAssignForm.title.trim() || editAssignSaving) ? 0.6 : 1 }}>
-                {editAssignSaving ? "Saving..." : "💾 Save"}
+                style={{ ...btnPrimary, flex: 1, opacity: (!editAssignForm.title.trim() || editAssignSaving) ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                {editAssignSaving ? "Saving..." : <><Icon name="save" size={14} alt="" style={{ filter: "brightness(0) invert(1)" }} /> Save</>}
               </button>
             </div>
           </div>
@@ -3252,7 +3790,7 @@ export default function ClassDetail() {
         <div style={overlayStyle} onClick={() => setSubmissionStats(null)}>
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "520px", maxHeight: "80vh", overflowY: "auto" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-              <h3 style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)", margin: 0 }}>📊 Submission Status</h3>
+              <h3 style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)", margin: 0, display: "flex", alignItems: "center", gap: "8px" }}><Icon name="bar-chart" size={16} alt="" /> Submission Status</h3>
               <button onClick={() => setSubmissionStats(null)} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
             </div>
             {submissionStats.loading ? (
@@ -3261,9 +3799,9 @@ export default function ClassDetail() {
               <>
                 <div style={{ display: "flex", gap: "12px", marginBottom: "16px" }}>
                   {[
-                    { label: "Submitted", count: submissionStats.students?.filter(s => s.status !== "missing").length || 0, color: "#22c55e", bg: "#f0fdf4" },
-                    { label: "Missing", count: submissionStats.students?.filter(s => s.status === "missing").length || 0, color: "#ef4444", bg: "#fef2f2" },
-                    { label: "Graded", count: submissionStats.students?.filter(s => s.status === "graded").length || 0, color: "#3B37CC", bg: "var(--primary-tint)" },
+                    { label: "Submitted", count: submissionStats.students?.filter(s => s.status !== "missing").length || 0, color: "#22c55e", bg: "rgba(34,197,94,0.12)" },
+                    { label: "Missing", count: submissionStats.students?.filter(s => s.status === "missing").length || 0, color: "#ef4444", bg: "rgba(239,68,68,0.1)" },
+                    { label: "Graded", count: submissionStats.students?.filter(s => s.status === "graded").length || 0, color: "var(--primary)", bg: "var(--primary-tint)" },
                   ].map(stat => (
                     <div key={stat.label} style={{ flex: 1, background: stat.bg, borderRadius: "10px", padding: "12px", textAlign: "center" }}>
                       <div style={{ fontSize: "24px", fontWeight: 800, color: stat.color }}>{stat.count}</div>
@@ -3295,12 +3833,12 @@ export default function ClassDetail() {
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                           {s.submission?.grade !== null && s.submission?.grade !== undefined && (
-                            <span style={{ fontSize: "13px", fontWeight: 700, color: "#3B37CC" }}>{s.submission.grade}/{submissionStats.assignment?.points} pts</span>
+                            <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--primary)" }}>{s.submission.grade}/{submissionStats.assignment?.points} pts</span>
                           )}
                           <span style={{
                             fontSize: "11px", fontWeight: 700, padding: "3px 10px", borderRadius: "20px",
-                            background: s.status === "missing" ? "#fef2f2" : s.status === "graded" ? "var(--primary-tint)" : "#f0fdf4",
-                            color: s.status === "missing" ? "#ef4444" : s.status === "graded" ? "#3B37CC" : "#22c55e",
+                            background: s.status === "missing" ? "rgba(239,68,68,0.1)" : s.status === "graded" ? "var(--primary-tint)" : "rgba(34,197,94,0.12)",
+                            color: s.status === "missing" ? "#ef4444" : s.status === "graded" ? "var(--primary)" : "#22c55e",
                           }}>
                             {s.status === "missing" ? "Missing" : s.status === "graded" ? "Graded" : "Submitted"}
                           </span>
@@ -3317,13 +3855,13 @@ export default function ClassDetail() {
                               {s.submission.content}
                             </div>
                           )}
-                          {/* File */}
-                          {s.submission.file_path && (
-                            <a href={`http://localhost:5001/uploads/${s.submission.file_path}`} target="_blank" rel="noreferrer"
-                              style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#3B37CC", fontWeight: 600, marginBottom: "12px", background: "var(--primary-tint)", padding: "6px 12px", borderRadius: "8px", textDecoration: "none" }}>
-                              📎 View attached file
+                          {/* Files */}
+                          {(s.submission.submission_files?.length > 0 ? s.submission.submission_files : s.submission.file_path ? [{ file_name: "Attached file", file_path: s.submission.file_path }] : []).map((f, fi) => (
+                            <a key={fi} href={`http://localhost:5001/uploads/${f.file_path}`} target="_blank" rel="noreferrer"
+                              style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "var(--primary)", fontWeight: 600, marginBottom: "6px", background: "var(--primary-tint)", padding: "6px 12px", borderRadius: "8px", textDecoration: "none", marginRight: "6px" }}>
+                              <Icon name="attach" size={14} alt="" /> {f.file_name}
                             </a>
-                          )}
+                          ))}
 
                           {/* Grade input */}
                           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
@@ -3382,7 +3920,7 @@ export default function ClassDetail() {
       {topicModal && (
         <div style={overlayStyle} onClick={() => setTopicModal(null)}>
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "380px" }}>
-            <h3 style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)", marginBottom: "14px" }}>📂 Set Topic</h3>
+            <h3 style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)", marginBottom: "14px", display: "flex", alignItems: "center", gap: "8px" }}><Icon name="opened-folder" size={15} alt="" /> Set Topic</h3>
             <input value={topicInput} onChange={e => setTopicInput(e.target.value)}
               placeholder="e.g. Chapter 1, Week 2, HTML Basics..."
               style={{ ...inp, width: "100%", marginBottom: "14px" }} autoFocus
@@ -3413,34 +3951,181 @@ export default function ClassDetail() {
                 <p>AI is analyzing the material...</p>
               </div>
             ) : aiResult?.error ? (
-              <div style={{ background: "#fef2f2", borderRadius: "8px", padding: "16px", color: "#dc2626", fontSize: "14px" }}>
+              <div style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: "8px", padding: "16px", color: "#ef4444", fontSize: "14px" }}>
                 ⚠️ {aiResult.error}
               </div>
             ) : aiModal === "highlights" && Array.isArray(aiResult) ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
                 {aiResult.map((item, i) => (
-                  <div key={i} style={{ background: "#fefce8", border: "1px solid #fde68a", borderRadius: "10px", padding: "12px 16px" }}>
-                    <div style={{ fontWeight: 700, color: "#92400e", fontSize: "14px", marginBottom: "4px" }}>
-                      🔑 {item.term}
+                  <div key={i} style={{ background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.3)", borderRadius: "10px", padding: "12px 16px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                      <div style={{ fontWeight: 700, color: "#92400e", fontSize: "14px" }}>🔑 {item.term}</div>
+                      {item.category && (
+                        <span style={{ fontSize: "10px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "#92400e", background: "rgba(251,191,36,0.25)", padding: "2px 7px", borderRadius: "999px" }}>
+                          {item.category}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6 }}>{item.explanation}</div>
+                    {item.example && (
+                      <div style={{ fontSize: "12px", color: "var(--text-faint)", fontStyle: "italic", marginTop: "6px", paddingTop: "6px", borderTop: "1px solid rgba(251,191,36,0.25)" }}>
+                        "{item.example}"
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
             ) : aiModal === "summary" && Array.isArray(aiResult) ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-                {aiResult.map((point, i) => (
-                  <div key={i} style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
-                    <div style={{ width: "24px", height: "24px", borderRadius: "50%", background: "#3B37CC", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", fontWeight: 700, flexShrink: 0, marginTop: "2px" }}>
-                      {i + 1}
+                {/* Cached results made before this prompt was upgraded may still be plain
+                    strings rather than {label, detail} — render either shape. */}
+                {aiResult.map((point, i) => {
+                  const isStructured = point && typeof point === "object";
+                  return (
+                    <div key={i} style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+                      <div style={{ width: "24px", height: "24px", borderRadius: "50%", background: "var(--primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", fontWeight: 700, flexShrink: 0, marginTop: "2px" }}>
+                        {i + 1}
+                      </div>
+                      <div>
+                        {isStructured && point.label && (
+                          <div style={{ fontSize: "11px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.04em", color: "var(--primary)", marginBottom: "2px" }}>
+                            {point.label}
+                          </div>
+                        )}
+                        <p style={{ fontSize: "14px", color: "var(--text-muted)", lineHeight: 1.6, margin: 0 }}>
+                          {isStructured ? point.detail : point}
+                        </p>
+                      </div>
                     </div>
-                    <p style={{ fontSize: "14px", color: "var(--text-muted)", lineHeight: 1.6, margin: 0 }}>{point}</p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : aiModal === "quiz" && Array.isArray(aiResult) ? (
               <QuizView questions={aiResult} />
             ) : null}
+          </div>
+        </div>
+      )}
+
+      {/* ── Teacher: AI Tutor Setup Modal ── */}
+      {tutorSetupOpen && (
+        <div style={overlayStyle} onClick={() => setTutorSetupOpen(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "520px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "20px" }}>
+              <div style={{ width: "40px", height: "40px", borderRadius: "50%", background: "linear-gradient(135deg,#22c55e,#16a34a)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px" }}>🤖</div>
+              <div>
+                <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)" }}>AI Tutor Setup</div>
+                <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>Hint-only mode — students get clues, never direct answers</div>
+              </div>
+              <button onClick={() => setTutorSetupOpen(false)} style={{ marginLeft: "auto", background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
+            </div>
+
+            {/* Enable toggle */}
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--surface-alt)", borderRadius: "10px", padding: "12px 16px", marginBottom: "16px" }}>
+              <div>
+                <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)" }}>Enable AI Tutor for students</div>
+                <div style={{ fontSize: "11px", color: "var(--text-faint)" }}>Students will see "AI Tutor" card in their study panel</div>
+              </div>
+              <button onClick={() => setTutorForm(f => ({ ...f, enabled: !f.enabled }))}
+                style={{ width: "44px", height: "24px", borderRadius: "999px", border: "none", cursor: "pointer", background: tutorForm.enabled ? "#22c55e" : "var(--border)", position: "relative", transition: "background 0.2s" }}>
+                <div style={{ position: "absolute", top: "3px", left: tutorForm.enabled ? "22px" : "3px", width: "18px", height: "18px", borderRadius: "50%", background: "#fff", transition: "left 0.2s" }} />
+              </button>
+            </div>
+
+            {/* Lesson context */}
+            <div style={{ marginBottom: "14px" }}>
+              <label style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", display: "block", marginBottom: "6px" }}>📚 Lesson Context</label>
+              <textarea value={tutorForm.lesson_context} onChange={e => setTutorForm(f => ({ ...f, lesson_context: e.target.value }))}
+                placeholder="Describe what students are studying this week. e.g. 'Chapter 3: OOP in Java — classes, objects, inheritance. Students should understand encapsulation and polymorphism.'"
+                style={{ width: "100%", minHeight: "100px", border: "1.5px solid var(--border)", borderRadius: "10px", padding: "10px 14px", fontSize: "13px", color: "var(--text)", background: "var(--surface-alt)", fontFamily: "inherit", lineHeight: 1.6, resize: "vertical", outline: "none", boxSizing: "border-box" }} />
+            </div>
+
+            {/* Homework context */}
+            <div style={{ marginBottom: "20px" }}>
+              <label style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", display: "block", marginBottom: "6px" }}>📝 Homework Context (optional)</label>
+              <textarea value={tutorForm.homework_context} onChange={e => setTutorForm(f => ({ ...f, homework_context: e.target.value }))}
+                placeholder="Describe current homework. e.g. 'Problem set on loops and arrays. Students must submit by Friday. No giving answers — only hint at approach.'"
+                style={{ width: "100%", minHeight: "80px", border: "1.5px solid var(--border)", borderRadius: "10px", padding: "10px 14px", fontSize: "13px", color: "var(--text)", background: "var(--surface-alt)", fontFamily: "inherit", lineHeight: 1.6, resize: "vertical", outline: "none", boxSizing: "border-box" }} />
+            </div>
+
+            <div style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)", borderRadius: "8px", padding: "10px 14px", marginBottom: "20px", fontSize: "12px", color: "#f59e0b" }}>
+              ⚠️ AI Tutor will NEVER give direct answers — it guides students with hints and questions only.
+            </div>
+
+            <div style={{ display: "flex", gap: "10px", justifyContent: "flex-end" }}>
+              <button onClick={() => setTutorSetupOpen(false)} style={{ background: "none", border: "1px solid var(--border)", borderRadius: "8px", padding: "9px 18px", fontSize: "13px", color: "var(--text-muted)", cursor: "pointer" }}>Cancel</button>
+              <button onClick={saveTutorConfig} disabled={tutorSaving} style={{ background: "#22c55e", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 20px", fontSize: "13px", fontWeight: 700, cursor: "pointer" }}>
+                {tutorSaving ? "Saving..." : "Save & Activate"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── AI Tutor Chat Modal (students) ── */}
+      {aiModal === "tutor" && (
+        <div style={overlayStyle} onClick={() => setAiModal(null)}>
+          <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "520px", display: "flex", flexDirection: "column", height: "600px" }}>
+            {/* Header */}
+            <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
+              <div style={{ width: "38px", height: "38px", borderRadius: "50%", background: "linear-gradient(135deg,#22c55e,#16a34a)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px" }}>🎓</div>
+              <div>
+                <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)" }}>AI Tutor</div>
+                <div style={{ fontSize: "11px", color: "#f59e0b", fontWeight: 600 }}>💡 Hint-only mode — I guide, you discover</div>
+              </div>
+              <button onClick={() => setAiModal(null)} style={{ marginLeft: "auto", background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
+            </div>
+
+            {/* Intro if no history */}
+            {tutorHistory.length === 0 && (
+              <div style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: "12px", padding: "14px 16px", marginBottom: "12px", fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6 }}>
+                <strong style={{ color: "var(--text)" }}>👋 {lang === "en" ? "Hi! I'm your AI Tutor." : "မင်္ဂလာပါ! ကျွန်တော် AI ဆရာ ဖြစ်ပါတယ်။"}</strong><br />
+                {lang === "en"
+                  ? "I won't give you direct answers — but I'll give you hints and ask guiding questions to help you think it through. Ask me anything about the lesson or homework!"
+                  : "တိုက်ရိုက် အဖြေမပေးဘူး — ဒါပေမဲ့ hint နဲ့ မေးခွန်းတွေနဲ့ သင်ကိုယ်တိုင် ရှာဖွေနိုင်အောင် ကူညီပေးမယ်။ သင်ခန်းစာ ဒါမှမဟုတ် အိမ်စာနဲ့ ပတ်သက်ပြီး ဘာမဆို မေးနိုင်တယ်!"}
+              </div>
+            )}
+
+            {/* Chat messages */}
+            <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "12px", padding: "4px 0", marginBottom: "12px" }}>
+              {tutorHistory.map((msg, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", alignItems: "flex-end", gap: "8px" }}>
+                  {msg.role === "assistant" && (
+                    <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "linear-gradient(135deg,#22c55e,#16a34a)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", flexShrink: 0 }}>🎓</div>
+                  )}
+                  <div style={{ maxWidth: "80%", padding: "10px 14px", borderRadius: "14px", fontSize: "13.5px", lineHeight: 1.6,
+                    background: msg.role === "user" ? "var(--primary)" : "var(--surface-alt)",
+                    color: msg.role === "user" ? "#fff" : "var(--text)",
+                    borderBottomRightRadius: msg.role === "user" ? "4px" : "14px",
+                    borderBottomLeftRadius: msg.role === "assistant" ? "4px" : "14px",
+                  }}>
+                    <span dangerouslySetInnerHTML={{ __html: msg.content.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br/>") }} />
+                  </div>
+                </div>
+              ))}
+              {tutorSending && (
+                <div style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
+                  <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "linear-gradient(135deg,#22c55e,#16a34a)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>🎓</div>
+                  <div style={{ background: "var(--surface-alt)", borderRadius: "14px", borderBottomLeftRadius: "4px", padding: "10px 14px", fontSize: "13px", color: "var(--text-faint)" }}>
+                    {lang === "en" ? "Thinking of a hint..." : "Hint ပြင်ဆင်နေသည်..."}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Input */}
+            <div style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
+              <textarea value={tutorInput} onChange={e => setTutorInput(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendTutorMessage(); } }}
+                placeholder={lang === "en" ? "Ask about the lesson or homework... (Enter to send)" : "သင်ခန်းစာ ဒါမှမဟုတ် အိမ်စာနဲ့ ပတ်သက်ပြီး မေးပါ..."}
+                rows={2}
+                style={{ flex: 1, border: "1.5px solid var(--border)", borderRadius: "12px", padding: "10px 14px", fontSize: "13px", color: "var(--text)", background: "var(--surface-alt)", fontFamily: "inherit", lineHeight: 1.5, resize: "none", outline: "none" }}
+              />
+              <button onClick={sendTutorMessage} disabled={!tutorInput.trim() || tutorSending}
+                style={{ background: tutorInput.trim() && !tutorSending ? "#22c55e" : "var(--border)", color: "#fff", border: "none", borderRadius: "12px", padding: "10px 16px", fontSize: "18px", cursor: tutorInput.trim() && !tutorSending ? "pointer" : "not-allowed" }}>
+                ↑
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -3451,7 +4136,7 @@ export default function ClassDetail() {
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "520px", display: "flex", flexDirection: "column", height: levelUpLevel ? "600px" : "auto" }}>
             {/* Header */}
             <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "16px" }}>
-              <div style={{ width: "38px", height: "38px", borderRadius: "50%", background: "linear-gradient(135deg,#6366f1,#8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px" }}>⚡</div>
+              <div style={{ width: "38px", height: "38px", borderRadius: "50%", background: "linear-gradient(135deg,var(--primary),var(--primary-light))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px" }}>⚡</div>
               <div>
                 <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)" }}>Level Up Chat</div>
                 {levelUpLevel && <div style={{ fontSize: "11px", color: "#22c55e", fontWeight: 600 }}>
@@ -3479,11 +4164,11 @@ export default function ClassDetail() {
                   { key: "beginner", icon: "🌱",
                     label: lang === "en" ? "Just starting out" : "စတင်သင်",
                     desc: lang === "en" ? "New to this material — need basic explanations" : "ဒီသင်ခန်းစာနဲ့ ပထမဆုံးတွေ့ဆုံနေသည်၊ အခြေခံ ရှင်းပြချက်လိုသည်",
-                    color: "#22c55e", bg: "#f0fdf4", border: "#86efac" },
+                    color: "#22c55e", bg: "rgba(34,197,94,0.12)", border: "rgba(34,197,94,0.3)" },
                   { key: "intermediate", icon: "📘",
                     label: lang === "en" ? "Know the basics" : "တစ်ဝက်နားလည်",
                     desc: lang === "en" ? "I know some parts but still have gaps" : "အခြေခံသိသော်လည်း အချို့နေရာများ မရှင်းသေးပါ",
-                    color: "#3B37CC", bg: "var(--primary-tint)", border: "#a5b4fc" },
+                    color: "var(--primary)", bg: "var(--primary-tint)", border: "var(--border)" },
                   { key: "advanced", icon: "🔥",
                     label: lang === "en" ? "Ready to be challenged" : "နားလည်ပြီး စစ်ချင်",
                     desc: lang === "en" ? "I know it well — give me hard questions" : "ကောင်းစွာသိပြီး ခက်ခဲသောမေးခွန်းများ ဖြေချင်သည်",
@@ -3514,7 +4199,7 @@ export default function ClassDetail() {
                 <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
                   <div style={{
                     maxWidth: "82%", padding: "10px 14px", borderRadius: "14px", fontSize: "14px", lineHeight: 1.5,
-                    background: msg.role === "user" ? "#3B37CC" : "var(--surface-alt)",
+                    background: msg.role === "user" ? "var(--primary)" : "var(--surface-alt)",
                     color: msg.role === "user" ? "#fff" : "var(--text-muted)",
                     borderBottomRightRadius: msg.role === "user" ? "4px" : "14px",
                     borderBottomLeftRadius: msg.role === "assistant" ? "4px" : "14px",
@@ -3544,7 +4229,7 @@ export default function ClassDetail() {
                   ? (lang === "en" ? "📘 Intermediate mode" : "📘 တစ်ဝက်နားလည် mode")
                   : (lang === "en" ? "🔥 Advanced mode" : "🔥 နားလည်ပြီး mode")}
               </span>
-              <button onClick={() => { setLevelUpLevel(null); setChatHistory([]); }} style={{ background: "none", border: "none", fontSize: "11px", color: "#3B37CC", cursor: "pointer", fontWeight: 700 }}>
+              <button onClick={() => { setLevelUpLevel(null); setChatHistory([]); }} style={{ background: "none", border: "none", fontSize: "11px", color: "var(--primary)", cursor: "pointer", fontWeight: 700 }}>
                 {lang === "en" ? "Change level" : "Level ပြောင်း"}
               </button>
             </div>
@@ -3606,10 +4291,10 @@ export default function ClassDetail() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", height: "64px", background: "var(--surface)", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
               <button onClick={() => window.history.back()}
-                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: "20px", padding: "4px", borderRadius: "50%", display: "flex", alignItems: "center" }}>✕</button>
+                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "4px", borderRadius: "50%", display: "flex", alignItems: "center" }}><Icon name="multiply" size={18} alt="Close" /></button>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                 <div style={{ width: "32px", height: "32px", background: "var(--primary-tint)", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <span style={{ fontSize: "16px" }}>📝</span>
+                  <Icon name="note" size={16} alt="" />
                 </div>
                 <span style={{ fontSize: "17px", fontWeight: 700, color: "var(--text)" }}>Create assignment</span>
               </div>
@@ -3620,7 +4305,7 @@ export default function ClassDetail() {
                 Save draft
               </button>
               <button onClick={() => createAssignment(false)} disabled={assignCreating || !assignForm.title.trim()}
-                style={{ background: assignCreating || !assignForm.title.trim() ? "#c7d2fe" : "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 24px", fontSize: "14px", fontWeight: 700, cursor: assignCreating || !assignForm.title.trim() ? "not-allowed" : "pointer" }}>
+                style={{ background: assignCreating || !assignForm.title.trim() ? "var(--primary-tint)" : "var(--primary)", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 24px", fontSize: "14px", fontWeight: 700, cursor: assignCreating || !assignForm.title.trim() ? "not-allowed" : "pointer" }}>
                 {assignCreating ? "Posting..." : "Post"}
               </button>
             </div>
@@ -3662,25 +4347,25 @@ export default function ClassDetail() {
                   {assignFiles.length > 0 && (
                     <div style={{ display: "flex", flexDirection: "column", gap: "8px", marginBottom: "12px" }}>
                       {assignFiles.map((f, i) => (
-                        <div key={i} style={{ display: "flex", alignItems: "center", gap: "10px", background: "#f8f9ff", border: "1px solid #e0e7ff", borderRadius: "8px", padding: "10px 14px" }}>
-                          <span style={{ fontSize: "18px" }}>📄</span>
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: "10px", background: "var(--primary-tint)", border: "1px solid var(--border)", borderRadius: "8px", padding: "10px 14px" }}>
+                          <Icon name="file" size={18} alt="" />
                           <span style={{ flex: 1, fontSize: "13px", fontWeight: 500, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</span>
                           <button onClick={() => setAssignFiles(prev => prev.filter((_, j) => j !== i))}
-                            style={{ background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", fontSize: "16px" }}>✕</button>
+                            style={{ background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", display: "flex" }}><Icon name="multiply" size={14} alt="Remove" /></button>
                         </div>
                       ))}
                     </div>
                   )}
-                  <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "2px dashed #c7d2fe", borderRadius: "10px", padding: "24px", cursor: "pointer", color: "var(--text-muted)", gap: "6px" }}>
-                    <span style={{ fontSize: "28px" }}>📎</span>
-                    <span style={{ fontSize: "13px", fontWeight: 600, color: "#3B37CC" }}>Attach files</span>
+                  <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "2px dashed var(--primary-tint)", borderRadius: "10px", padding: "24px", cursor: "pointer", color: "var(--text-muted)", gap: "6px" }}>
+                    <Icon name="attach" size={28} alt="" />
+                    <span style={{ fontSize: "13px", fontWeight: 600, color: "var(--primary)" }}>Attach files</span>
                     <input type="file" multiple style={{ display: "none" }}
                       onChange={e => setAssignFiles(prev => [...prev, ...Array.from(e.target.files)])} />
                   </label>
                 </div>
 
                 {assignError && (
-                  <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px", padding: "12px 16px", color: "#dc2626", fontSize: "13px" }}>
+                  <div style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "8px", padding: "12px 16px", color: "#ef4444", fontSize: "13px" }}>
                     {assignError}
                   </div>
                 )}
@@ -3693,7 +4378,7 @@ export default function ClassDetail() {
                     <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>Points</div>
                     <input type="number" min="0" max="1000" value={assignForm.points}
                       onChange={e => setAssignForm(f => ({ ...f, points: e.target.value }))}
-                      style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 10px", fontSize: "16px", fontWeight: 700, color: "#3B37CC", outline: "none", textAlign: "center", boxSizing: "border-box" }} />
+                      style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 10px", fontSize: "16px", fontWeight: 700, color: "var(--primary)", outline: "none", textAlign: "center", boxSizing: "border-box" }} />
                   </div>
                   <div style={{ padding: "14px 16px" }}>
                     <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>Due date</div>
@@ -3711,20 +4396,20 @@ export default function ClassDetail() {
       {/* Assignment Detail Modal */}
       {/* Teacher Assignment Full-Page View */}
       {selectedAssign && isTeacher && (
-        <div style={{ position: "fixed", inset: 0, background: "#f5f6fa", zIndex: 900, overflowY: "auto" }}>
+        <div style={{ position: "fixed", inset: 0, background: "var(--bg)", zIndex: 900, overflowY: "auto" }}>
           {/* Top bar */}
           <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "14px 28px", display: "flex", alignItems: "center", gap: "14px", position: "sticky", top: 0, zIndex: 10 }}>
             <button onClick={() => { setSelectedAssign(null); setAssignDetail(null); setSelectedSubmissionStudent(null); }}
               style={{ background: "none", border: "none", fontSize: "22px", cursor: "pointer", color: "var(--text-muted)", lineHeight: 1 }}>←</button>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: "17px", fontWeight: 700, color: "var(--text)" }}>📝 {selectedAssign.title}</div>
+              <div style={{ fontSize: "17px", fontWeight: 700, color: "var(--text)", display: "flex", alignItems: "center", gap: "8px" }}><Icon name="note" size={16} alt="" /> {selectedAssign.title}</div>
               <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>
                 {selectedAssign.due_date ? `Due: ${formatDate(selectedAssign.due_date)}` : "No due date"} • {selectedAssign.points} pts
               </div>
             </div>
             <button onClick={() => openEditAssign(selectedAssign)}
-              style={{ fontSize: "13px", fontWeight: 600, color: "#3B37CC", background: "var(--primary-tint)", border: "1px solid #a5b4fc", borderRadius: "8px", padding: "7px 16px", cursor: "pointer" }}>
-              ✏️ Edit
+              style={{ fontSize: "13px", fontWeight: 600, color: "var(--primary)", background: "var(--primary-tint)", border: "1px solid var(--border)", borderRadius: "8px", padding: "7px 16px", cursor: "pointer", display: "flex", alignItems: "center", gap: "6px" }}>
+              <Icon name="edit" size={13} alt="" /> Edit
             </button>
           </div>
 
@@ -3735,9 +4420,9 @@ export default function ClassDetail() {
               {/* Stats row */}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "8px", marginBottom: "16px" }}>
                 {[
-                  { label: "Submitted", count: assignDetail?.submissions?.length || 0, color: "#22c55e", bg: "#f0fdf4" },
-                  { label: "Missing", count: Math.max(0, (students?.length || 0) - (assignDetail?.submissions?.length || 0)), color: "#ef4444", bg: "#fef2f2" },
-                  { label: "Graded", count: assignDetail?.submissions?.filter(s => s.status === "graded" || s.status === "returned").length || 0, color: "#3B37CC", bg: "var(--primary-tint)" },
+                  { label: "Submitted", count: assignDetail?.submissions?.length || 0, color: "#22c55e", bg: "rgba(34,197,94,0.12)" },
+                  { label: "Missing", count: Math.max(0, (students?.length || 0) - (assignDetail?.submissions?.length || 0)), color: "#ef4444", bg: "rgba(239,68,68,0.1)" },
+                  { label: "Graded", count: assignDetail?.submissions?.filter(s => s.status === "graded" || s.status === "returned").length || 0, color: "var(--primary)", bg: "var(--primary-tint)" },
                 ].map(stat => (
                   <div key={stat.label} style={{ background: stat.bg, borderRadius: "10px", padding: "10px 8px", textAlign: "center" }}>
                     <div style={{ fontSize: "20px", fontWeight: 800, color: stat.color }}>{stat.count}</div>
@@ -3755,8 +4440,8 @@ export default function ClassDetail() {
                 const isSelected = selectedSubmissionStudent?.id === st.id;
                 return (
                   <div key={st.id} onClick={() => setSelectedSubmissionStudent({ ...st, submission: sub || null })}
-                    style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px", borderRadius: "10px", cursor: "pointer", marginBottom: "4px", background: isSelected ? "var(--primary-tint)" : "transparent", border: isSelected ? "1.5px solid #3B37CC" : "1.5px solid transparent", transition: "all 0.12s" }}>
-                    <div style={{ width: "34px", height: "34px", borderRadius: "50%", background: isSelected ? "#3B37CC" : "var(--border)", color: isSelected ? "#fff" : "var(--text-muted)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", fontWeight: 700, flexShrink: 0 }}>
+                    style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 12px", borderRadius: "10px", cursor: "pointer", marginBottom: "4px", background: isSelected ? "var(--primary-tint)" : "transparent", border: isSelected ? "1.5px solid var(--primary)" : "1.5px solid transparent", transition: "all 0.12s" }}>
+                    <div style={{ width: "34px", height: "34px", borderRadius: "50%", background: isSelected ? "var(--primary)" : "var(--border)", color: isSelected ? "#fff" : "var(--text-muted)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", fontWeight: 700, flexShrink: 0 }}>
                       {st.name[0].toUpperCase()}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -3769,8 +4454,8 @@ export default function ClassDetail() {
                     </div>
                     <span style={{
                       fontSize: "10px", fontWeight: 700, padding: "2px 8px", borderRadius: "20px", flexShrink: 0,
-                      background: !sub ? "#fef2f2" : (sub.status === "graded" || sub.status === "returned") ? "var(--primary-tint)" : "#f0fdf4",
-                      color: !sub ? "#ef4444" : (sub.status === "graded" || sub.status === "returned") ? "#3B37CC" : "#22c55e",
+                      background: !sub ? "rgba(239,68,68,0.1)" : (sub.status === "graded" || sub.status === "returned") ? "var(--primary-tint)" : "rgba(34,197,94,0.12)",
+                      color: !sub ? "#ef4444" : (sub.status === "graded" || sub.status === "returned") ? "var(--primary)" : "#22c55e",
                     }}>
                       {!sub ? "Missing" : (sub.status === "graded" || sub.status === "returned") ? `${sub.grade}/${selectedAssign.points}` : "Submitted"}
                     </span>
@@ -3783,12 +4468,12 @@ export default function ClassDetail() {
             <div style={{ padding: "24px 32px", overflowY: "auto" }}>
               {!selectedSubmissionStudent ? (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--text-faint)", gap: "12px" }}>
-                  <div style={{ fontSize: "48px" }}>👈</div>
+                  <Icon name="hand-cursor" size={48} alt="" />
                   <div style={{ fontSize: "14px" }}>Select a student to view their submission</div>
                 </div>
               ) : !selectedSubmissionStudent.submission ? (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--text-faint)", gap: "12px" }}>
-                  <div style={{ fontSize: "48px" }}>📭</div>
+                  <Icon name="empty-box" size={48} alt="" />
                   <div style={{ fontSize: "15px", fontWeight: 600, color: "var(--text-muted)" }}>{selectedSubmissionStudent.name}</div>
                   <div style={{ fontSize: "13px" }}>No submission yet</div>
                 </div>
@@ -3798,7 +4483,7 @@ export default function ClassDetail() {
                   <div>
                     {/* Student header */}
                     <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "20px" }}>
-                      <div style={{ width: "44px", height: "44px", borderRadius: "50%", background: "#3B37CC", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px", fontWeight: 700 }}>
+                      <div style={{ width: "44px", height: "44px", borderRadius: "50%", background: "var(--primary)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "18px", fontWeight: 700 }}>
                         {selectedSubmissionStudent.name[0].toUpperCase()}
                       </div>
                       <div>
@@ -3806,8 +4491,8 @@ export default function ClassDetail() {
                         <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>Submitted {formatDate(sub.submitted_at)}{sub.status === "late" ? " (Late)" : ""}</div>
                       </div>
                       <span style={{ marginLeft: "auto", fontSize: "11px", fontWeight: 700, padding: "4px 12px", borderRadius: "20px",
-                        background: (sub.status === "graded" || sub.status === "returned") ? "var(--primary-tint)" : "#f0fdf4",
-                        color: (sub.status === "graded" || sub.status === "returned") ? "#3B37CC" : "#22c55e" }}>
+                        background: (sub.status === "graded" || sub.status === "returned") ? "var(--primary-tint)" : "rgba(34,197,94,0.12)",
+                        color: (sub.status === "graded" || sub.status === "returned") ? "var(--primary)" : "#22c55e" }}>
                         {(sub.status === "graded" || sub.status === "returned") ? `Graded: ${sub.grade}/${selectedAssign.points}` : "Submitted"}
                       </span>
                     </div>
@@ -3819,13 +4504,15 @@ export default function ClassDetail() {
                       </div>
                     )}
 
-                    {/* File */}
-                    {sub.file_path && (
-                      <a href={`http://localhost:5001/uploads/${sub.file_path}`} target="_blank" rel="noreferrer"
-                        style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "#3B37CC", fontWeight: 600, background: "var(--primary-tint)", padding: "8px 16px", borderRadius: "10px", textDecoration: "none", border: "1px solid #a5b4fc", marginBottom: "20px" }}>
-                        📎 View attached file
-                      </a>
-                    )}
+                    {/* Files */}
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginBottom: "20px" }}>
+                      {(sub.submission_files?.length > 0 ? sub.submission_files : sub.file_path ? [{ file_name: "Attached file", file_path: sub.file_path }] : []).map((f, fi) => (
+                        <a key={fi} href={`http://localhost:5001/uploads/${f.file_path}`} target="_blank" rel="noreferrer"
+                          style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "13px", color: "var(--primary)", fontWeight: 600, background: "var(--primary-tint)", padding: "8px 16px", borderRadius: "10px", textDecoration: "none", border: "1px solid var(--border)" }}>
+                          <Icon name="attach" size={14} alt="" /> {f.file_name}
+                        </a>
+                      ))}
+                    </div>
 
                     {/* Grade section */}
                     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px", marginBottom: "16px" }}>
@@ -3837,7 +4524,7 @@ export default function ClassDetail() {
                           {sub.grade_comment && <span style={{ fontSize: "13px", color: "var(--text-muted)", fontStyle: "italic" }}>— {sub.grade_comment}</span>}
                           {sub.status === "graded" && (
                             <button onClick={() => returnSubmission(sub.id)} disabled={returning[sub.id]}
-                              style={{ marginLeft: "auto", background: "#f0fdf4", border: "1px solid #22c55e", color: "#15803d", borderRadius: "8px", padding: "6px 14px", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
+                              style={{ marginLeft: "auto", background: "rgba(34,197,94,0.12)", border: "1px solid #22c55e", color: "#22c55e", borderRadius: "8px", padding: "6px 14px", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
                               {returning[sub.id] ? "..." : "Return to Student"}
                             </button>
                           )}
@@ -3873,7 +4560,6 @@ export default function ClassDetail() {
 
                     {/* Private comment */}
                     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "16px" }}>
-                      <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "12px", letterSpacing: "0.05em" }}>🔒 PRIVATE COMMENT — {selectedSubmissionStudent.name}</div>
                       <SubmissionComments
                         assignId={selectedAssign.id}
                         studentId={selectedSubmissionStudent.id}
@@ -3895,7 +4581,7 @@ export default function ClassDetail() {
           <div onClick={e => e.stopPropagation()} style={{ ...modalStyle, width: "600px", maxHeight: "85vh", overflowY: "auto" }}>
             <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "16px" }}>
               <div>
-                <h2 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text)", margin: "0 0 4px" }}>📝 {selectedAssign.title}</h2>
+                <h2 style={{ fontSize: "18px", fontWeight: 700, color: "var(--text)", margin: "0 0 4px", display: "flex", alignItems: "center", gap: "8px" }}><Icon name="note" size={17} alt="" /> {selectedAssign.title}</h2>
                 <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>
                   {selectedAssign.due_date ? `Due: ${formatDate(selectedAssign.due_date)}` : "No due date"} • {selectedAssign.points} pts
                 </div>
@@ -3912,8 +4598,8 @@ export default function ClassDetail() {
                 <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "6px" }}>ATTACHMENTS</div>
                 {selectedAssign.files.map(f => (
                   <a key={f.id} href={`http://localhost:5001/uploads/${f.file_path}`} target="_blank" rel="noreferrer"
-                    style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "#3B37CC", fontWeight: 600, background: "var(--primary-tint)", padding: "6px 12px", borderRadius: "8px", textDecoration: "none", border: "1px solid #a5b4fc", marginRight: "8px", marginBottom: "4px" }}>
-                    📄 {f.file_name}
+                    style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "13px", color: "var(--primary)", fontWeight: 600, background: "var(--primary-tint)", padding: "6px 12px", borderRadius: "8px", textDecoration: "none", border: "1px solid var(--border)", marginRight: "8px", marginBottom: "4px" }}>
+                    <Icon name="file" size={14} alt="" /> {f.file_name}
                   </a>
                 ))}
               </div>
@@ -3929,16 +4615,16 @@ export default function ClassDetail() {
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 24px", height: "64px", background: "var(--surface)", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
               <button onClick={closeUploadModal}
-                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", fontSize: "20px", padding: "4px", borderRadius: "50%", display: "flex", alignItems: "center" }}>✕</button>
+                style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", padding: "4px", borderRadius: "50%", display: "flex", alignItems: "center" }}><Icon name="multiply" size={18} alt="Close" /></button>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <div style={{ width: "32px", height: "32px", background: "#3B37CC", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  <span style={{ color: "#fff", fontSize: "16px" }}>📄</span>
+                <div style={{ width: "32px", height: "32px", background: "var(--primary)", borderRadius: "6px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <Icon name="file" size={16} alt="" style={{ filter: "brightness(0) invert(1)" }} />
                 </div>
                 <span style={{ fontSize: "17px", fontWeight: 700, color: "var(--text)" }}>{materialEditId ? "Edit material" : "Create material"}</span>
               </div>
             </div>
             <button onClick={handleUpload} disabled={uploading || !uploadForm.title.trim()}
-              style={{ background: uploading || !uploadForm.title.trim() ? "#c7d2fe" : "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 24px", fontSize: "14px", fontWeight: 700, cursor: uploading || !uploadForm.title.trim() ? "not-allowed" : "pointer", transition: "background 0.2s" }}>
+              style={{ background: uploading || !uploadForm.title.trim() ? "var(--primary-tint)" : "var(--primary)", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 24px", fontSize: "14px", fontWeight: 700, cursor: uploading || !uploadForm.title.trim() ? "not-allowed" : "pointer", transition: "background 0.2s" }}>
               {uploading ? "Saving..." : materialEditId ? "Save Changes" : "Post"}
             </button>
           </div>
@@ -3948,20 +4634,19 @@ export default function ClassDetail() {
             <div style={{ width: "100%", maxWidth: "720px", display: "flex", flexDirection: "column", gap: "16px" }}>
 
               {/* Title */}
-              <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", overflow: "hidden" }}>
+              <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", gap: "16px" }}>
                 <input
                   value={uploadForm.title}
                   onChange={e => setUploadForm(f => ({ ...f, title: e.target.value }))}
                   placeholder="Title"
                   autoFocus
-                  style={{ width: "100%", border: "none", outline: "none", fontSize: "22px", fontWeight: 600, color: "var(--text)", padding: "20px 24px", boxSizing: "border-box", background: "transparent" }}
+                  style={{ flex: 1, border: "none", outline: "none", fontSize: "15px", fontWeight: 600, color: "var(--text)", background: "transparent", minWidth: 0 }}
                 />
-                <div style={{ height: "1px", background: "var(--surface-alt)", margin: "0 24px" }} />
-                <div style={{ padding: "4px 24px 16px", display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ fontSize: "12px", color: "var(--text-faint)", fontWeight: 600 }}>WEEK</span>
+                <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0 }}>
+                  <span style={{ fontSize: "11px", color: "var(--text-faint)", fontWeight: 600 }}>WEEK</span>
                   <input type="number" min="1" max="20" value={uploadForm.week}
                     onChange={e => setUploadForm(f => ({ ...f, week: e.target.value }))}
-                    style={{ width: "56px", border: "1px solid var(--border)", borderRadius: "6px", padding: "4px 8px", fontSize: "14px", fontWeight: 600, color: "#3B37CC", textAlign: "center", outline: "none" }} />
+                    style={{ width: "52px", border: "1px solid var(--border)", borderRadius: "6px", padding: "4px 8px", fontSize: "13px", fontWeight: 600, color: "var(--primary)", textAlign: "center", outline: "none" }} />
                 </div>
               </div>
 
@@ -3969,8 +4654,8 @@ export default function ClassDetail() {
               <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "20px 24px" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
                   <div>
-                    <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)" }}>🎬 Related YouTube Videos</span>
-                    <span style={{ fontSize: "11px", color: "var(--text-faint)", marginLeft: "8px" }}>PDF ဖတ်ပြီး AI ကညွှန်းပေးမည်</span>
+                    <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "6px" }}><Icon name="video" size={13} alt="" /> Related YouTube Videos</span>
+                    <span style={{ fontSize: "11px", color: "var(--text-faint)", marginLeft: "8px" }}>{lang === "en" ? "AI reads PDF or search by topic" : "PDF ဖတ်ပြီး AI ညွှန်းသည် / topic ရိုက်ထည့်ပြီး ရှာနိုင်သည်"}</span>
                   </div>
                   {uploadFile && (
                     <button
@@ -3985,20 +4670,38 @@ export default function ClassDetail() {
                         cursor: suggestingVideos ? "not-allowed" : "pointer",
                         flexShrink: 0,
                       }}>
-                      {suggestingVideos ? <><span>⏳</span> Searching...</> : <><span>🔄</span> Re-search</>}
+                      {suggestingVideos ? <><Icon name="hourglass" size={14} alt="" /> Searching...</> : <><Icon name="refresh" size={14} alt="" /> Re-search</>}
                     </button>
                   )}
                 </div>
+
+                {/* Manual prompt search row */}
+                <div style={{ display: "flex", gap: "8px", marginBottom: "12px" }}>
+                  <input
+                    value={ytPromptQuery}
+                    onChange={e => setYtPromptQuery(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" && ytPromptQuery.trim() && !suggestingVideos) handleSuggestVideos(null, false); }}
+                    placeholder={lang === "en" ? "Search YouTube by topic (e.g. Korean grammar beginner)..." : "Topic ရိုက်ပြီး YouTube ရှာပါ (ဥပမာ English grammar A2)..."}
+                    style={{ flex: 1, border: "1.5px solid var(--border)", borderRadius: "10px", padding: "9px 14px", fontSize: "13px", color: "var(--text)", background: "var(--surface-alt)", outline: "none", fontFamily: "inherit" }}
+                  />
+                  <button
+                    onClick={() => { if (ytPromptQuery.trim() && !suggestingVideos) handleSuggestVideos(null, false); }}
+                    disabled={!ytPromptQuery.trim() || suggestingVideos}
+                    style={{ background: !ytPromptQuery.trim() || suggestingVideos ? "var(--surface-alt)" : "var(--primary)", color: !ytPromptQuery.trim() || suggestingVideos ? "var(--text-faint)" : "#fff", border: "none", borderRadius: "10px", padding: "9px 18px", fontSize: "12px", fontWeight: 700, cursor: !ytPromptQuery.trim() || suggestingVideos ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>
+                    {suggestingVideos ? "Searching..." : lang === "en" ? "Search" : "ရှာမည်"}
+                  </button>
+                </div>
+
                 {/* Language hint row */}
                 <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: (suggestedVideos.length > 0 || suggestingVideos) ? "14px" : "8px" }}>
-                  <span style={{ fontSize: "11px", color: "var(--text-faint)", flexShrink: 0 }}>Video ဘာသာစကား:</span>
+                  <span style={{ fontSize: "11px", color: "var(--text-faint)", flexShrink: 0 }}>{lang === "en" ? "Video language:" : "Video ဘာသာစကား:"}</span>
                   {[{ label: "ENG", value: "English" }, { label: "KOR", value: "Korean" }].map(btn => (
                     <button key={btn.value} onClick={() => setYtLanguageHint(btn.value)}
                       style={{
                         fontSize: "11px", fontWeight: 700,
                         padding: "3px 12px", borderRadius: "14px",
-                        border: `1px solid ${ytLanguageHint === btn.value ? "#3B37CC" : "var(--border)"}`,
-                        background: ytLanguageHint === btn.value ? "#3B37CC" : "var(--surface-alt)",
+                        border: `1px solid ${ytLanguageHint === btn.value ? "var(--primary)" : "var(--border)"}`,
+                        background: ytLanguageHint === btn.value ? "var(--primary)" : "var(--surface-alt)",
                         color: ytLanguageHint === btn.value ? "#fff" : "var(--text-muted)",
                         cursor: "pointer", transition: "all 0.15s",
                       }}>
@@ -4010,7 +4713,7 @@ export default function ClassDetail() {
                   <div style={{ display: "flex", gap: "10px" }}>
                     {[1,2,3].map(i => (
                       <div key={i} style={{ flex: 1, borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border)" }}>
-                        <div style={{ height: "80px", background: "linear-gradient(135deg, #fee2e2, #fecaca)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px" }}>▶</div>
+                        <div style={{ height: "80px", background: "linear-gradient(135deg, rgba(239,68,68,0.2), rgba(239,68,68,0.1))", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "24px" }}>▶</div>
                         <div style={{ padding: "8px", background: "var(--surface-alt)" }}>
                           <div style={{ height: "8px", background: "var(--border)", borderRadius: "4px", marginBottom: "4px" }} />
                           <div style={{ height: "6px", background: "var(--border)", borderRadius: "4px", width: "70%" }} />
@@ -4030,7 +4733,7 @@ export default function ClassDetail() {
                             isSelected ? next.delete(v.url) : next.add(v.url);
                             return next;
                           })}
-                            style={{ flex: "0 0 200px", borderRadius: "8px", overflow: "hidden", border: `2px solid ${isSelected ? "#3B37CC" : "var(--border)"}`, cursor: "pointer", display: "block", transition: "border-color 0.15s, box-shadow 0.15s", boxShadow: isSelected ? "0 0 0 3px rgba(59,55,204,0.15)" : "none", userSelect: "none" }}>
+                            style={{ flex: "0 0 200px", borderRadius: "8px", overflow: "hidden", border: `2px solid ${isSelected ? "var(--primary)" : "var(--border)"}`, cursor: "pointer", display: "block", transition: "border-color 0.15s, box-shadow 0.15s", boxShadow: isSelected ? "0 0 0 3px rgba(59,55,204,0.15)" : "none", userSelect: "none" }}>
                             <div style={{ position: "relative" }}>
                               {v.thumbnail ? (
                                 <img src={v.thumbnail} alt={v.title} style={{ width: "100%", height: "112px", objectFit: "cover", display: "block" }} />
@@ -4039,7 +4742,7 @@ export default function ClassDetail() {
                               )}
                               <div style={{ position: "absolute", top: "6px", right: "6px", background: "rgba(0,0,0,0.65)", color: "#fff", fontSize: "10px", fontWeight: 700, padding: "2px 5px", borderRadius: "4px" }}>YouTube</div>
                               {isSelected && (
-                                <div style={{ position: "absolute", top: "6px", left: "6px", background: "#3B37CC", color: "#fff", fontSize: "14px", width: "22px", height: "22px", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>✓</div>
+                                <div style={{ position: "absolute", top: "6px", left: "6px", background: "var(--primary)", width: "22px", height: "22px", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}><Icon name="checkmark" size={12} alt="" style={{ filter: "brightness(0) invert(1)" }} /></div>
                               )}
                             </div>
                             <div style={{ padding: "8px 10px", background: isSelected ? "rgba(59,55,204,0.06)" : "var(--surface)" }}>
@@ -4051,15 +4754,15 @@ export default function ClassDetail() {
                       })}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "8px" }}>
-                      <div style={{ fontSize: "11px", color: selectedVideoUrls.size > 0 ? "#3B37CC" : "var(--text-faint)" }}>
+                      <div style={{ fontSize: "11px", color: selectedVideoUrls.size > 0 ? "var(--primary)" : "var(--text-faint)", display: "flex", alignItems: "center", gap: "5px" }}>
                         {selectedVideoUrls.size > 0
-                          ? `✓ ${selectedVideoUrls.size} video ရွေးထားသည် — post လုပ်သောအခါ lesson မှာ ထည့်သွင်းမည်`
-                          : "Video ကို နှိပ်ပြီး ရွေးပါ — ကြိုက်သောဟာကို lesson မှာ ထည့်နိုင်သည်"}
+                          ? <><Icon name="checkmark" size={11} alt="" /> {lang === "en" ? `${selectedVideoUrls.size} video selected — will be added to lesson on post` : `${selectedVideoUrls.size} video ရွေးထားသည် — post လုပ်သောအခါ lesson မှာ ထည့်သွင်းမည်`}</>
+                          : (lang === "en" ? "Click a video to select — chosen ones will be added to the lesson" : "Video ကို နှိပ်ပြီး ရွေးပါ — ကြိုက်သောဟာကို lesson မှာ ထည့်နိုင်သည်")}
                       </div>
                       {selectedVideoUrls.size > 0 && (
                         <button onClick={() => setSelectedVideoUrls(new Set())}
                           style={{ fontSize: "10px", color: "var(--text-faint)", background: "none", border: "none", cursor: "pointer", padding: "0" }}>
-                          ဖျက်မည်
+                          {lang === "en" ? "Clear" : "ဖျက်မည်"}
                         </button>
                       )}
                     </div>
@@ -4067,8 +4770,8 @@ export default function ClassDetail() {
                 )}
                 {!suggestingVideos && suggestedVideos.length === 0 && (
                   <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--text-faint)", display: "flex", alignItems: "center", gap: "6px" }}>
-                    <span style={{ fontSize: "16px" }}>📄</span>
-                    PDF file တင်လိုက်တာနဲ့ AI က file အကြောင်းကို ဖတ်ပြီး သင်ခန်းစာနဲ့ ကိုက်ညီတဲ့ YouTube videos အလိုအလျောက် ညွှန်းပေးမည်
+                    <Icon name="file" size={16} alt="" />
+                    {lang === "en" ? "Upload a PDF and AI will read it to automatically suggest matching YouTube videos" : "PDF file တင်လိုက်တာနဲ့ AI က file အကြောင်းကို ဖတ်ပြီး သင်ခန်းစာနဲ့ ကိုက်ညီတဲ့ YouTube videos အလိုအလျောက် ညွှန်းပေးမည်"}
                   </div>
                 )}
               </div>
@@ -4078,7 +4781,7 @@ export default function ClassDetail() {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
                   <div>
                     <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)" }}>Instructions for students</span>
-                    <span style={{ fontSize: "11px", color: "var(--text-faint)", marginLeft: "8px" }}>AI က သင်ရိုးကြည့်ပြီး ရေးပေးမည်</span>
+                    <span style={{ fontSize: "11px", color: "var(--text-faint)", marginLeft: "8px" }}>{lang === "en" ? "AI reads the syllabus and writes for you" : "AI က သင်ရိုးကြည့်ပြီး ရေးပေးမည်"}</span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <div style={{ display: "flex", borderRadius: "20px", overflow: "hidden", border: "1px solid var(--border)" }}>
@@ -4087,7 +4790,7 @@ export default function ClassDetail() {
                           setInstructionLang(lang);
                           if (uploadFile && !generatingInstructions) handleGenerateInstructions(lang);
                         }}
-                          style={{ padding: "4px 12px", fontSize: "11px", fontWeight: 700, border: "none", cursor: "pointer", background: instructionLang === lang ? "#3B37CC" : "var(--surface)", color: instructionLang === lang ? "#fff" : "var(--text-faint)", transition: "background 0.15s" }}>
+                          style={{ padding: "4px 12px", fontSize: "11px", fontWeight: 700, border: "none", cursor: "pointer", background: instructionLang === lang ? "var(--primary)" : "var(--surface)", color: instructionLang === lang ? "#fff" : "var(--text-faint)", transition: "background 0.15s" }}>
                           {lang === "en" ? "ENG" : "KOR"}
                         </button>
                       ))}
@@ -4095,12 +4798,12 @@ export default function ClassDetail() {
                     <button
                       onClick={handleGenerateInstructions}
                       disabled={generatingInstructions || !uploadFile}
-                      title={!uploadFile ? "PDF တင်မှ အသုံးပြုနိုင်မည်" : ""}
-                      style={{ display: "flex", alignItems: "center", gap: "6px", background: generatingInstructions ? "var(--surface-alt)" : !uploadFile ? "var(--surface-alt)" : "var(--primary-tint)", color: !uploadFile ? "var(--text-faint)" : "#3B37CC", border: `1px solid ${!uploadFile ? "var(--border)" : "#c7d2fe"}`, borderRadius: "20px", padding: "5px 14px", fontSize: "12px", fontWeight: 700, cursor: (generatingInstructions || !uploadFile) ? "not-allowed" : "pointer", opacity: !uploadFile ? 0.6 : 1 }}>
+                      title={!uploadFile ? (lang === "en" ? "Upload a PDF first" : "PDF တင်မှ အသုံးပြုနိုင်မည်") : ""}
+                      style={{ display: "flex", alignItems: "center", gap: "6px", background: generatingInstructions ? "var(--surface-alt)" : !uploadFile ? "var(--surface-alt)" : "var(--primary-tint)", color: !uploadFile ? "var(--text-faint)" : "var(--primary)", border: `1px solid ${!uploadFile ? "var(--border)" : "var(--primary-tint)"}`, borderRadius: "20px", padding: "5px 14px", fontSize: "12px", fontWeight: 700, cursor: (generatingInstructions || !uploadFile) ? "not-allowed" : "pointer", opacity: !uploadFile ? 0.6 : 1 }}>
                       {generatingInstructions ? (
-                        <><span style={{ fontSize: "14px" }}>⏳</span> Generating...</>
+                        <><Icon name="hourglass" size={14} alt="" /> Generating...</>
                       ) : (
-                        <><span style={{ fontSize: "14px" }}>{!uploadFile ? "🔒" : "✨"}</span> Generate with AI</>
+                        <><Icon name={!uploadFile ? "lock" : "sparkling"} size={14} alt="" /> Generate with AI</>
                       )}
                     </button>
                   </div>
@@ -4117,18 +4820,21 @@ export default function ClassDetail() {
               <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", padding: "20px 24px" }}>
                 <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", display: "block", marginBottom: "12px" }}>Attach PDF (optional)</span>
                 {uploadFile ? (
-                  <div style={{ display: "flex", alignItems: "center", gap: "12px", background: "#f8f9ff", border: "1px solid #c7d2fe", borderRadius: "10px", padding: "12px 16px" }}>
-                    <span style={{ fontSize: "24px" }}>📑</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: "12px", background: "var(--primary-tint)", border: "1px solid var(--border)", borderRadius: "10px", padding: "12px 16px" }}>
+                    <Icon name="file" size={24} alt="" />
                     <div style={{ flex: 1 }}>
                       <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>{uploadFile.name}</div>
                       <div style={{ fontSize: "11px", color: "var(--text-faint)" }}>{(uploadFile.size / 1024).toFixed(0)} KB</div>
                     </div>
-                    <button onClick={() => { setUploadFile(null); if (fileRef.current) fileRef.current.value = ""; }}
-                      style={{ background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", fontSize: "18px" }}>✕</button>
+                    <button onClick={() => {
+                      setUploadFile(null); if (fileRef.current) fileRef.current.value = "";
+                      videoSearchSeq.current++; setSuggestedVideos([]); setYtNextPageToken(null);
+                    }}
+                      style={{ background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", display: "flex" }}><Icon name="multiply" size={16} alt="Remove" /></button>
                   </div>
                 ) : (
-                  <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "2px dashed #c7d2fe", borderRadius: "10px", padding: "32px", cursor: "pointer", color: "var(--text-muted)", gap: "8px" }}>
-                    <span style={{ fontSize: "32px" }}>📎</span>
+                  <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", border: "2px dashed var(--primary-tint)", borderRadius: "10px", padding: "32px", cursor: "pointer", color: "var(--text-muted)", gap: "8px" }}>
+                    <Icon name="attach" size={32} alt="" />
                     <span style={{ fontSize: "14px", fontWeight: 600 }}>Click to attach a PDF</span>
                     <span style={{ fontSize: "12px", color: "var(--text-faint)" }}>PDF files only</span>
                     <input type="file" accept="application/pdf" ref={fileRef} onChange={e => {
@@ -4152,7 +4858,7 @@ export default function ClassDetail() {
                   <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
                     {selectedMat.files.map(f => (
                       <div key={f.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: deleteAttachmentIds.includes(f.id) ? "var(--text-faint)" : "var(--text-muted)", background: deleteAttachmentIds.includes(f.id) ? "#fef2f2" : "var(--surface-alt)", padding: "8px 12px", borderRadius: "8px", border: `1px solid ${deleteAttachmentIds.includes(f.id) ? "#fca5a5" : "var(--border)"}`, textDecoration: deleteAttachmentIds.includes(f.id) ? "line-through" : "none" }}>
-                        <span>📄 {f.file_name}</span>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}><Icon name="file" size={14} alt="" /> {f.file_name}</span>
                         <button type="button" onClick={() => setDeleteAttachmentIds(prev => prev.includes(f.id) ? prev.filter(x => x !== f.id) : [...prev, f.id])}
                           style={{ background: "none", border: "none", cursor: "pointer", fontWeight: 700, fontSize: "12px", color: deleteAttachmentIds.includes(f.id) ? "#22c55e" : "#ef4444" }}>
                           {deleteAttachmentIds.includes(f.id) ? "↩ Restore" : "× Remove"}
@@ -4165,10 +4871,10 @@ export default function ClassDetail() {
                 {uploadExtraFiles.length > 0 && (
                   <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
                     {uploadExtraFiles.map((f, i) => (
-                      <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: "var(--text)", background: "#f8f9ff", padding: "8px 12px", borderRadius: "8px", border: "1px solid #c7d2fe" }}>
-                        <span>📎 {f.name}</span>
+                      <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: "12px", color: "var(--text)", background: "#f8f9ff", padding: "8px 12px", borderRadius: "8px", border: "1px solid var(--primary-tint)" }}>
+                        <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}><Icon name="attach" size={14} alt="" /> {f.name}</span>
                         <button type="button" onClick={() => setUploadExtraFiles(prev => prev.filter((_, idx) => idx !== i))}
-                          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", fontSize: "14px" }}>✕</button>
+                          style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-faint)", display: "flex" }}><Icon name="multiply" size={12} alt="Remove" /></button>
                       </div>
                     ))}
                   </div>
@@ -4180,14 +4886,59 @@ export default function ClassDetail() {
                     setUploadExtraFiles(prev => [...prev, ...picked]);
                     e.target.value = "";
                   }} />
-                <button type="button" onClick={() => extraFileRef.current?.click()}
-                  style={{ fontSize: "13px", color: "#3B37CC", background: "var(--primary-tint)", border: "1px solid #a5b4fc", borderRadius: "8px", padding: "8px 16px", cursor: "pointer", fontWeight: 600 }}>
-                  + Add files
-                </button>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <button type="button" onClick={() => extraFileRef.current?.click()}
+                    style={{ fontSize: "13px", color: "var(--primary)", background: "var(--primary-tint)", border: "1px solid var(--border)", borderRadius: "8px", padding: "8px 16px", cursor: "pointer", fontWeight: 600 }}>
+                    + Add files
+                  </button>
+                  {!materialEditId && !linkedAssign && (
+                    <button type="button" onClick={() => setLinkedAssign({ title: "", due_date: "", points: 100 })}
+                      style={{ fontSize: "13px", color: "#0F9D6E", background: "#F0FDF4", border: "1px solid #86EFAC", borderRadius: "8px", padding: "8px 16px", cursor: "pointer", fontWeight: 600 }}>
+                      + Assignment
+                    </button>
+                  )}
+                </div>
+
+                {/* Inline assignment form */}
+                {linkedAssign && (
+                  <div style={{ marginTop: "14px", background: "var(--surface-alt)", border: "1px solid #86EFAC", borderRadius: "12px", padding: "16px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                      <span style={{ fontSize: "13px", fontWeight: 700, color: "#0F9D6E" }}>📋 Linked Assignment</span>
+                      <button type="button" onClick={() => setLinkedAssign(null)}
+                        style={{ background: "none", border: "none", color: "var(--text-faint)", cursor: "pointer", fontSize: "16px", lineHeight: 1 }}>×</button>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                      <input
+                        placeholder="Assignment title *"
+                        value={linkedAssign.title}
+                        onChange={e => setLinkedAssign(p => ({ ...p, title: e.target.value }))}
+                        style={{ padding: "9px 12px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: "13px", outline: "none" }}
+                      />
+                      <div style={{ display: "flex", gap: "10px" }}>
+                        <input
+                          type="date"
+                          value={linkedAssign.due_date}
+                          onChange={e => setLinkedAssign(p => ({ ...p, due_date: e.target.value }))}
+                          style={{ flex: 1, padding: "9px 12px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: "13px", outline: "none" }}
+                        />
+                        <div style={{ display: "flex", alignItems: "center", gap: "6px", flex: "0 0 auto" }}>
+                          <input
+                            type="number"
+                            min="1"
+                            value={linkedAssign.points}
+                            onChange={e => setLinkedAssign(p => ({ ...p, points: e.target.value }))}
+                            style={{ width: "72px", padding: "9px 12px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)", fontSize: "13px", outline: "none" }}
+                          />
+                          <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>pts</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {uploadError && (
-                <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px", padding: "12px 16px", color: "#dc2626", fontSize: "13px" }}>
+                <div style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.25)", borderRadius: "8px", padding: "12px 16px", color: "#ef4444", fontSize: "13px" }}>
                   {uploadError}
                 </div>
               )}
@@ -4199,545 +4950,3 @@ export default function ClassDetail() {
   );
 }
 
-// ── Editable comment content — shows edit/delete only for the comment's own author ──
-function CommentContent({ comment, isMine, onUpdate, onDelete }) {
-  const [editing, setEditing] = useState(false);
-  const [text, setText] = useState(comment.content);
-  const [busy, setBusy] = useState(false);
-
-  async function save() {
-    if (!text.trim()) return;
-    setBusy(true);
-    try {
-      const { data } = await API.put(`/classroom/comments/${comment.id}`, { content: text.trim() });
-      onUpdate(data);
-      setEditing(false);
-    } catch (err) { console.error(err); }
-    finally { setBusy(false); }
-  }
-
-  async function remove() {
-    if (!window.confirm("Delete this comment?")) return;
-    setBusy(true);
-    try {
-      await API.delete(`/classroom/comments/${comment.id}`);
-      onDelete();
-    } catch (err) { console.error(err); }
-    finally { setBusy(false); }
-  }
-
-  if (editing) {
-    return (
-      <div>
-        <textarea value={text} onChange={e => setText(e.target.value)} rows={2} autoFocus
-          style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "6px", padding: "6px 8px", fontSize: "13px", boxSizing: "border-box", resize: "vertical", fontFamily: "inherit" }} />
-        <div style={{ display: "flex", gap: "10px", marginTop: "4px" }}>
-          <button onClick={save} disabled={busy || !text.trim()} style={{ fontSize: "11px", fontWeight: 700, color: "#3B37CC", background: "none", border: "none", cursor: "pointer", padding: 0 }}>Save</button>
-          <button onClick={() => { setEditing(false); setText(comment.content); }} style={{ fontSize: "11px", color: "#9aa0a6", background: "none", border: "none", cursor: "pointer", padding: 0 }}>Cancel</button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <span>
-      {comment.content}
-      {isMine && (
-        <span style={{ marginLeft: "8px", whiteSpace: "nowrap" }}>
-          <button onClick={() => setEditing(true)} title="Edit" style={{ background: "none", border: "none", cursor: "pointer", fontSize: "11px", color: "#9aa0a6", padding: "0 2px" }}>✏️</button>
-          <button onClick={remove} disabled={busy} title="Delete" style={{ background: "none", border: "none", cursor: "pointer", fontSize: "11px", color: "#9aa0a6", padding: "0 2px" }}>🗑️</button>
-        </span>
-      )}
-    </span>
-  );
-}
-
-// ── Submission Comments (inline, for teacher's assignment detail) ──
-function SubmissionComments({ assignId, studentId, studentName, myName, myId }) {
-  const [comments, setComments] = useState([]);
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-
-  useEffect(() => {
-    if (!assignId) return;
-    API.get(`/classroom/assignments/${assignId}/comments?student=${studentId}`)
-      .then(r => setComments((r.data || []).filter(c => !c.target_student_id || c.target_student_id === studentId || c.author_id === studentId)))
-      .catch(() => {});
-  }, [assignId, studentId]);
-
-  async function send() {
-    if (!input.trim()) return;
-    setSending(true);
-    try {
-      const { data } = await API.post(`/classroom/assignments/${assignId}/comments`, {
-        content: input, target_student_id: studentId,
-      });
-      setComments(prev => [...prev, data]);
-      setInput("");
-    } catch (err) { console.error(err); }
-    finally { setSending(false); }
-  }
-
-  return (
-    <div style={{ borderTop: "1px solid var(--border)", paddingTop: "10px" }}>
-      <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-muted)", marginBottom: "8px", letterSpacing: "0.05em" }}>
-        🔒 PRIVATE COMMENT — {studentName}
-      </div>
-      <div style={{ maxHeight: "160px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "6px", marginBottom: "8px" }}>
-        {comments.length === 0
-          ? <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>No comments yet.</div>
-          : comments.map((c, i) => (
-            <div key={i} style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-              <span style={{ fontWeight: 700 }}>{c.author_name || (c.author_id === studentId ? studentName : myName)}:</span>{" "}
-              <CommentContent comment={c} isMine={c.author_id === myId}
-                onUpdate={updated => setComments(prev => prev.map(x => x.id === c.id ? updated : x))}
-                onDelete={() => setComments(prev => prev.filter(x => x.id !== c.id))} />
-            </div>
-          ))
-        }
-      </div>
-      <div style={{ display: "flex", gap: "6px" }}>
-        <input value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && send()}
-          placeholder="Add private comment..." style={{ flex: 1, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: "8px", fontSize: "12px" }} />
-        <button onClick={send} disabled={sending || !input.trim()}
-          style={{ background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px", padding: "6px 12px", fontSize: "12px", cursor: "pointer", fontWeight: 600 }}>
-          Send
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Stream Section Component ──
-function StreamSection({ icon, title, onMore, children, empty, emptyMsg }) {
-  return (
-    <div style={{ background: "var(--surface)", borderRadius: "12px", border: "1px solid var(--border)", overflow: "hidden" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 18px", borderBottom: "1px solid var(--surface-alt)", background: "#fafafa" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span style={{ fontSize: "18px" }}>{icon}</span>
-          <span style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)" }}>{title}</span>
-        </div>
-        <button onClick={onMore} style={{ fontSize: "12px", color: "#3B37CC", fontWeight: 600, background: "none", border: "none", cursor: "pointer" }}>
-          More »
-        </button>
-      </div>
-      <div style={{ padding: "6px 18px 10px" }}>
-        {empty
-          ? <div style={{ fontSize: "13px", color: "var(--text-faint)", padding: "12px 0" }}>{emptyMsg}</div>
-          : children
-        }
-      </div>
-    </div>
-  );
-}
-
-function StreamRow({ label, date, badge, badgeColor, onClick, actions }) {
-  return (
-    <div onClick={onClick} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid var(--surface-alt)", cursor: onClick ? "pointer" : "default", gap: "6px" }}
-      onMouseEnter={e => onClick && (e.currentTarget.style.background = "var(--surface-alt)")}
-      onMouseLeave={e => onClick && (e.currentTarget.style.background = "transparent")}>
-      <span style={{ fontSize: "13px", color: "var(--text-muted)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        · {label}
-      </span>
-      {actions}
-      {badge && <span style={{ fontSize: "11px", color: badgeColor || "var(--text-muted)", fontWeight: 600, flexShrink: 0 }}>{badge}</span>}
-      {date && !badge && <span style={{ fontSize: "11px", color: "var(--text-faint)", flexShrink: 0 }}>{date}</span>}
-    </div>
-  );
-}
-
-// ── Post Card Component ──
-function PostCard({ post, myName, isTeacher, onEdit, onDelete, expandedComments, setExpandedComments, commentInputs, setCommentInputs, submittingComment, handleComment }) {
-  const isMaterial = post.type === "material";
-  const commentCount = post.comments?.length || 0;
-  const showComments = expandedComments[post.id];
-
-  return (
-    <div style={postCard}>
-      {/* Author row */}
-      <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "14px" }}>
-        <div style={{ ...avatarSm, background: "#3B37CC", color: "#fff" }}>
-          {(post.author_name || "T")[0].toUpperCase()}
-        </div>
-        <div>
-          <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{post.author_name}</div>
-          <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>{formatDate(post.created_at)}</div>
-        </div>
-        {isMaterial && (
-          <span style={{ marginLeft: "auto", background: "var(--primary-tint)", color: "#3B37CC", fontSize: "11px", fontWeight: 700, padding: "3px 10px", borderRadius: "20px" }}>
-            📄 Material
-          </span>
-        )}
-        {isTeacher && !isMaterial && (
-          <div style={{ marginLeft: isMaterial ? "8px" : "auto", display: "flex", gap: "6px" }}>
-            <button onClick={() => onEdit(post)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "14px", color: "var(--text-faint)", padding: "2px 6px" }} title="Edit">✏️</button>
-            <button onClick={() => onDelete(post.id)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: "14px", color: "#ef4444", padding: "2px 6px" }} title="Delete">🗑️</button>
-          </div>
-        )}
-      </div>
-
-      {/* Content */}
-      <p style={{ fontSize: "14px", color: "var(--text-muted)", lineHeight: 1.6, margin: "0 0 12px" }}>
-        {post.content}
-      </p>
-
-      {/* Material card */}
-      {isMaterial && post.material_title && (
-        <div style={matPostCard}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{post.material_title}</div>
-              {post.material_instructions && (
-                <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px" }}>{post.material_instructions}</div>
-              )}
-            </div>
-            {post.material_file_url && (
-              <a href={`http://localhost:5001${post.material_file_url}`} target="_blank" rel="noopener noreferrer" style={dlBtn}>
-                ↓ Download
-              </a>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Comment toggle */}
-      <div style={{ borderTop: "1px solid var(--surface-alt)", marginTop: "12px", paddingTop: "10px" }}>
-        <button
-          onClick={() => setExpandedComments(e => ({ ...e, [post.id]: !e[post.id] }))}
-          style={commentToggle}
-        >
-          💬 {commentCount > 0 ? `${commentCount} comment${commentCount > 1 ? "s" : ""}` : "Add comment"}
-        </button>
-      </div>
-
-      {/* Comments section */}
-      {showComments && (
-        <div style={{ marginTop: "12px" }}>
-          {post.comments?.map(c => (
-            <div key={c.id} style={commentRow}>
-              <div style={commentAvatar}>{(c.author_name || "U")[0].toUpperCase()}</div>
-              <div style={commentBubble}>
-                <span style={{ fontWeight: 600, fontSize: "13px" }}>{c.author_name} </span>
-                <span style={{ fontSize: "13px", color: "var(--text-muted)" }}>{c.content}</span>
-                <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "2px" }}>{formatDate(c.created_at)}</div>
-              </div>
-            </div>
-          ))}
-
-          {/* Comment input */}
-          <div style={{ display: "flex", gap: "10px", marginTop: "10px", alignItems: "center" }}>
-            <div style={{ ...commentAvatar, background: "#3B37CC", color: "#fff" }}>
-              {myName[0].toUpperCase()}
-            </div>
-            <input
-              value={commentInputs[post.id] || ""}
-              onChange={e => setCommentInputs(c => ({ ...c, [post.id]: e.target.value }))}
-              onKeyDown={e => e.key === "Enter" && handleComment(post.id)}
-              placeholder="Write a comment..."
-              style={commentInput}
-            />
-            <button
-              onClick={() => handleComment(post.id)}
-              disabled={submittingComment[post.id] || !commentInputs[post.id]?.trim()}
-              style={sendBtn}
-            >
-              →
-            </button>
-          </div>
-        </div>
-      )}
-
-    </div>
-  );
-}
-
-function QuizView({ questions }) {
-  const [answers, setAnswers] = useState({});
-  const [submitted, setSubmitted] = useState(false);
-
-  const score = submitted
-    ? questions.filter((q, i) => answers[i] === q.answer).length
-    : 0;
-
-  return (
-    <div>
-      {questions.map((q, i) => (
-        <div key={i} style={{ marginBottom: "24px" }}>
-          <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)", marginBottom: "12px" }}>
-            Q{i + 1}. {q.question}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            {q.options.map((opt, j) => {
-              const letter = opt[0];
-              const isSelected = answers[i] === letter;
-              const isCorrect = letter === q.answer;
-              let bg = "#fff", border = "1px solid var(--border)", color = "var(--text-muted)";
-              if (submitted) {
-                if (isCorrect) { bg = "#f0fdf4"; border = "2px solid #22c55e"; color = "#15803d"; }
-                else if (isSelected) { bg = "#fef2f2"; border = "2px solid #ef4444"; color = "#dc2626"; }
-              } else if (isSelected) {
-                bg = "var(--primary-tint)"; border = "2px solid #3B37CC"; color = "#3B37CC";
-              }
-              return (
-                <div
-                  key={j}
-                  onClick={() => !submitted && setAnswers(a => ({ ...a, [i]: letter }))}
-                  style={{ padding: "10px 14px", borderRadius: "8px", background: bg, border, color, fontSize: "13px", cursor: submitted ? "default" : "pointer" }}
-                >
-                  {opt}
-                  {submitted && isCorrect && " ✓"}
-                  {submitted && isSelected && !isCorrect && " ✗"}
-                </div>
-              );
-            })}
-          </div>
-          {submitted && (
-            <div style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "8px", fontStyle: "italic" }}>
-              💡 {q.explanation}
-            </div>
-          )}
-        </div>
-      ))}
-      {!submitted ? (
-        <button
-          onClick={() => setSubmitted(true)}
-          disabled={Object.keys(answers).length < questions.length}
-          style={{ ...btnStyle, opacity: Object.keys(answers).length < questions.length ? 0.5 : 1 }}
-        >
-          Submit Quiz
-        </button>
-      ) : (
-        <div style={{ background: score === questions.length ? "#f0fdf4" : "var(--primary-tint)", borderRadius: "10px", padding: "16px", textAlign: "center" }}>
-          <div style={{ fontSize: "28px", fontWeight: 800, color: score === questions.length ? "#15803d" : "#3B37CC" }}>
-            {score}/{questions.length}
-          </div>
-          <div style={{ fontSize: "14px", color: "var(--text-muted)", marginTop: "4px" }}>
-            {score === questions.length ? "Perfect! 🎉" : score >= 2 ? "Good job! 👍" : "Keep studying! 📚"}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const btnStyle = { background: "#3B37CC", color: "#fff", border: "none", borderRadius: "10px", padding: "12px 24px", fontSize: "14px", fontWeight: 600, cursor: "pointer", width: "100%" };
-
-function formatDate(dateStr) {
-  if (!dateStr) return "";
-  return new Date(dateStr).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
-
-// ── Styles ──
-const layout = { display: "flex", minHeight: "100vh", background: "var(--bg)" };
-
-const topHeader = {
-  background: "var(--surface)", borderBottom: "1px solid var(--border)",
-  padding: "14px 28px", display: "flex", alignItems: "center",
-  justifyContent: "space-between", position: "sticky", top: 0, zIndex: 50,
-};
-
-const backBtn = {
-  background: "none", border: "none", cursor: "pointer",
-  fontSize: "18px", color: "var(--text-muted)", padding: "4px 8px",
-};
-
-const tabBtn = (active) => ({
-  padding: "8px 18px", borderRadius: "8px", border: "none",
-  fontSize: "14px", fontWeight: 600, cursor: "pointer",
-  background: active ? "#3B37CC" : "transparent",
-  color: active ? "#fff" : "var(--text-muted)",
-});
-
-const avatarSm = {
-  width: "36px", height: "36px", borderRadius: "50%",
-  background: "var(--border)", display: "flex", alignItems: "center",
-  justifyContent: "center", fontSize: "14px", fontWeight: 700, color: "var(--text-muted)",
-};
-
-const announceCard = {
-  background: "var(--surface)", border: "1px solid var(--border)",
-  borderRadius: "12px", padding: "16px 20px", marginBottom: "20px",
-};
-
-const announceTextarea = {
-  flex: 1, border: "none", outline: "none", fontSize: "14px",
-  color: "var(--text-muted)", resize: "none", background: "transparent",
-  fontFamily: "inherit", lineHeight: 1.6,
-};
-
-const postBtn = {
-  background: "#3B37CC", color: "#fff", border: "none",
-  borderRadius: "8px", padding: "8px 20px", fontSize: "13px",
-  fontWeight: 600, cursor: "pointer",
-};
-
-const postCard = {
-  background: "var(--surface)", border: "1px solid var(--border)",
-  borderRadius: "12px", padding: "20px", marginBottom: "16px",
-};
-
-const matPostCard = {
-  background: "var(--bg)", border: "1px solid var(--border)",
-  borderRadius: "10px", padding: "14px 16px", marginBottom: "4px",
-};
-
-const dlBtn = {
-  background: "#3B37CC", color: "#fff", textDecoration: "none",
-  borderRadius: "8px", padding: "7px 14px", fontSize: "13px",
-  fontWeight: 600, flexShrink: 0,
-};
-
-const commentToggle = {
-  background: "none", border: "none", cursor: "pointer",
-  fontSize: "13px", color: "var(--text-muted)", fontWeight: 500, padding: "4px 0",
-};
-
-const commentRow = {
-  display: "flex", gap: "10px", marginBottom: "10px", alignItems: "flex-start",
-};
-
-const commentAvatar = {
-  width: "28px", height: "28px", borderRadius: "50%", background: "var(--border)",
-  display: "flex", alignItems: "center", justifyContent: "center",
-  fontSize: "12px", fontWeight: 700, color: "var(--text-muted)", flexShrink: 0,
-};
-
-const commentBubble = {
-  background: "var(--surface-alt)", borderRadius: "12px", padding: "8px 12px",
-  fontSize: "13px", color: "var(--text-muted)", flex: 1,
-};
-
-const commentInput = {
-  flex: 1, padding: "8px 14px", borderRadius: "20px",
-  border: "1px solid var(--border)", fontSize: "13px", outline: "none",
-};
-
-const sendBtn = {
-  background: "#3B37CC", color: "#fff", border: "none",
-  borderRadius: "50%", width: "32px", height: "32px",
-  display: "flex", alignItems: "center", justifyContent: "center",
-  cursor: "pointer", fontSize: "16px", flexShrink: 0,
-};
-
-const aiCard = {
-  background: "linear-gradient(135deg, #3B37CC, #6366F1)",
-  borderRadius: "14px", padding: "20px",
-};
-
-const aiBtn = {
-  marginTop: "14px", background: "var(--surface)", color: "#3B37CC",
-  border: "none", borderRadius: "8px", padding: "8px 16px",
-  fontSize: "13px", fontWeight: 600, cursor: "pointer", width: "100%",
-};
-
-const sideCard = {
-  background: "var(--surface)", border: "1px solid var(--border)",
-  borderRadius: "14px", padding: "16px 20px",
-};
-
-const banner = {
-  background: "linear-gradient(135deg, #3B37CC, #6366F1)",
-  borderRadius: "14px", padding: "24px 28px",
-  display: "flex", justifyContent: "space-between",
-  alignItems: "center", marginBottom: "24px",
-};
-
-const newMatBtn = {
-  background: "var(--surface)", color: "#3B37CC", border: "none",
-  borderRadius: "8px", padding: "10px 20px", fontSize: "13px",
-  fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap",
-};
-
-const weekLabel = {
-  fontSize: "12px", fontWeight: 700, color: "var(--text-faint)",
-  textTransform: "uppercase", letterSpacing: "1px", padding: "14px 0 6px",
-};
-
-const matRow = {
-  display: "flex", justifyContent: "space-between", alignItems: "center",
-  padding: "14px 18px", background: "var(--surface)", border: "1px solid var(--border)",
-  borderRadius: "10px", marginBottom: "3px", cursor: "pointer",
-};
-
-const matIcon = {
-  width: "36px", height: "36px", borderRadius: "8px",
-  background: "var(--primary-tint)", display: "flex", alignItems: "center",
-  justifyContent: "center", fontSize: "16px", flexShrink: 0,
-};
-
-const fileChip = {
-  display: "flex", alignItems: "center", gap: "8px",
-  background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "8px",
-  padding: "8px 14px", fontSize: "13px", color: "var(--text-muted)",
-  textDecoration: "none", maxWidth: "100%", boxSizing: "border-box",
-};
-
-const fab = {
-  position: "fixed", bottom: "32px", right: "32px",
-  width: "56px", height: "56px", borderRadius: "50%",
-  background: "#3B37CC", color: "#fff", fontSize: "28px",
-  border: "none", cursor: "pointer",
-  boxShadow: "0 4px 16px rgba(59,55,204,0.4)",
-  display: "flex", alignItems: "center", justifyContent: "center",
-};
-
-const sectionHead = {
-  fontSize: "13px", fontWeight: 700, color: "#3B37CC",
-  textTransform: "uppercase", letterSpacing: "1px", margin: "0 0 12px",
-};
-
-const memberRow = {
-  display: "flex", alignItems: "center", gap: "12px",
-  padding: "12px 16px", background: "var(--surface)", borderRadius: "10px",
-  border: "1px solid var(--border)", marginBottom: "4px",
-};
-
-const memberAvatar = {
-  width: "40px", height: "40px", borderRadius: "50%",
-  background: "var(--border)", color: "var(--text-muted)", display: "flex",
-  alignItems: "center", justifyContent: "center",
-  fontSize: "16px", fontWeight: 700, flexShrink: 0,
-};
-
-const overlayStyle = {
-  position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)",
-  display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000,
-};
-
-const modalStyle = {
-  background: "var(--surface)", borderRadius: "16px", padding: "28px",
-  width: "420px", maxWidth: "92vw",
-};
-
-const btnPrimary = {
-  background: "#3B37CC", color: "#fff", padding: "11px 20px",
-  borderRadius: "10px", fontSize: "14px", fontWeight: 600,
-  border: "none", cursor: "pointer", width: "100%",
-};
-
-const btnOutline = {
-  background: "var(--surface)", color: "var(--text-muted)", padding: "11px 20px",
-  borderRadius: "10px", fontSize: "14px", fontWeight: 600,
-  border: "1px solid var(--border)", cursor: "pointer", width: "100%",
-};
-
-const lbl = { display: "block", fontSize: "13px", fontWeight: 600, color: "var(--text-muted)", marginBottom: "6px" };
-const inp = { width: "100%", padding: "10px 14px", borderRadius: "8px", border: "1px solid var(--border)", fontSize: "14px", outline: "none", boxSizing: "border-box" };
-
-const aiMentorPanel = {
-  background: "var(--surface)", border: "1px solid var(--border)",
-  borderRadius: "16px", padding: "20px",
-  position: "sticky", top: "80px",
-};
-
-const aiAvatarStyle = {
-  width: "44px", height: "44px", borderRadius: "12px",
-  background: "linear-gradient(135deg, #3B37CC, #6366F1)",
-  display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px",
-};
-
-const aiFeatureCard = {
-  borderRadius: "12px", padding: "14px 16px",
-  marginBottom: "10px", cursor: "pointer",
-  transition: "all 0.15s",
-};

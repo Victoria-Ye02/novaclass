@@ -3,6 +3,7 @@ const path = require("path");
 const pdfParse = require("pdf-parse/lib/pdf-parse.js");
 const mammoth = require("mammoth");
 const { completeText, transcribeAudio } = require("../../services/ai/groqText");
+const { extractImageContext } = require("../../services/ai/googleVision");
 
 // Extract text from any file via RAG server (handles OCR for image-based PDFs)
 async function extractViaRag(filePath, filename) {
@@ -35,31 +36,25 @@ async function extractViaRag(filePath, filename) {
   }
 }
 
-// Analyze image using Groq vision (llama-3.2-11b-vision-preview)
-async function analyzeImageWithGroq(filePath, question) {
+// Google Vision reads the image's text/labels/objects, then the text model
+// answers the question from that context — keeps image understanding on the
+// same standardized text model as every other file type instead of a
+// separate vision-model integration.
+async function analyzeImage(filePath, question) {
   const imageBuffer = fs.readFileSync(filePath);
-  const base64Image = imageBuffer.toString("base64");
-  const ext = path.extname(filePath).toLowerCase().replace(".", "");
-  const mimeMap = { jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", gif: "image/gif", webp: "image/webp" };
-  const mimeType = mimeMap[ext] || "image/jpeg";
+  const context = await extractImageContext(imageBuffer);
 
-  const Groq = require("groq-sdk");
-  const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-
-  const response = await groq.chat.completions.create({
-    model: "meta-llama/llama-4-scout-17b-16e-instruct",
+  const chat = await completeText({
     messages: [
+      { role: "system", content: "You are a helpful study assistant. Use the extracted image text, labels, and objects to answer the student's question about the image." },
       {
         role: "user",
-        content: [
-          { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } },
-          { type: "text", text: question || "Describe this image in detail. If it contains text or study material, explain what it shows." },
-        ],
+        content: `Image text:\n${context.text || "(none)"}\n\nLabels: ${context.labels.join(", ") || "(none)"}\n\nObjects: ${context.objects.join(", ") || "(none)"}\n\n${question || "Describe this image in detail."}`,
       },
     ],
-    max_tokens: 1024,
+    maxTokens: 1024,
   });
-  return response.choices[0].message.content;
+  return chat.choices[0].message.content;
 }
 
 exports.analyzeFile = async (req, res) => {
@@ -75,9 +70,9 @@ exports.analyzeFile = async (req, res) => {
   try {
     let result;
 
-    // ── IMAGE ── (Groq Vision — no Google credentials needed)
+    // ── IMAGE ──
     if (mime.startsWith("image/")) {
-      const answer = await analyzeImageWithGroq(filePath, question);
+      const answer = await analyzeImage(filePath, question);
       result = { type: "image", answer };
     }
 

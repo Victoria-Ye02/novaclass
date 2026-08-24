@@ -224,7 +224,7 @@ export default function KMate() {
 function QuizMode() {
   const [step, setStep]       = useState("settings"); // settings | loading | questions | results
   const [topic, setTopic]     = useState("grammar");
-  const [count, setCount]     = useState(5);
+  const [count, setCount]     = useState(null);
   const [lang, setLang]       = useState("English");
   const [questions, setQs]    = useState([]);
   const [answers, setAnswers] = useState([]);
@@ -274,7 +274,7 @@ function QuizMode() {
       </div>
       <label style={s.qLabel}>Number of Questions</label>
       <div style={s.optRow}>
-        {[5,10].map(n => (
+        {[3,5,10].map(n => (
           <button key={n} style={{ ...s.optBtn, ...(count===n ? s.optActive : {}) }} onClick={() => setCount(n)}>
             {n} Questions
           </button>
@@ -288,7 +288,7 @@ function QuizMode() {
           </button>
         ))}
       </div>
-      <button style={s.startBtn} onClick={startQuiz}><Icon name="rocket" size={16} style={{ marginRight: "6px" }} />Start Quiz</button>
+      <button style={s.startBtn} disabled={!count} onClick={startQuiz}><Icon name="rocket" size={16} style={{ marginRight: "6px" }} />Start Quiz</button>
     </div>
   );
 
@@ -310,7 +310,7 @@ function QuizMode() {
         {current < questions.length-1
           ? <button style={{ ...s.navBtn, ...s.navBtnPrimary }} disabled={!answers[current]} onClick={() => setCurrent(c => c+1)}>Next →</button>
           : <button style={{ ...s.navBtn, ...s.navBtnGreen }} disabled={!answers[current]} onClick={submitQuiz}>
-              <Icon name="checkmark-yes" size={14} style={{ marginRight: "4px" }} />Submit Quiz
+              <Icon name="checkmark" size={14} style={{ marginRight: "4px" }} />Submit Quiz
             </button>
         }
       </div>

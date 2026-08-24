@@ -3,6 +3,9 @@ import { Document, Page, pdfjs } from "react-pdf";
 import PdfHighlightOverlay from "./PdfHighlightOverlay";
 import PdfThumbnailSidebar from "./PdfThumbnailSidebar";
 import Icon from "./Icon";
+import { useLang } from "../LanguageContext";
+import API from "../services/api";
+import "react-pdf/dist/Page/TextLayer.css";
 import "./PdfLessonViewer.css";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
@@ -57,6 +60,12 @@ export default function PdfLessonViewer({
   const [retryKey, setRetryKey] = useState(0);
   const [thumbnailsOpen, setThumbnailsOpen] = useState(true);
   const [pdfDocument, setPdfDocument] = useState(null);
+  const [textSelection, setTextSelection] = useState(null); // null | { text, rect }
+  const [translation, setTranslation] = useState(null); // null | { loading, text, error }
+  const [activateHighlightId, setActivateHighlightId] = useState(null);
+  const { lang } = useLang();
+  const pageSurfaceRef = useRef(null);
+  const wheelCooldownRef = useRef(false);
 
   const savedPages = useMemo(
     () => [...new Set(bookmarks)].sort((a, b) => a - b),
@@ -161,12 +170,78 @@ export default function PdfLessonViewer({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [changeZoom, currentPage, goToPage, resetZoom, savedPagesOpen]);
 
+  // Trackpad two-finger swipes turn pages. Without this, a horizontal swipe
+  // over the page falls straight through to the browser's native
+  // swipe-to-go-back/forward gesture instead — every attempted page turn
+  // silently pops a real history entry, so by the time the reader actually
+  // means to go back, history has already been walked back several steps
+  // and "back" appears to jump far past the classroom page it should land on.
+  // { passive: false } is required for preventDefault() to actually suppress
+  // that native gesture (React's own onWheel prop can't opt out of passive).
+  useEffect(() => {
+    const el = pageSurfaceRef.current;
+    if (!el) return;
+
+    function onWheel(event) {
+      const { deltaX, deltaY } = event;
+      if (Math.abs(deltaX) <= Math.abs(deltaY) || Math.abs(deltaX) < 12) return;
+      event.preventDefault();
+      if (wheelCooldownRef.current) return;
+      wheelCooldownRef.current = true;
+      setTimeout(() => { wheelCooldownRef.current = false; }, 350);
+      goToPage(currentPage + (deltaX > 0 ? 1 : -1));
+    }
+
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [currentPage, goToPage]);
+
   function commitPageInput() {
     goToPage(pageInput);
   }
 
   function onBackgroundClick(event) {
     if (event.target === event.currentTarget) onDismissEmptySpace?.();
+  }
+
+  function onPageMouseUp(event) {
+    const selection = window.getSelection();
+    const text = selection?.toString().trim();
+    if (!text || selection.rangeCount === 0) {
+      setTextSelection(null);
+      // Not a drag-selection — check whether this was a plain click on a
+      // highlighted word. The highlight regions themselves are
+      // pointer-events: none (so they never steal a text-selection drag),
+      // so a click here always lands on the text layer; hit-test it against
+      // this page's highlight rects to still open that highlight's popover.
+      const surface = pageSurfaceRef.current;
+      if (surface) {
+        const surfaceRect = surface.getBoundingClientRect();
+        const fx = (event.clientX - surfaceRect.left) / surfaceRect.width;
+        const fy = (event.clientY - surfaceRect.top) / surfaceRect.height;
+        const hit = currentPageHighlights.find((highlight) =>
+          (highlight.rects || []).some(
+            (rect) => fx >= rect.x && fx <= rect.x + rect.width && fy >= rect.y && fy <= rect.y + rect.height
+          )
+        );
+        if (hit) setActivateHighlightId(hit.id);
+      }
+      return;
+    }
+    const rect = selection.getRangeAt(0).getBoundingClientRect();
+    setTextSelection({ text, rect });
+  }
+
+  async function translateSelection() {
+    if (!textSelection) return;
+    const { text } = textSelection;
+    setTranslation({ loading: true, text: "", error: null });
+    try {
+      const { data } = await API.post("/ai/translate", { text, targetLanguage: lang });
+      setTranslation({ loading: false, text: data.translation, error: null });
+    } catch (err) {
+      setTranslation({ loading: false, text: "", error: err.response?.data?.error || "Translation failed." });
+    }
   }
 
   return (
@@ -323,9 +398,11 @@ export default function PdfLessonViewer({
           </div>
         ) : (
           <div
+            ref={pageSurfaceRef}
             className="pdf-page-surface"
             data-testid="pdf-page-surface"
             onClick={(event) => event.stopPropagation()}
+            onMouseUp={onPageMouseUp}
           >
             <Document
               key={retryKey}
@@ -338,17 +415,60 @@ export default function PdfLessonViewer({
                 pageNumber={currentPage}
                 width={renderedPageWidth}
                 renderAnnotationLayer={false}
-                renderTextLayer={false}
+                renderTextLayer
                 loading={<div className="pdf-page-skeleton" style={{ width: renderedPageWidth }} />}
               />
             </Document>
             <PdfHighlightOverlay
               highlights={currentPageHighlights}
               visible={highlightsVisible}
+              activateId={activateHighlightId}
             />
           </div>
         )}
         </div>
+        {textSelection && (
+          <button
+            type="button"
+            className="pdf-translate-trigger"
+            aria-label="Translate selected text"
+            style={{
+              position: "fixed",
+              top: textSelection.rect.top - 34,
+              left: textSelection.rect.left + textSelection.rect.width / 2,
+              transform: "translateX(-50%)",
+            }}
+            onClick={() => { translateSelection(); setTextSelection(null); }}
+          >
+            <Icon name="translation" size={14} alt="" /> Translate selected text
+          </button>
+        )}
+        {translation && (
+          <div
+            role="dialog"
+            aria-label="PDF translation"
+            className="pdf-translation-dialog"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="pdf-translation-dialog-header">
+              <strong>{lang === "my" ? "ဘာသာပြန်ချက်" : "Translation"}</strong>
+              <button
+                type="button"
+                aria-label="Close translation"
+                onClick={() => setTranslation(null)}
+              >
+                ×
+              </button>
+            </div>
+            {translation.loading ? (
+              <div className="pdf-translation-loading">{lang === "my" ? "ဘာသာပြန်နေသည်…" : "Translating…"}</div>
+            ) : translation.error ? (
+              <div className="pdf-translation-error">{translation.error}</div>
+            ) : (
+              <p className="pdf-translation-text">{translation.text}</p>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="pdf-floating-actions" onClick={(event) => event.stopPropagation()}>

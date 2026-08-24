@@ -1,4 +1,5 @@
 const { completeText } = require("../../services/ai/groqText");
+const { translateText } = require("../../services/ai/translation");
 
 // POST /api/ai/summarize  { text }
 exports.summarize = async (req, res) => {
@@ -54,5 +55,22 @@ exports.chat = async (req, res) => {
     res.json({ response });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /api/ai/translate { text, targetLanguage }
+exports.translate = async (req, res) => {
+  try {
+    const translation = await translateText({
+      text: req.body.text,
+      targetLanguage: req.body.targetLanguage,
+      completeText,
+    });
+    res.json({ translation });
+  } catch (err) {
+    const invalidInput = /text is required|targetLanguage must be my or en/.test(err.message);
+    res.status(invalidInput ? 400 : 502).json({
+      error: invalidInput ? err.message : "Translation is temporarily unavailable",
+    });
   }
 };

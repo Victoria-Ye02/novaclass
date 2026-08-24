@@ -5,10 +5,18 @@ import { useMaterialHighlights } from "../../hooks/useMaterialHighlights";
 import MaterialPreview from "./MaterialPreview";
 
 const navigate = vi.fn();
+const { selectedLanguage, currentParams } = vi.hoisted(() => ({
+  selectedLanguage: { value: "en" },
+  currentParams: { id: "4", materialId: "9" },
+}));
 
 vi.mock("react-router-dom", () => ({
   useNavigate: () => navigate,
-  useParams: () => ({ id: "4", materialId: "9" }),
+  useParams: () => currentParams,
+}));
+
+vi.mock("../../LanguageContext", () => ({
+  useLang: () => ({ lang: selectedLanguage.value }),
 }));
 
 vi.mock("../../services/api", () => ({
@@ -65,6 +73,8 @@ describe("MaterialPreview PDF integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     capturedOnPageChangeRefs.length = 0;
+    currentParams.id = "4";
+    currentParams.materialId = "9";
     vi.stubGlobal("localStorage", {
       getItem: vi.fn((key) => key === "nova_token" ? "test-token" : null),
       setItem: vi.fn(),
@@ -187,6 +197,52 @@ describe("MaterialPreview PDF integration", () => {
     ));
     const [, body] = API.post.mock.calls[0];
     expect(body.level).toBeUndefined();
+  });
+
+  it("sends the Settings-selected language to the AI chat instead of always English", async () => {
+    selectedLanguage.value = "my";
+    try {
+      API.post.mockResolvedValue({ data: { reply: "မိုက်တိုကွန်ဒရီယာ..." } });
+      render(<MaterialPreview />);
+      await screen.findByTestId("controlled-pdf-viewer");
+
+      fireEvent.click(screen.getByLabelText("Open AI chat"));
+      const input = await screen.findByPlaceholderText("Ask about this lesson…");
+      fireEvent.change(input, { target: { value: "explain this page" } });
+      fireEvent.click(screen.getByLabelText("Send message"));
+
+      await waitFor(() => expect(API.post).toHaveBeenCalledWith(
+        "/classroom/materials/9/ai",
+        expect.objectContaining({ lang: "my" })
+      ));
+    } finally {
+      selectedLanguage.value = "en";
+    }
+  });
+
+  it("resets the AI chat panel when switching to a different material, instead of leaking the previous material's conversation into it", async () => {
+    API.post.mockResolvedValueOnce({ data: { reply: "This lesson covers the POS system's Java/JDBC implementation." } });
+
+    const { rerender } = render(<MaterialPreview />);
+    await screen.findByTestId("controlled-pdf-viewer");
+
+    fireEvent.click(screen.getByLabelText("Open AI chat"));
+    const input = await screen.findByPlaceholderText("Ask about this lesson…");
+    fireEvent.change(input, { target: { value: "explain this lesson" } });
+    fireEvent.click(screen.getByLabelText("Send message"));
+
+    await screen.findByText("This lesson covers the POS system's Java/JDBC implementation.");
+
+    // Switch to a different material — same overlay/route shape, just a new
+    // materialId, the way clicking to another lesson in the same session does.
+    currentParams.materialId = "12";
+    API.get.mockResolvedValue({ data: { ...pdfMaterial(), id: 12, title: "Grammar: Superlatives" } });
+    rerender(<MaterialPreview />);
+    await screen.findByTestId("controlled-pdf-viewer");
+
+    expect(screen.queryByText("This lesson covers the POS system's Java/JDBC implementation.")).toBeNull();
+    expect(screen.queryByText("explain this lesson")).toBeNull();
+    expect(screen.getByText("👋 Hello! I'm your AI study assistant. Ask me anything about this lesson.")).toBeTruthy();
   });
 
   it("passes a referentially stable onPageChange callback across re-renders (regression: an inline callback here previously caused an infinite render loop)", async () => {

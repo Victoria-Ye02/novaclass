@@ -60,7 +60,7 @@ export default function AdminDashboard() {
           <div style={{ marginBottom: "28px", textAlign: "center" }}>
             <div style={{ fontSize: "32px", marginBottom: "12px" }}>📊</div>
             <div style={{ fontSize: "20px", fontWeight: 800, color: "#fff" }}>
-              <span style={{ color: "#818cf8" }}>Nova</span> Class
+              <span style={{ color: "var(--primary-light)" }}>Nova</span> Class
             </div>
             <div style={{ fontSize: "13px", color: "#6b7280", marginTop: "4px" }}>Admin Dashboard</div>
           </div>
@@ -76,7 +76,7 @@ export default function AdminDashboard() {
             />
             {authError && <div style={{ fontSize: "12px", color: "#ef4444", marginBottom: "14px" }}>{authError}</div>}
             <button type="submit" disabled={loading || !input.trim()}
-              style={{ width: "100%", padding: "11px", borderRadius: "8px", background: loading ? "#374151" : "#3B37CC", color: "#fff", border: "none", fontSize: "14px", fontWeight: 700, cursor: loading ? "not-allowed" : "pointer" }}>
+              style={{ width: "100%", padding: "11px", borderRadius: "8px", background: loading ? "#374151" : "var(--primary)", color: "#fff", border: "none", fontSize: "14px", fontWeight: 700, cursor: loading ? "not-allowed" : "pointer" }}>
               {loading ? "Checking..." : "Enter Dashboard"}
             </button>
           </form>
@@ -96,7 +96,7 @@ export default function AdminDashboard() {
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
           <div style={{ width: "1px", height: "20px", background: "#374151" }} />
           <span style={{ fontSize: "16px", fontWeight: 800, letterSpacing: "-0.3px" }}>
-            <span style={{ color: "#818cf8" }}>Nova</span> Class
+            <span style={{ color: "var(--primary-light)" }}>Nova</span> Class
           </span>
           <span style={{ fontSize: "12px", color: "#6b7280", background: "#374151", padding: "2px 8px", borderRadius: "6px" }}>Admin Dashboard</span>
         </div>
@@ -123,9 +123,9 @@ export default function AdminDashboard() {
             <div style={{ marginBottom: "8px" }}>
               <div style={{ fontSize: "11px", fontWeight: 700, color: "#6b7280", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "12px" }}>Overview</div>
               <div style={{ display: "flex", gap: "14px", flexWrap: "wrap" }}>
-                <StatCard icon="👥" label="Total Users" value={u?.total} sub={`+${u?.new_this_week ?? 0} this week`} color="#3B37CC" />
+                <StatCard icon="👥" label="Total Users" value={u?.total} sub={`+${u?.new_this_week ?? 0} this week`} color="var(--primary)" />
                 <StatCard icon="🏫" label="Classes" value={c?.total_classes} color="#0f766e" />
-                <StatCard icon="📄" label="Materials" value={c?.total_materials} sub={`+${c?.materials_this_week ?? 0} this week`} color="#7c3aed" />
+                <StatCard icon="📄" label="Materials" value={c?.total_materials} sub={`+${c?.materials_this_week ?? 0} this week`} color="var(--primary)" />
                 <StatCard icon="📝" label="Assignments" value={c?.total_assignments} color="#b45309" />
                 <StatCard icon="✅" label="Submissions" value={c?.total_submissions} sub={`${c?.graded_submissions ?? 0} graded`} color="#137333" />
               </div>
@@ -141,7 +141,7 @@ export default function AdminDashboard() {
                 {/* Role breakdown */}
                 <div style={{ background: "#fff", borderRadius: "12px", border: "1px solid #e5e7eb", padding: "16px 20px", marginBottom: "14px", display: "flex", gap: "24px" }}>
                   <div style={{ textAlign: "center" }}>
-                    <div style={{ fontSize: "32px", fontWeight: 800, color: "#3B37CC" }}>{u?.teachers ?? 0}</div>
+                    <div style={{ fontSize: "32px", fontWeight: 800, color: "var(--primary)" }}>{u?.teachers ?? 0}</div>
                     <div style={{ fontSize: "12px", color: "#6b7280", fontWeight: 600 }}>Teachers</div>
                   </div>
                   <div style={{ width: "1px", background: "#f3f4f6" }} />
@@ -155,7 +155,7 @@ export default function AdminDashboard() {
                     <div style={{ width: "100%", height: "12px", background: "#f3f4f6", borderRadius: "6px", overflow: "hidden" }}>
                       <div style={{
                         width: "100%",
-                        height: "100%", background: "#3B37CC", borderRadius: "6px",
+                        height: "100%", background: "var(--primary)", borderRadius: "6px",
                         transform: `scaleX(${u?.total ? u.teachers / u.total : 0})`,
                         transformOrigin: "left",
                         transition: "transform 0.6s ease"
@@ -182,7 +182,7 @@ export default function AdminDashboard() {
                         <tr key={u.id} style={{ borderTop: i === 0 ? "none" : "1px solid #f3f4f6" }}>
                           <td style={{ padding: "10px 20px" }}>
                             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                              <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: u.role === "teacher" ? "#ede9fe" : "#e0f2fe", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", fontWeight: 700, color: u.role === "teacher" ? "#7c3aed" : "#0369a1", flexShrink: 0 }}>
+                              <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: u.role === "teacher" ? "var(--primary-tint)" : "#e0f2fe", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", fontWeight: 700, color: u.role === "teacher" ? "var(--primary)" : "#0369a1", flexShrink: 0 }}>
                                 {u.name?.[0]?.toUpperCase()}
                               </div>
                               <div>
@@ -194,8 +194,8 @@ export default function AdminDashboard() {
                           <td style={{ padding: "10px 12px" }}>
                             <Badge
                               text={u.role}
-                              color={u.role === "teacher" ? "#7c3aed" : "#0369a1"}
-                              bg={u.role === "teacher" ? "#ede9fe" : "#e0f2fe"}
+                              color={u.role === "teacher" ? "var(--primary)" : "#0369a1"}
+                              bg={u.role === "teacher" ? "var(--primary-tint)" : "#e0f2fe"}
                             />
                           </td>
                           <td style={{ padding: "10px 20px 10px 12px", textAlign: "right", color: "#6b7280", fontSize: "12px" }}>
@@ -230,7 +230,7 @@ export default function AdminDashboard() {
                             <div style={{ fontSize: "11px", color: "#9ca3af" }}>{cl.subject}</div>
                           </td>
                           <td style={{ padding: "12px 8px", textAlign: "center", fontWeight: 700, color: "#374151" }}>{cl.student_count}</td>
-                          <td style={{ padding: "12px 8px", textAlign: "center", fontWeight: 700, color: "#7c3aed" }}>{cl.material_count}</td>
+                          <td style={{ padding: "12px 8px", textAlign: "center", fontWeight: 700, color: "var(--primary)" }}>{cl.material_count}</td>
                           <td style={{ padding: "12px 8px", textAlign: "center", fontWeight: 700, color: "#b45309" }}>{cl.assignment_count}</td>
                           <td style={{ padding: "12px 20px 12px 8px", textAlign: "center", fontWeight: 700, color: "#137333" }}>{cl.submission_count}</td>
                         </tr>
@@ -252,9 +252,9 @@ export default function AdminDashboard() {
               <div style={{ fontSize: "11px", fontWeight: 700, color: "#6b7280", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: "12px" }}>AI Feature Usage</div>
               <div style={{ display: "flex", gap: "14px", flexWrap: "wrap" }}>
                 {[
-                  { icon: "💬", label: "AI Chat (Study Mentor)", value: ai?.ai_chats, color: "#3B37CC", bg: "#ede9fe" },
+                  { icon: "💬", label: "AI Chat (Study Mentor)", value: ai?.ai_chats, color: "var(--primary)", bg: "var(--primary-tint)" },
                   { icon: "📋", label: "Auto Summaries", value: ai?.ai_summaries, color: "#0f766e", bg: "#d1fae5" },
-                  { icon: "🖊️", label: "PDF Highlights", value: ai?.ai_highlights, color: "#7c3aed", bg: "#ede9fe" },
+                  { icon: "🖊️", label: "PDF Highlights", value: ai?.ai_highlights, color: "var(--primary)", bg: "var(--primary-tint)" },
                   { icon: "🔍", label: "Highlight Analyses", value: ai?.ai_highlight_analyses, color: "#b45309", bg: "#fef3c7" },
                   { icon: "🤖", label: "K_MATE Sessions", value: ai?.kmate_sessions, color: "#0369a1", bg: "#e0f2fe" },
                 ].map(f => (

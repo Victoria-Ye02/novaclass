@@ -1,18 +1,43 @@
 const pool = require("../../config/db");
 const { completeText } = require("../../services/ai/groqText");
 
+function getDayDiff(dueDateStr) {
+  if (!dueDateStr) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dueDate = new Date(dueDateStr);
+  dueDate.setHours(0, 0, 0, 0);
+  const diffTime = dueDate - today;
+  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+}
+
+function formatDueDate(dueDateStr) {
+  if (!dueDateStr) return "";
+  const dayDiff = getDayDiff(dueDateStr);
+  if (dayDiff < 0) return `${Math.abs(dayDiff)} days overdue`;
+  if (dayDiff === 0) return "Due today";
+  if (dayDiff === 1) return "Due tomorrow";
+  return `D-${dayDiff}`;
+}
+
 function fallbackTask(candidate) {
   if (candidate.kind === "student-assignment") {
     return {
       title: `Complete ${candidate.title}`,
       reason: `Upcoming assignment in ${candidate.className}`,
-      link: `/classroom/${candidate.classId}`,
+      dueDate: candidate.dueDate || null,
+      dueLabel: formatDueDate(candidate.dueDate),
+      isOverdue: candidate.dueDate ? getDayDiff(candidate.dueDate) < 0 : false,
+      link: `/classroom/${candidate.classId}?tab=classwork&assign=${candidate.assignId}`,
     };
   }
   return {
     title: `Grade ${candidate.count} submission${candidate.count === 1 ? "" : "s"}`,
     reason: `Student work is waiting in ${candidate.className}`,
-    link: `/classroom/${candidate.classId}`,
+    dueDate: null,
+    dueLabel: "",
+    isOverdue: false,
+    link: `/classroom/${candidate.classId}?tab=classwork`,
   };
 }
 
@@ -21,11 +46,20 @@ function refineTasks(candidates, aiTasks) {
   return (aiTasks || []).slice(0, 3).flatMap(task => {
     const candidate = byId.get(task.id);
     if (!candidate || !task.title || !task.reason) return [];
-    return [{ title: String(task.title), reason: String(task.reason), link: `/classroom/${candidate.classId}` }];
+    return [{
+      title: String(task.title),
+      reason: String(task.reason),
+      dueDate: candidate.dueDate || null,
+      dueLabel: formatDueDate(candidate.dueDate),
+      isOverdue: candidate.dueDate ? getDayDiff(candidate.dueDate) < 0 : false,
+      link: candidate.kind === "student-assignment"
+        ? `/classroom/${candidate.classId}?tab=classwork&assign=${candidate.assignId}`
+        : `/classroom/${candidate.classId}?tab=classwork`,
+    }];
   });
 }
 
-async function createTodayPlans(studentCandidates, teacherCandidates) {
+async function createTodayPlans(studentCandidates, teacherCandidates, language = "en") {
   const fallback = {
     studentPlan: studentCandidates.slice(0, 3).map(fallbackTask),
     teacherPlan: teacherCandidates.slice(0, 3).map(fallbackTask),
@@ -33,18 +67,26 @@ async function createTodayPlans(studentCandidates, teacherCandidates) {
   if (!studentCandidates.length && !teacherCandidates.length) return fallback;
 
   try {
+    const languageInstruction =
+      language === "my" ? "Rewrite in Burmese (မြန်မာ)." :
+      language === "en" ? "Rewrite in English." :
+      "Rewrite in the user's language.";
+
     const completion = await completeText({
       maxTokens: 700,
       responseFormat: { type: "json_object" },
       messages: [
-        { role: "system", content: "You are a classroom planning assistant. Rewrite only the provided tasks into concise, helpful titles and reasons. Return JSON only: {\"student\":[{\"id\":\"...\",\"title\":\"...\",\"reason\":\"...\"}],\"teacher\":[{\"id\":\"...\",\"title\":\"...\",\"reason\":\"...\"}]}. Never invent IDs or tasks." },
+        { role: "system", content: `You are a classroom planning assistant. Rewrite only the provided tasks into concise, helpful titles and reasons. ${languageInstruction} Return JSON only: {\"student\":[{\"id\":\"...\",\"title\":\"...\",\"reason\":\"...\"}],\"teacher\":[{\"id\":\"...\",\"title\":\"...\",\"reason\":\"...\"}]}. Never invent IDs or tasks.` },
         { role: "user", content: JSON.stringify({ student: studentCandidates, teacher: teacherCandidates }) },
       ],
     });
     const parsed = JSON.parse(completion.choices[0].message.content);
+    const studentPlan = refineTasks(studentCandidates, parsed.student);
+    const teacherPlan = refineTasks(teacherCandidates, parsed.teacher);
+    const sortByOverdue = (tasks) => tasks.sort((a, b) => (b.isOverdue ? 1 : 0) - (a.isOverdue ? 1 : 0));
     return {
-      studentPlan: refineTasks(studentCandidates, parsed.student) || fallback.studentPlan,
-      teacherPlan: refineTasks(teacherCandidates, parsed.teacher) || fallback.teacherPlan,
+      studentPlan: sortByOverdue(studentPlan.length > 0 ? studentPlan : fallback.studentPlan),
+      teacherPlan: sortByOverdue(teacherPlan.length > 0 ? teacherPlan : fallback.teacherPlan),
     };
   } catch {
     return fallback;
@@ -103,6 +145,7 @@ exports.summary = async (req, res) => {
 // GET /api/progress/today-plan
 exports.todayPlan = async (req, res) => {
   const userId = req.user.id;
+  const language = req.query.lang || req.headers['x-language'] || 'en';
   try {
     const [studentAssignments] = await pool.query(
       `/* student_plan_assignments */
@@ -129,13 +172,13 @@ exports.todayPlan = async (req, res) => {
 
     const studentCandidates = studentAssignments.map(row => ({
       id: `student-assignment-${row.id}`, kind: "student-assignment", title: row.title,
-      classId: row.class_id, className: row.class_name, dueDate: row.due_date,
+      classId: row.class_id, className: row.class_name, dueDate: row.due_date, assignId: row.id,
     }));
     const teacherCandidates = teacherSubmissions.map(row => ({
       id: `teacher-grading-${row.class_id}`, kind: "teacher-grading", classId: row.class_id,
       className: row.class_name, count: Number(row.count),
     }));
-    res.json(await createTodayPlans(studentCandidates, teacherCandidates));
+    res.json(await createTodayPlans(studentCandidates, teacherCandidates, language));
   } catch (err) {
     res.status(500).json({ error: "Unable to build today's plan" });
   }

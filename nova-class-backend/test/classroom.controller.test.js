@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("path");
 
 const pool = require("../config/db");
 const originalQuery = pool.query;
@@ -100,6 +101,7 @@ test("assistant-mode chat sends a plain-assistant system prompt with the current
         summary_detailed: null,
       }]];
     }
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -133,6 +135,53 @@ test("assistant-mode chat sends a plain-assistant system prompt with the current
   assert.doesNotMatch(systemMessage, /Level Up AI Study Tutor/i);
 });
 
+test("assistant-mode chat tells the model to answer in whatever language the student's question is in, not a fixed Settings language", async (t) => {
+  global.fetch = async () => { throw new Error("RAG unavailable in test"); };
+  pool.query = async (sql) => {
+    if (sql.includes("FROM materials")) {
+      return [[{
+        title: "JDBC와 응용 프로젝트 I",
+        instructions: null,
+        text_content: "2026-1학기 | JAVA프로그래밍실무 2th week JDBC와응용프로젝트I",
+        summary_paragraph: null,
+        summary_detailed: null,
+      }]];
+    }
+    if (sql.includes("material_chat_cache")) return [[]];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  let capturedMessages;
+  const controller = loadController(t, {
+    completeText: async (request) => {
+      capturedMessages = request.messages;
+      return { choices: [{ message: { content: "..." } }] };
+    },
+  });
+
+  // Settings language is "en", but the student actually typed their
+  // question in Korean — the reply should follow the question, not Settings.
+  const { req, res } = httpDouble({
+    params: { materialId: "9" },
+    body: {
+      action: "chat",
+      mode: "assistant",
+      message: "이 페이지는 뭐에 관한 거야?",
+      history: [],
+      currentPage: 2,
+      totalPages: 41,
+      lang: "en",
+    },
+  });
+
+  await controller.materialAI(req, res);
+
+  assert.equal(res.statusCode, 200);
+  const systemMessage = capturedMessages.find((m) => m.role === "system").content;
+  assert.match(systemMessage, /detect the language/i);
+  assert.doesNotMatch(systemMessage, /respond in english only/i);
+});
+
 test("assistant-mode chat instructs honesty when almost no text was extracted for the document", async (t) => {
   global.fetch = async () => { throw new Error("RAG unavailable in test"); };
   pool.query = async (sql) => {
@@ -147,6 +196,7 @@ test("assistant-mode chat instructs honesty when almost no text was extracted fo
         summary_detailed: null,
       }]];
     }
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -200,6 +250,7 @@ test("assistant-mode chat gives the model the exact text of the page the student
         summary_detailed: null,
       }]];
     }
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -243,6 +294,7 @@ test("assistant-mode chat honestly flags only the current page as unreadable whe
         summary_detailed: null,
       }]];
     }
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -289,6 +341,7 @@ test("assistant-mode chat OCRs a page whose embedded text is unreadable and cach
       }]];
     }
     if (sql.startsWith("UPDATE materials")) return [{ affectedRows: 1 }];
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -330,6 +383,62 @@ test("assistant-mode chat OCRs a page whose embedded text is unreadable and cach
   assert.equal(update.params[1], "9");
 });
 
+test("assistant-mode chat caches an OCR'd page even when that page never had a marker at all, not just when it had an empty one", async (t) => {
+  // Some pages are dropped entirely from text_content at extraction time
+  // (pure-image pages that produce zero text items) rather than getting an
+  // empty marker — e.g. only page 2 exists here, page 1 is missing outright.
+  // The OCR cache-write must still be able to insert page 1 into the marked
+  // text, not silently no-op because there was nothing to "replace".
+  global.fetch = async () => { throw new Error("RAG unavailable in test"); };
+  const queries = [];
+  pool.query = async (sql, params) => {
+    queries.push({ sql, params });
+    if (sql.includes("FROM materials")) {
+      return [[{
+        title: "Scanned Worksheet",
+        instructions: null,
+        file_path: "1781843899651-596532.pdf",
+        text_content: markedPdfText([
+          { page: 2, text: "Circle the correct word or phrase." },
+        ]),
+        summary_paragraph: null,
+        summary_detailed: null,
+      }]];
+    }
+    if (sql.startsWith("UPDATE materials")) return [{ affectedRows: 1 }];
+    if (sql.includes("material_chat_cache")) return [[]];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  let capturedMessages;
+  const controller = loadController(t, {
+    completeText: async (request) => {
+      capturedMessages = request.messages;
+      return { choices: [{ message: { content: "..." } }] };
+    },
+    ocrPdfPageText: async () => "GRAMMAR superlatives — bad, good, exciting, safe, far, ugly, friendly, wet",
+  });
+
+  const { req, res } = httpDouble({
+    params: { materialId: "9" },
+    body: {
+      action: "chat", mode: "assistant", message: "what's on page 1",
+      history: [], currentPage: 1, totalPages: 2, lang: "en",
+    },
+  });
+
+  await controller.materialAI(req, res);
+
+  const systemMessage = capturedMessages.find((m) => m.role === "system").content;
+  assert.match(systemMessage, /GRAMMAR superlatives/);
+
+  const update = queries.find(q => q.sql.startsWith("UPDATE materials"));
+  assert.ok(update, "expected text_content to be cached back to the database");
+  assert.match(update.params[0], /<<PAGE 1>>.*GRAMMAR superlatives/s);
+  // The pre-existing page 2 content must survive the rewrite untouched.
+  assert.match(update.params[0], /<<PAGE 2>>.*Circle the correct word/s);
+});
+
 test("assistant-mode chat falls back to the honest 'can't read' message when OCR finds nothing", async (t) => {
   global.fetch = async () => { throw new Error("RAG unavailable in test"); };
   pool.query = async (sql) => {
@@ -346,6 +455,7 @@ test("assistant-mode chat falls back to the honest 'can't read' message when OCR
         summary_detailed: null,
       }]];
     }
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -384,6 +494,7 @@ test("assistant-mode chat instructs the model to stay scoped to this lesson's ma
         summary_detailed: null,
       }]];
     }
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -410,6 +521,71 @@ test("assistant-mode chat instructs the model to stay scoped to this lesson's ma
   assert.match(systemMessage, /unrelated/i);
 });
 
+test("assistant-mode chat returns a cached answer for a repeat first-turn question without calling the AI", async (t) => {
+  global.fetch = async () => { throw new Error("RAG unavailable in test"); };
+  pool.query = async (sql) => {
+    if (sql.includes("FROM materials")) {
+      return [[{ title: "Cell Biology", instructions: null, text_content: "cell stuff", summary_paragraph: null, summary_detailed: null }]];
+    }
+    if (sql.startsWith("SELECT answer FROM material_chat_cache")) {
+      return [[{ answer: "The mitochondria is the powerhouse of the cell." }]];
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const controller = loadController(t, {
+    completeText: async () => { throw new Error("completeText should not be called on a cache hit"); },
+  });
+
+  const { req, res } = httpDouble({
+    params: { materialId: "9" },
+    body: {
+      action: "chat", mode: "assistant", message: "what does mitochondria do",
+      history: [], currentPage: 2, totalPages: 3, lang: "en",
+    },
+  });
+
+  await controller.materialAI(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.reply, "The mitochondria is the powerhouse of the cell.");
+  assert.equal(res.body.cached, true);
+});
+
+test("assistant-mode chat skips the cache and calls the AI when there's prior conversation history", async (t) => {
+  global.fetch = async () => { throw new Error("RAG unavailable in test"); };
+  const queries = [];
+  pool.query = async (sql) => {
+    queries.push(sql);
+    if (sql.includes("FROM materials")) {
+      return [[{ title: "Cell Biology", instructions: null, text_content: "cell stuff", summary_paragraph: null, summary_detailed: null }]];
+    }
+    if (sql.includes("material_chat_cache")) return [[]];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  let completeTextCalled = false;
+  const controller = loadController(t, {
+    completeText: async () => { completeTextCalled = true; return { choices: [{ message: { content: "Follow-up answer." } }] }; },
+  });
+
+  const { req, res } = httpDouble({
+    params: { materialId: "9" },
+    body: {
+      action: "chat", mode: "assistant", message: "and why is that",
+      history: [{ role: "user", content: "what does mitochondria do" }, { role: "assistant", content: "It powers the cell." }],
+      currentPage: 2, totalPages: 3, lang: "en",
+    },
+  });
+
+  await controller.materialAI(req, res);
+
+  assert.equal(completeTextCalled, true);
+  assert.equal(res.body.reply, "Follow-up answer.");
+  // The cache SELECT must never run for a follow-up question — its answer depends on history.
+  assert.ok(!queries.some(sql => sql.startsWith("SELECT answer FROM material_chat_cache")));
+});
+
 test("omitting assistant mode preserves the existing Level Up quiz-tutor behavior", async (t) => {
   global.fetch = async () => { throw new Error("RAG unavailable in test"); };
   pool.query = async (sql) => {
@@ -422,6 +598,7 @@ test("omitting assistant mode preserves the existing Level Up quiz-tutor behavio
         summary_detailed: null,
       }]];
     }
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -449,6 +626,81 @@ test("omitting assistant mode preserves the existing Level Up quiz-tutor behavio
   const systemMessage = capturedMessages.find((m) => m.role === "system").content;
   assert.match(systemMessage, /Level Up AI Study Tutor/i);
   assert.match(systemMessage, /take initiative/i);
+});
+
+test("materialAI summary returns the cached result for this material without calling the AI", async (t) => {
+  pool.query = async (sql) => {
+    if (sql.includes("FROM materials")) {
+      return [[{ title: "Cell Biology", instructions: null, text_content: "cell stuff", summary_paragraph: null, summary_detailed: null }]];
+    }
+    if (sql.startsWith("SELECT result_json FROM material_ai_cache")) {
+      return [[{ result_json: ["Point one", "Point two"] }]];
+    }
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const controller = loadController(t, {
+    completeText: async () => { throw new Error("completeText should not be called on a cache hit"); },
+  });
+
+  const { req, res } = httpDouble({ params: { materialId: "9" }, body: { action: "summary" } });
+  await controller.materialAI(req, res);
+
+  assert.deepEqual(res.body.data, ["Point one", "Point two"]);
+  assert.equal(res.body.cached, true);
+});
+
+test("materialAI summary calls the AI and caches the result when nothing is cached for this material yet", async (t) => {
+  const queries = [];
+  pool.query = async (sql, params) => {
+    queries.push({ sql, params });
+    if (sql.includes("FROM materials")) {
+      return [[{ title: "Cell Biology", instructions: null, text_content: "cell stuff", summary_paragraph: null, summary_detailed: null }]];
+    }
+    if (sql.startsWith("SELECT result_json FROM material_ai_cache")) return [[]];
+    if (sql.startsWith("INSERT INTO material_ai_cache")) return [{ insertId: 1 }];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const controller = loadController(t, {
+    completeText: async () => ({ choices: [{ message: { content: JSON.stringify({ data: ["Point A", "Point B"] }) } }] }),
+  });
+
+  const { req, res } = httpDouble({ params: { materialId: "9" }, body: { action: "summary" } });
+  await controller.materialAI(req, res);
+
+  assert.deepEqual(res.body.data, ["Point A", "Point B"]);
+  const insert = queries.find(q => q.sql.startsWith("INSERT INTO material_ai_cache"));
+  assert.ok(insert, "expected the fresh result to be cached");
+  assert.equal(insert.params[0], "9");
+  assert.equal(insert.params[1], "summary");
+  assert.equal(insert.params[2], "en");
+  assert.deepEqual(JSON.parse(insert.params[3]), ["Point A", "Point B"]);
+});
+
+test("materialAI summary in Burmese doesn't reuse the English cache entry for the same material", async (t) => {
+  const queries = [];
+  pool.query = async (sql, params) => {
+    queries.push({ sql, params });
+    if (sql.includes("FROM materials")) {
+      return [[{ title: "Cell Biology", instructions: null, text_content: "cell stuff", summary_paragraph: null, summary_detailed: null }]];
+    }
+    if (sql.startsWith("SELECT result_json FROM material_ai_cache")) return [[]];
+    if (sql.startsWith("INSERT INTO material_ai_cache")) return [{ insertId: 1 }];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const controller = loadController(t, {
+    completeText: async () => ({ choices: [{ message: { content: JSON.stringify({ data: ["ပွိုင့် က" ] }) } }] }),
+  });
+
+  const { req, res } = httpDouble({ params: { materialId: "9" }, body: { action: "summary", lang: "my" } });
+  await controller.materialAI(req, res);
+
+  const cacheLookup = queries.find(q => q.sql.startsWith("SELECT result_json FROM material_ai_cache"));
+  assert.deepEqual(cacheLookup.params, ["9", "summary", "my"]);
+  const insert = queries.find(q => q.sql.startsWith("INSERT INTO material_ai_cache"));
+  assert.equal(insert.params[2], "my");
 });
 
 test("textToSpeech streams back the audio ElevenLabs generated for the given text", async (t) => {
@@ -566,6 +818,7 @@ test("uploadMaterial stores every uploaded file, not just the primary document, 
         { id: 2, material_id: 55, file_name: "notes.docx", file_path: "extra2-def.docx" },
       ]];
     }
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -601,6 +854,7 @@ test("uploadMaterial accepts supplementary attachments even with no primary docu
     if (sql.startsWith("INSERT INTO material_files")) { materialFileInserts.push(params); return [{}]; }
     if (sql.startsWith("INSERT INTO class_posts")) return [{}];
     if (sql.includes("FROM material_files")) return [[{ id: 3, material_id: 56, file_name: "reading.pdf", file_path: "extra-xyz.pdf" }]];
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -632,6 +886,7 @@ test("updateMaterial keeps existing attachments by default when editing", async 
     if (sql.includes("FROM material_files")) {
       return [[{ id: 1, material_id: materialId, file_name: "handout.pdf", file_path: "extra1-abc.pdf" }]];
     }
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -662,6 +917,7 @@ test("updateMaterial deletes only the attachments explicitly listed in delete_fi
     if (sql.startsWith("DELETE FROM material_files")) { deleteCalls.push(params); return [{}]; }
     if (sql.startsWith("INSERT INTO material_files")) { insertCalls.push(params); return [{}]; }
     if (sql.includes("FROM material_files")) return [[{ id: 2, material_id: materialId, file_name: "new.pdf", file_path: "new-1.pdf" }]];
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -679,6 +935,49 @@ test("updateMaterial deletes only the attachments explicitly listed in delete_fi
   assert.deepEqual(insertCalls[0], [materialId, "new.pdf", "new-1.pdf"]);
 });
 
+test("updateMaterial re-indexes RAG when the primary file is replaced, so chat stops answering from the old file", async (t) => {
+  const classId = 9, userId = 2, materialId = 55;
+  pool.query = async (sql) => {
+    if (sql.startsWith("SELECT * FROM materials")) {
+      return [[{ id: materialId, class_id: classId, title: "lesson1", instructions: null, week: 1, file_path: "old-file.pdf", text_content: "stale old text", ai_resources: null }]];
+    }
+    if (sql.includes("FROM classes")) return [[{ id: classId, teacher_id: userId }]];
+    if (sql.startsWith("UPDATE materials")) return [{}];
+    if (sql.includes("FROM material_files")) return [[]];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const ingestCalls = [];
+  global.fetch = async (url, options) => {
+    ingestCalls.push({ url: String(url) });
+    return { ok: true, json: async () => ({}) };
+  };
+
+  const controller = loadController(t, {});
+  const fixturePath = path.join(__dirname, "fixtures", "sample.pdf");
+  const { req, res } = httpDouble({
+    user: { id: userId },
+    params: { id: materialId },
+    body: { title: "lesson1" },
+    files: {
+      file: [{
+        filename: "new-lesson1.pdf",
+        originalname: "Grammar Superlatives.pdf",
+        mimetype: "application/pdf",
+        path: fixturePath,
+      }],
+    },
+  });
+  await controller.updateMaterial(req, res);
+
+  assert.equal(res.statusCode, 200);
+  // ragIngest is fire-and-forget (not awaited by updateMaterial) — give its
+  // microtasks a turn before asserting fetch was actually called.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ingestCalls.length, 1);
+  assert.match(ingestCalls[0].url, /\/ingest$/);
+});
+
 test("listMaterials includes each material's supplementary attachments", async (t) => {
   const classId = 9, userId = 2;
   pool.query = async (sql, params) => {
@@ -689,6 +988,7 @@ test("listMaterials includes each material's supplementary attachments", async (
     if (sql.includes("FROM material_files")) {
       return [[{ id: 1, material_id: 55, file_name: "handout.pdf", file_path: "extra1-abc.pdf" }]];
     }
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -707,6 +1007,7 @@ test("getMaterial includes the material's supplementary attachments", async (t) 
     if (sql.startsWith("SELECT id, class_id")) return [[{ id: materialId, class_id: classId, title: "Week 1", instructions: null, week: 1, file_path: "primary-123.png", created_at: "2026-08-01" }]];
     if (sql.includes("FROM classes")) return [[{ id: classId, teacher_id: userId }]];
     if (sql.includes("FROM material_files")) return [[{ id: 1, material_id: materialId, file_name: "handout.pdf", file_path: "extra1-abc.pdf" }]];
+    if (sql.includes("material_chat_cache")) return [[]];
     throw new Error(`Unexpected query: ${sql}`);
   };
 
@@ -717,4 +1018,123 @@ test("getMaterial includes the material's supplementary attachments", async (t) 
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.files.length, 1);
   assert.equal(res.body.files[0].file_name, "handout.pdf");
+});
+
+test("getMaterialComments gives a student only their own private thread with the teacher", async (t) => {
+  const classId = 9, materialId = 55, studentId = 5;
+  let capturedParams;
+  pool.query = async (sql, params) => {
+    if (sql.startsWith("SELECT * FROM materials")) return [[{ id: materialId, class_id: classId }]];
+    if (sql.includes("FROM classes")) return [[{ id: classId, teacher_id: 2 }]];
+    if (sql.includes("FROM class_members")) return [[{ id: 1, class_id: classId, user_id: studentId }]];
+    if (sql.includes("FROM material_comments")) {
+      capturedParams = params;
+      return [[{ id: 1, material_id: materialId, author_id: studentId, target_student_id: studentId, content: "I don't understand page 2", author_name: "Student A" }]];
+    }
+    if (sql.includes("material_chat_cache")) return [[]];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const controller = loadController(t, {});
+  const { req, res } = httpDouble({ user: { id: studentId }, params: { materialId } });
+  await controller.getMaterialComments(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.length, 1);
+  assert.deepEqual(capturedParams, [materialId, studentId, studentId]);
+});
+
+test("getMaterialComments gives the teacher every student's private thread", async (t) => {
+  const classId = 9, materialId = 55, teacherId = 2;
+  pool.query = async (sql, params) => {
+    if (sql.startsWith("SELECT * FROM materials")) return [[{ id: materialId, class_id: classId }]];
+    if (sql.includes("FROM classes")) return [[{ id: classId, teacher_id: teacherId }]];
+    if (sql.includes("FROM material_comments")) {
+      return [[
+        { id: 1, material_id: materialId, author_id: 5, target_student_id: 5, content: "question from A" },
+        { id: 2, material_id: materialId, author_id: 6, target_student_id: 6, content: "question from B" },
+      ]];
+    }
+    if (sql.includes("material_chat_cache")) return [[]];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const controller = loadController(t, {});
+  const { req, res } = httpDouble({ user: { id: teacherId }, params: { materialId } });
+  await controller.getMaterialComments(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.length, 2);
+});
+
+test("addMaterialComment lets a student post to their own private thread without specifying a target", async (t) => {
+  const classId = 9, materialId = 55, studentId = 5;
+  let insertParams;
+  pool.query = async (sql, params) => {
+    if (sql.startsWith("SELECT * FROM materials")) return [[{ id: materialId, class_id: classId }]];
+    if (sql.includes("FROM classes")) return [[{ id: classId, teacher_id: 2 }]];
+    if (sql.includes("FROM class_members")) return [[{ id: 1, class_id: classId, user_id: studentId }]];
+    if (sql.startsWith("INSERT INTO material_comments")) { insertParams = params; return [{ insertId: 10 }]; }
+    if (sql.startsWith("SELECT mc.*")) return [[{ id: 10, material_id: materialId, author_id: studentId, target_student_id: studentId, content: "help please", author_name: "Student A" }]];
+    if (sql.includes("material_chat_cache")) return [[]];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const controller = loadController(t, {});
+  const { req, res } = httpDouble({ user: { id: studentId }, params: { materialId }, body: { content: "help please" } });
+  await controller.addMaterialComment(req, res);
+
+  assert.equal(res.statusCode, 201);
+  assert.deepEqual(insertParams, [materialId, studentId, studentId, "help please"]);
+});
+
+test("addMaterialComment lets a teacher reply into a specific student's thread", async (t) => {
+  const classId = 9, materialId = 55, teacherId = 2, studentId = 5;
+  let insertParams;
+  pool.query = async (sql, params) => {
+    if (sql.startsWith("SELECT * FROM materials")) return [[{ id: materialId, class_id: classId }]];
+    if (sql.includes("FROM classes")) return [[{ id: classId, teacher_id: teacherId }]];
+    if (sql.startsWith("INSERT INTO material_comments")) { insertParams = params; return [{ insertId: 11 }]; }
+    if (sql.startsWith("SELECT mc.*")) return [[{ id: 11, material_id: materialId, author_id: teacherId, target_student_id: studentId, content: "Check page 3", author_name: "Teacher" }]];
+    if (sql.includes("material_chat_cache")) return [[]];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const controller = loadController(t, {});
+  const { req, res } = httpDouble({ user: { id: teacherId }, params: { materialId }, body: { content: "Check page 3", target_student_id: studentId } });
+  await controller.addMaterialComment(req, res);
+
+  assert.equal(res.statusCode, 201);
+  assert.deepEqual(insertParams, [materialId, teacherId, studentId, "Check page 3"]);
+});
+
+test("editMaterialComment refuses to update someone else's comment", async (t) => {
+  const controller = loadController(t, {});
+  pool.query = async (sql) => {
+    if (sql.startsWith("SELECT * FROM material_comments")) return [[{ id: 5, material_id: 55, author_id: 5 }]];
+    if (sql.includes("material_chat_cache")) return [[]];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const { req, res } = httpDouble({ user: { id: 99 }, params: { commentId: "5" }, body: { content: "hijacked" } });
+  await controller.editMaterialComment(req, res);
+
+  assert.equal(res.statusCode, 403);
+});
+
+test("deleteMaterialComment lets the author delete their own comment", async (t) => {
+  const controller = loadController(t, {});
+  let deletedId;
+  pool.query = async (sql, params) => {
+    if (sql.startsWith("SELECT * FROM material_comments")) return [[{ id: 5, material_id: 55, author_id: 5 }]];
+    if (sql.startsWith("DELETE FROM material_comments")) { deletedId = params[0]; return [{ affectedRows: 1 }]; }
+    if (sql.includes("material_chat_cache")) return [[]];
+    throw new Error(`Unexpected query: ${sql}`);
+  };
+
+  const { req, res } = httpDouble({ user: { id: 5 }, params: { commentId: "5" } });
+  await controller.deleteMaterialComment(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(deletedId, "5");
 });

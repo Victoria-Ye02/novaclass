@@ -3,8 +3,10 @@ import { useParams, useNavigate } from "react-router-dom";
 import API from "../../services/api";
 import PdfLessonViewer from "../../components/PdfLessonViewer";
 import Icon from "../../components/Icon";
+import PrivateCommentsPanel from "../../components/PrivateCommentsPanel";
 import { useMaterialBookmarks } from "../../hooks/useMaterialBookmarks";
 import { useMaterialHighlights } from "../../hooks/useMaterialHighlights";
+import { useLang } from "../../LanguageContext";
 
 const API_ORIGIN = "http://localhost:5001";
 
@@ -33,8 +35,14 @@ const VOICE_STATUS_LABEL = {
 };
 
 function AIChatPanel({ materialId, currentPage, totalPages }) {
+  const { lang } = useLang();
   const [messages, setMessages] = useState([
-    { role: "assistant", text: "👋 Hello! I'm your AI study assistant. Ask me anything about this lesson." }
+    {
+      role: "assistant",
+      text: lang === "my"
+        ? "👋 မင်္ဂလာပါ! ကျွန်ုပ်က သင့်ရဲ့ AI study assistant ပါ။ ဒီသင်ခန်းစာနဲ့ ပတ်သက်ပြီး ဘာမဆို မေးနိုင်ပါတယ်။"
+        : "👋 Hello! I'm your AI study assistant. Ask me anything about this lesson.",
+    },
   ]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -82,7 +90,7 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
         history,
         currentPage,
         totalPages,
-        lang: "en",
+        lang,
       });
       replyText = data.reply || data.response || "...";
     } catch {
@@ -259,6 +267,10 @@ export default function MaterialPreview({ isOverlay = false }) {
   const [splitChat, setSplitChat] = useState(false);
   const [matAssignments, setMatAssignments] = useState([]);
   const [assignmentsOpen, setAssignmentsOpen] = useState(false);
+  const [commentCount, setCommentCount] = useState(0);
+  const [commentsOpen, setCommentsOpen] = useState(false);
+  const [myRole, setMyRole] = useState(null);
+  const [myId, setMyId] = useState(null);
   const [pdfPageState, setPdfPageState] = useState({ currentPage: 1, totalPages: 0 });
   // Stable identity is required here: PdfLessonViewer's onPageChange effect
   // lists this callback as a dependency, so a fresh inline function on every
@@ -315,6 +327,18 @@ export default function MaterialPreview({ isOverlay = false }) {
     return () => { active = false; };
   }, [materialId]);
 
+  // Needed to tell "my own comment" apart from the teacher's/other students'
+  // replies, and to decide whether to show the single-thread (student) or
+  // grouped-by-student (teacher) comment view.
+  useEffect(() => {
+    if (!material?.class_id) return;
+    let active = true;
+    API.get(`/classroom/classes/${material.class_id}`)
+      .then(({ data }) => { if (active) { setMyRole(data.my_role); setMyId(data.my_id); } })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [material?.class_id]);
+
   // Overlay mode: closing goes back to whatever pushed this route (the classroom
   // page underneath). Standalone mode (direct URL / refresh — no history to return
   // to within the app) goes to the classroom page explicitly instead.
@@ -343,6 +367,9 @@ export default function MaterialPreview({ isOverlay = false }) {
   const fileUrl = material?.file_url
     ? `${API_ORIGIN}/api${material.file_url}?token=${encodeURIComponent(token)}`
     : null;
+  // The `download` attribute on <a> is ignored cross-origin — force a real
+  // download via the server's Content-Disposition instead (see getMaterialFile).
+  const downloadUrl = fileUrl ? `${fileUrl}&download=1` : null;
   const ext = material?.file_ext;
   const typeLabel = FILE_TYPE_LABEL[ext] || "File";
   const isImage = ["png", "jpg", "jpeg", "webp", "gif"].includes(ext);
@@ -399,11 +426,31 @@ export default function MaterialPreview({ isOverlay = false }) {
             )}
           </div>
         )}
+        {myRole && (
+          <div style={{ position: "relative", flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => setCommentsOpen(v => !v)}
+              style={assignmentsBadge}
+              aria-expanded={commentsOpen}
+              aria-label="Private comments"
+            >
+              💬{commentCount > 0 ? ` ${commentCount}` : ""}
+            </button>
+            <div style={{ ...assignmentsDropdown, width: "320px", maxHeight: "70vh", overflowY: "auto", display: commentsOpen ? "block" : "none" }}>
+              <div style={assignmentsDropdownTitle}>
+                {myRole === "teacher" ? "Private comments" : "Private comment to your teacher"}
+              </div>
+              <PrivateCommentsPanel materialId={materialId} isTeacher={myRole === "teacher"} myId={myId} onCountChange={setCommentCount}
+                containerStyle={myRole === "teacher" ? undefined : { padding: "0 10px" }} />
+            </div>
+          </div>
+        )}
         {!loading && !error && (
           <span style={badge}>{typeLabel}</span>
         )}
         {fileUrl && (
-          <a href={fileUrl} download={material?.title} style={downloadBtn}>
+          <a href={downloadUrl} download={material?.title} style={downloadBtn}>
             ⬇ Download
           </a>
         )}
@@ -457,7 +504,7 @@ export default function MaterialPreview({ isOverlay = false }) {
             <div style={{ fontSize: "15px", color: "#6b7280", marginBottom: "16px" }}>
               Preview isn't available for this file type.
             </div>
-            <a href={fileUrl} download={material.title} style={retryBtn}>Download</a>
+            <a href={downloadUrl} download={material.title} style={retryBtn}>Download</a>
           </div>
         )}
         </div>
@@ -472,6 +519,7 @@ export default function MaterialPreview({ isOverlay = false }) {
             />
             <div style={chatSlideContent(splitChat)}>
               <AIChatPanel
+                key={materialId}
                 materialId={materialId}
                 currentPage={pdfPageState.currentPage}
                 totalPages={pdfPageState.totalPages}
@@ -535,24 +583,24 @@ const fileNameStyle = {
 };
 
 const badge = {
-  fontSize: "11px", fontWeight: 700, color: "#3B37CC", background: "#f0f4ff",
+  fontSize: "11px", fontWeight: 700, color: "var(--primary)", background: "var(--primary-tint)",
   padding: "4px 10px", borderRadius: "20px", flexShrink: 0,
 };
 
 const downloadBtn = {
   display: "flex", alignItems: "center", gap: "6px", fontSize: "13px", fontWeight: 700,
-  color: "#fff", background: "#3B37CC", padding: "8px 16px", borderRadius: "8px",
+  color: "#fff", background: "var(--primary)", padding: "8px 16px", borderRadius: "8px",
   flexShrink: 0, whiteSpace: "nowrap",
 };
 
 const assignmentsBadge = {
-  fontSize: "12px", fontWeight: 700, color: "#3B37CC", background: "#f0f4ff",
-  border: "1px solid #c7d2fe", padding: "6px 12px", borderRadius: "20px",
+  fontSize: "12px", fontWeight: 700, color: "var(--primary)", background: "var(--primary-tint)",
+  border: "1px solid var(--border)", padding: "6px 12px", borderRadius: "20px",
   cursor: "pointer", flexShrink: 0, whiteSpace: "nowrap",
 };
 
 const assignmentsDropdown = {
-  position: "absolute", top: "calc(100% + 8px)", left: 0, zIndex: 20,
+  position: "absolute", top: "calc(100% + 8px)", right: 0, zIndex: 20,
   width: "280px", background: "var(--surface)", border: "1px solid var(--border)",
   borderRadius: "12px", boxShadow: "0 8px 24px rgba(0,0,0,0.12)", padding: "8px",
 };
@@ -582,7 +630,7 @@ const imgStyle = { maxWidth: "100%", maxHeight: "100%", objectFit: "contain", bo
 const videoStyle = { maxWidth: "100%", maxHeight: "100%" };
 
 const retryBtn = {
-  background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px",
+  background: "var(--primary)", color: "#fff", border: "none", borderRadius: "8px",
   padding: "10px 20px", fontSize: "13px", fontWeight: 700, cursor: "pointer",
   textDecoration: "none", display: "inline-block",
 };
@@ -668,7 +716,7 @@ const aiBubble = {
 };
 
 const userBubble = {
-  maxWidth: "85%", background: "#3B37CC", color: "#fff",
+  maxWidth: "85%", background: "var(--primary)", color: "#fff",
   borderRadius: "12px 12px 2px 12px", padding: "10px 12px",
   fontSize: "13px", lineHeight: 1.55, whiteSpace: "pre-wrap",
 };
@@ -685,7 +733,7 @@ const chatInput = {
 };
 
 const sendBtn = {
-  background: "#3B37CC", color: "#fff", border: "none", borderRadius: "8px",
+  background: "var(--primary)", color: "#fff", border: "none", borderRadius: "8px",
   padding: "8px 14px", fontSize: "15px", cursor: "pointer", flexShrink: 0,
 };
 
@@ -710,23 +758,23 @@ const voiceCloseBtn = {
 
 const voiceOrb = {
   width: "88px", height: "88px", borderRadius: "50%", border: "none",
-  background: "#3B37CC", display: "flex", alignItems: "center", justifyContent: "center",
+  background: "var(--primary)", display: "flex", alignItems: "center", justifyContent: "center",
   cursor: "pointer", transition: "transform 0.2s ease",
 };
 
 const voiceOrbListening = {
-  background: "linear-gradient(135deg, #3B37CC, #7c3aed)",
+  background: "linear-gradient(135deg, var(--primary), var(--primary))",
   animation: "voiceListenPulse 1.6s ease-in-out infinite",
   cursor: "default",
 };
 
 const voiceOrbThinking = {
-  background: "linear-gradient(135deg, #3B37CC, #7c3aed)",
+  background: "linear-gradient(135deg, var(--primary), var(--primary))",
   cursor: "default", opacity: 0.85,
 };
 
 const voiceOrbSpeaking = {
-  background: "linear-gradient(135deg, #3B37CC, #7c3aed)",
+  background: "linear-gradient(135deg, var(--primary), var(--primary))",
   cursor: "default",
 };
 

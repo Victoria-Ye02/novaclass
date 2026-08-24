@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import API from "../../services/api";
 import Dashboard from "./Dashboard";
@@ -15,15 +15,9 @@ vi.mock("../../components/Sidebar", () => ({
   default: () => <div data-testid="sidebar" />,
 }));
 
-function liveMeeting(overrides = {}) {
-  return {
-    id: 1, class_id: 3, class_name: "html",
-    room_url: "https://meet.jit.si/nova-class-3-123",
-    title: "Class Meeting", host_name: "Teacher A",
-    started_at: "2026-08-12T10:00:00Z",
-    ...overrides,
-  };
-}
+vi.mock("../../LanguageContext", () => ({
+  useLang: () => ({ lang: "en" }),
+}));
 
 function realClass(overrides = {}) {
   return {
@@ -54,8 +48,7 @@ function notification(overrides = {}) {
 function stubApi(overrides = {}) {
   API.get.mockImplementation((url) => {
     if (url === "/progress/summary") return Promise.resolve({ data: { classes_joined: 0, classes_teaching: 0, questions_asked: 0, materials_accessed: 0, to_grade_count: 0, ...overrides.summary } });
-    if (url === "/progress/today-plan") return Promise.resolve({ data: overrides.todayPlan ?? { studentPlan: [], teacherPlan: [] } });
-    if (url === "/classroom/meetings/active") return Promise.resolve({ data: { meetings: overrides.meetings ?? [] } });
+    if (url.startsWith("/progress/today-plan")) return Promise.resolve({ data: overrides.todayPlan ?? { studentPlan: [], teacherPlan: [] } });
     if (url === "/classroom/classes") return Promise.resolve({ data: overrides.classes ?? [] });
     if (url === "/classroom/deadlines") return Promise.resolve({ data: { deadlines: overrides.deadlines ?? [] } });
     if (url === "/classroom/attendance/summary") return Promise.resolve({ data: overrides.attendance ?? { total: 0, present: 0, late: 0, absent: 0, rate: null } });
@@ -92,14 +85,7 @@ describe("Dashboard", () => {
       stubApi({ summary: { to_grade_count: 4 }, deadlines: [deadline({ due_date: "2099-01-01T00:00:00Z" })] });
       render(<Dashboard />);
 
-      expect(await screen.findByText(/4/)).toBeTruthy();
-      expect(screen.getByText(/grad/i)).toBeTruthy();
-    });
-
-    it("falls back to a live meeting when nothing else is urgent", async () => {
-      stubApi({ meetings: [liveMeeting({ class_name: "java" })] });
-      render(<Dashboard />);
-      expect(await screen.findByText(/java/)).toBeTruthy();
+      expect(await screen.findByText(/4 submissions? waiting to be graded/i)).toBeTruthy();
     });
 
     it("shows no banner when nothing is urgent", async () => {
@@ -129,7 +115,7 @@ describe("Dashboard", () => {
     it("shows an all-caught-up plan when a user has no actionable work", async () => {
       stubApi({ summary: { classes_joined: 1, classes_teaching: 1 } });
       render(<Dashboard />);
-      await waitFor(() => expect(API.get).toHaveBeenCalledWith("/progress/today-plan"));
+      await waitFor(() => expect(API.get).toHaveBeenCalledWith("/progress/today-plan?lang=en"));
       expect(screen.getByText("Student Today Plan")).toBeTruthy();
       expect(screen.getByText("Teacher Today Plan")).toBeTruthy();
       expect(screen.getByText("You are all caught up. Review a lesson or practice with K_MATE.")).toBeTruthy();
@@ -216,12 +202,11 @@ describe("Dashboard", () => {
     });
   });
 
-  describe("This week strip", () => {
-    it("renders five weekday cells", async () => {
+  describe("Calendar", () => {
+    it("renders all seven day-of-week headers", async () => {
       render(<Dashboard />);
-      const week = within(await screen.findByTestId("week-strip"));
-      expect(week.getByText("M")).toBeTruthy();
-      expect(week.getByText("F")).toBeTruthy();
+      expect(await screen.findByText("Sun")).toBeTruthy();
+      expect(screen.getByText("Sat")).toBeTruthy();
     });
   });
 

@@ -18,7 +18,6 @@ const assign = require("../../controllers/victoria/assignment.controller");
 const grades = require("../../controllers/victoria/grades.controller");
 const resources = require("../../controllers/victoria/resources.controller");
 const attendance = require("../../controllers/victoria/attendance.controller");
-const meeting = require("../../controllers/victoria/meeting.controller");
 const bookmarks = require("../../controllers/victoria/bookmark.controller");
 const highlights = require("../../controllers/victoria/highlight.controller");
 
@@ -27,6 +26,8 @@ router.get("/classes",                      auth, ctrl.listClasses);
 router.post("/classes/join",               auth, ctrl.joinClass);
 router.get("/classes/:id",                  auth, ctrl.getClass);
 router.get("/classes/:id/members",          auth, ctrl.getMembers);
+router.get("/classes/:id/members/rich",     auth, ctrl.getRichMembers);
+router.post("/classes/:id/notes",           auth, ctrl.sendNote);
 router.get("/classes/:id/materials",        auth, ctrl.listMaterials);
 router.post("/materials/generate-instructions", auth, aiUpload.single("file"), ctrl.generateInstructions);
 router.post("/materials/suggest-youtube",       auth, aiUpload.single("file"), ctrl.suggestYoutubeForMaterial);
@@ -46,15 +47,19 @@ router.post("/materials/:materialId/bookmarks", auth, bookmarks.saveBookmark);
 router.delete("/materials/:materialId/bookmarks/:pageNumber", auth, bookmarks.removeBookmark);
 
 router.get("/classes/:id/posts",           auth, posts.getPosts);
-router.post("/classes/:id/posts",          auth, posts.createPost);
+router.post("/classes/:id/posts",          auth, upload.anyFile.single("image"), posts.createPost);
 router.put("/posts/:postId",               auth, posts.editPost);
 router.delete("/posts/:postId",            auth, posts.deletePost);
 router.post("/posts/:postId/comments",     auth, posts.addComment);
+router.post("/posts/:postId/like",         auth, posts.likePost);
+router.patch("/posts/:postId/pin",         auth, posts.pinPost);
+router.put("/post-comments/:commentId",    auth, posts.editPostComment);
+router.delete("/post-comments/:commentId", auth, posts.deletePostComment);
 
 router.get("/classes/:id/assignments",         auth, assign.listAssignments);
 router.post("/classes/:id/assignments",        auth, upload.anyFile.array("files", 10), assign.createAssignment);
 router.get("/assignments/:id",                 auth, assign.getAssignment);
-router.post("/assignments/:id/submit",         auth, upload.anyFile.single("file"), assign.submitAssignment);
+router.post("/assignments/:id/submit",         auth, upload.anyFile.array("files", 10), assign.submitAssignment);
 router.post("/submissions/:id/grade",          auth, assign.gradeSubmission);
 router.post("/submissions/:id/return",         auth, assign.returnSubmission);
 router.post("/assignments/:id/ai-check",        auth, assign.aiCheck);
@@ -75,7 +80,12 @@ router.get("/classes/:id/stream-stats",        auth, assign.getStreamStats);
 router.patch("/assignments/:id/topic",         auth, assign.updateTopic);
 router.patch("/materials/:id/topic",           auth, ctrl.updateMaterialTopic);
 router.put("/materials/:id",                   auth, upload.materialUpload, ctrl.updateMaterial);
+router.delete("/materials/:id",                auth, ctrl.deleteMaterial);
 router.get("/materials/:materialId/assignments", auth, ctrl.getMaterialAssignments);
+router.get("/materials/:materialId/comments",    auth, ctrl.getMaterialComments);
+router.post("/materials/:materialId/comments",   auth, ctrl.addMaterialComment);
+router.put("/material-comments/:commentId",      auth, ctrl.editMaterialComment);
+router.delete("/material-comments/:commentId",   auth, ctrl.deleteMaterialComment);
 
 router.get("/classes/:id/resources",           auth, resources.listResources);
 router.post("/classes/:id/resources",          auth, upload.single("file"), resources.addResource);
@@ -89,12 +99,15 @@ router.get("/attendance/summary",                  auth, attendance.getMyMonthly
 router.get("/attendance/:sessionId",               auth, attendance.getSession);
 router.patch("/attendance/:sessionId/mark",        auth, attendance.markAttendance);
 router.delete("/attendance/:sessionId",            auth, attendance.deleteSession);
+router.post("/classes/:id/leave-requests",         auth, upload.single("attachment"), attendance.createLeaveRequest);
+router.get("/classes/:id/leave-requests",          auth, attendance.listLeaveRequests);
+router.patch("/leave-requests/:id",                auth, attendance.reviewLeaveRequest);
 
-// Meeting
-router.get("/meetings/active",                     auth, meeting.listMyActiveMeetings);
+// AI Tutor (hint-only)
+router.get("/classes/:id/ai-tutor",                auth, ctrl.getAITutorConfig);
+router.post("/classes/:id/ai-tutor",               auth, ctrl.saveAITutorConfig);
+router.post("/classes/:id/ai-tutor/chat",          auth, ctrl.aiTutorChat);
+
 router.get("/deadlines",                            auth, ctrl.listUpcomingDeadlines);
-router.get("/classes/:id/meeting",                 auth, meeting.getActiveMeeting);
-router.post("/classes/:id/meeting",                auth, meeting.startMeeting);
-router.delete("/classes/:id/meeting",              auth, meeting.endMeeting);
 
 module.exports = router;

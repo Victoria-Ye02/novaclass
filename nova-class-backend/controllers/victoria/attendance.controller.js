@@ -171,3 +171,74 @@ exports.getMyMonthlyAttendance = async (req, res) => {
     res.json({ total, present, late, absent, rate });
   } catch (err) { res.status(500).json({ error: err.message }); }
 };
+
+// ─── Leave Requests ────────────────────────────────────────────────────────
+// Schema (leave_requests table + attachment_path column) lives in
+// scripts/setup_db.js — this used to bootstrap itself here via a
+// self-executing IIFE that ran a real, unmocked DB query the instant this
+// module was require()'d, which left an idle connection open and hung the
+// test suite whenever a test file imported this controller.
+
+// POST /classes/:id/leave-requests   (student) — accepts optional file
+exports.createLeaveRequest = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const access = await checkAccess(req.params.id, userId);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+    if (access.role !== "student") return res.status(403).json({ error: "Students only" });
+    const { from_date, to_date, reason_type, details } = req.body;
+    if (!from_date || !to_date) return res.status(400).json({ error: "from_date and to_date required" });
+    const attachment_path = req.file ? req.file.filename : null;
+    const [result] = await pool.query(
+      "INSERT INTO leave_requests (class_id, student_id, from_date, to_date, reason_type, details, attachment_path) VALUES (?,?,?,?,?,?,?)",
+      [req.params.id, userId, from_date, to_date, reason_type || "other", details || "", attachment_path]
+    );
+    const [[row]] = await pool.query("SELECT * FROM leave_requests WHERE id=?", [result.insertId]);
+    res.status(201).json(row);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+// GET /classes/:id/leave-requests
+// teacher → all requests with student name; student → own only
+exports.listLeaveRequests = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const access = await checkAccess(req.params.id, userId);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+    let rows;
+    if (access.role === "teacher") {
+      [rows] = await pool.query(
+        `SELECT lr.*, u.name AS student_name, u.email AS student_email
+         FROM leave_requests lr JOIN users u ON u.id = lr.student_id
+         WHERE lr.class_id = ? ORDER BY lr.created_at DESC`,
+        [req.params.id]
+      );
+    } else {
+      [rows] = await pool.query(
+        "SELECT * FROM leave_requests WHERE class_id=? AND student_id=? ORDER BY created_at DESC",
+        [req.params.id, userId]
+      );
+    }
+    res.json(rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+// PATCH /leave-requests/:id   (teacher: approve or reject)
+exports.reviewLeaveRequest = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [[lr]] = await pool.query("SELECT * FROM leave_requests WHERE id=?", [req.params.id]);
+    if (!lr) return res.status(404).json({ error: "Not found" });
+    const access = await checkAccess(lr.class_id, userId);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+    if (access.role !== "teacher") return res.status(403).json({ error: "Teachers only" });
+    const { status } = req.body;
+    if (!["approved", "rejected"].includes(status)) return res.status(400).json({ error: "status must be approved or rejected" });
+    await pool.query(
+      "UPDATE leave_requests SET status=?, reviewed_by=?, reviewed_at=NOW() WHERE id=?",
+      [status, userId, req.params.id]
+    );
+    const [[updated]] = await pool.query("SELECT * FROM leave_requests WHERE id=?", [req.params.id]);
+    res.json(updated);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+};

@@ -84,12 +84,82 @@ async function setup() {
   `);
 
   await conn.query(`
+    CREATE TABLE IF NOT EXISTS material_chat_cache (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      material_id INT NOT NULL,
+      question_hash CHAR(64) NOT NULL,
+      question TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      lang VARCHAR(10),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uniq_material_question (material_id, question_hash),
+      FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE
+    )
+  `);
+
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS youtube_suggest_cache (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      content_hash CHAR(64) NOT NULL UNIQUE,
+      search_query VARCHAR(255),
+      videos_json JSON NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // AI Study Mentor (Auto-Summary / Practice Quiz / Smart Highlighting) —
+  // pure functions of a material's own content, same result for every
+  // student who opens it in the same language, so cache per (material,
+  // action, lang) instead of every viewer separately paying for the same
+  // AI call. lang is part of the key, not just a display detail — a Korean
+  // student and a Myanmar student asking for the same action must never
+  // share a cached response written in the other one's language.
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS material_ai_cache (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      material_id INT NOT NULL,
+      action VARCHAR(20) NOT NULL,
+      lang VARCHAR(10) NOT NULL DEFAULT 'en',
+      result_json JSON NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uniq_material_action_lang (material_id, action, lang),
+      FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE
+    )
+  `);
+  // Installations from before `lang` was part of the cache key: add the
+  // column and widen the unique key to include it.
+  await conn.query(`ALTER TABLE material_ai_cache ADD COLUMN lang VARCHAR(10) NOT NULL DEFAULT 'en'`).catch(err => {
+    if (!err.message.includes("Duplicate column")) throw err;
+  });
+  // The new key must exist before dropping the old one — MySQL refuses to
+  // drop uniq_material_action while it's the only index covering the
+  // material_id foreign key.
+  await conn.query(`ALTER TABLE material_ai_cache ADD UNIQUE KEY uniq_material_action_lang (material_id, action, lang)`).catch(err => {
+    if (!err.message.includes("Duplicate key name")) throw err;
+  });
+  await conn.query(`ALTER TABLE material_ai_cache DROP INDEX uniq_material_action`).catch(err => {
+    if (!err.message.includes("check that column/key exists")) throw err;
+  });
+
+  await conn.query(`
     CREATE TABLE IF NOT EXISTS material_files (
       id INT AUTO_INCREMENT PRIMARY KEY,
       material_id INT NOT NULL,
       file_name VARCHAR(255) NOT NULL,
       file_path VARCHAR(255) NOT NULL,
       uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE
+    )
+  `);
+
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS material_comments (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      material_id INT NOT NULL,
+      author_id INT NOT NULL,
+      target_student_id INT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE
     )
   `);
@@ -166,6 +236,90 @@ async function setup() {
       is_read TINYINT(1) NOT NULL DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       INDEX idx_notifications_user (user_id, is_read, created_at)
+    )
+  `);
+
+  // Moved here from a self-executing IIFE at the top of posts.controller.js —
+  // running DDL as a side effect of merely `require()`-ing a controller
+  // meant every import (including from test files, which mock pool.query
+  // but only *inside* each test body, after the module has already loaded
+  // and fired this for real) opened a genuine DB connection that never got
+  // closed, leaving an idle handle that kept the process alive indefinitely.
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS post_likes (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      post_id INT NOT NULL,
+      user_id INT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_like (post_id, user_id),
+      FOREIGN KEY (post_id) REFERENCES class_posts(id) ON DELETE CASCADE
+    )
+  `);
+  await conn.query(`ALTER TABLE class_posts ADD COLUMN is_pinned TINYINT(1) DEFAULT 0`).catch(err => {
+    if (!err.message.includes("Duplicate column")) throw err;
+  });
+  // getPosts (posts.controller.js) always SELECTs this column, but until now
+  // it was only ever added lazily inside createPost — so any environment
+  // where no one had yet created a post with an image had a class_posts
+  // table missing it entirely, and every single getPosts call (i.e. every
+  // page load) 500'd with "Unknown column 'p.image_path'".
+  await conn.query(`ALTER TABLE class_posts ADD COLUMN image_path VARCHAR(500) NULL`).catch(err => {
+    if (!err.message.includes("Duplicate column")) throw err;
+  });
+
+  // Moved here from the same self-executing-IIFE pattern in
+  // attendance.controller.js, for the same reason as post_likes above.
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS leave_requests (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      class_id INT NOT NULL,
+      student_id INT NOT NULL,
+      from_date DATE NOT NULL,
+      to_date DATE NOT NULL,
+      reason_type VARCHAR(50) NOT NULL DEFAULT 'other',
+      details TEXT,
+      attachment_path VARCHAR(500),
+      status ENUM('pending','approved','rejected') DEFAULT 'pending',
+      reviewed_by INT,
+      reviewed_at TIMESTAMP NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE
+    )
+  `);
+  await conn.query(`ALTER TABLE leave_requests ADD COLUMN attachment_path VARCHAR(500)`).catch(err => {
+    if (!err.message.includes("Duplicate column")) throw err;
+  });
+
+  // Moved here from the same bare-pool.query()-at-module-load pattern in
+  // classroom.controller.js, for the same reason as post_likes above.
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS ai_tutor_config (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      class_id INT NOT NULL,
+      lesson_context TEXT,
+      homework_context TEXT,
+      enabled TINYINT(1) DEFAULT 1,
+      created_by INT,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_class (class_id)
+    )
+  `);
+
+  // Moved here from the same self-executing-async-function-at-module-load
+  // pattern in calendar.controller.js, for the same reason as post_likes
+  // above — this one hadn't caused a visible failure yet only because no
+  // test file happened to import calendar.controller.js so far.
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      class_id INT NOT NULL,
+      teacher_id INT NOT NULL,
+      date DATE NOT NULL,
+      title VARCHAR(255) NOT NULL,
+      color VARCHAR(7) DEFAULT '#4F46E5',
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
+      FOREIGN KEY (teacher_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
 

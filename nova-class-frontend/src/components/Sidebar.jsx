@@ -1,17 +1,19 @@
 import { NavLink, useNavigate } from "react-router-dom";
 import { useLang } from "../LanguageContext";
+import { useTheme } from "../ThemeContext";
 import Icon from "./Icon";
 
 export default function Sidebar() {
   const navigate = useNavigate();
   const name = localStorage.getItem("nova_name") || "Student";
   const { t } = useLang();
+  const { theme, toggleTheme } = useTheme();
 
   const navItems = [
     { path: "/",         icon: "dashboard",      key: "dashboard"  },
     { path: "/classroom",icon: "graduation-cap", key: "classroom"  },
     { path: "/kmate",    icon: "bot",            key: "kmate"      },
-    { path: "/exam",     icon: "quiz",           key: "examMode"   },
+    { path: "/exam",     icon: "exam",           key: "examMode"   },
     { path: "/settings", icon: "settings",       key: "settings"   },
   ];
 
@@ -54,6 +56,26 @@ export default function Sidebar() {
             <div style={styles.userName}>{name}</div>
           </div>
         </div>
+        <button onClick={toggleTheme} style={styles.themeBtn}>
+          <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {theme === "dark" ? (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+                <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+              </svg>
+            )}
+            {theme === "dark" ? "Light mode" : "Dark mode"}
+          </span>
+          <div style={{ width: "30px", height: "17px", borderRadius: "9px", background: theme === "dark" ? "var(--primary)" : "var(--border)", position: "relative", transition: "background 0.2s", flexShrink: 0 }}>
+            <div style={{ width: "13px", height: "13px", borderRadius: "50%", background: "#fff", position: "absolute", top: "2px", left: theme === "dark" ? "15px" : "2px", transition: "left 0.2s" }} />
+          </div>
+        </button>
         <button onClick={logout} style={styles.logoutBtn}>{t("logout")}</button>
         <a href="https://icons8.com" target="_blank" rel="noreferrer" style={styles.iconCredit}>
           Icons by Icons8
@@ -90,6 +112,13 @@ const styles = {
   },
   userName: { fontSize: "14px", fontWeight: 600, color: "var(--text)" },
   userRole: { fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase" },
+  themeBtn: {
+    width: "100%", padding: "8px 12px", background: "var(--surface-alt)",
+    border: "1px solid var(--border)", borderRadius: "8px", fontSize: "13px",
+    fontWeight: 600, color: "var(--text-muted)", cursor: "pointer",
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    marginBottom: "8px",
+  },
   logoutBtn: {
     width: "100%", padding: "8px", background: "var(--surface-alt)",
     borderRadius: "8px", fontSize: "13px", color: "#ef4444",

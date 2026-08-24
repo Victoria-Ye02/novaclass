@@ -5,11 +5,23 @@ const { textToSpeech: elevenLabsTextToSpeech } = require("../../services/ai/elev
 const pdfParse = require("pdf-parse");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
 const execFileAsync = promisify(execFile);
 
 const RAG_URL = process.env.RAG_URL || "http://localhost:8000";
+
+// A cache hit resolves in ~10-20ms — real enough to save tokens, but so
+// instant it reads as broken (no "thinking" time at all, like the button
+// silently did nothing). A short artificial wait before returning a cached
+// AI result keeps it feeling like the AI actually worked, not like the
+// feature just skipped itself. Randomized a bit so every cache hit doesn't
+// land at the exact same suspiciously-round number.
+function naturalCacheDelay() {
+  if (process.env.NODE_ENV === "test") return Promise.resolve();
+  return new Promise(resolve => setTimeout(resolve, 3500 + Math.random() * 1500));
+}
 
 async function ragIngest(filePath, materialId, filename) {
   try {
@@ -21,6 +33,90 @@ async function ragIngest(filePath, materialId, filename) {
     await fetch(`${RAG_URL}/ingest`, { method: "POST", body: form, signal: AbortSignal.timeout(30000) });
   } catch (err) {
     console.warn("[RAG] ingest skipped:", err.message);
+  }
+}
+
+// Fire-and-forget: generate a YouTube search query from the lesson content,
+// search, and persist. Not awaited by uploadMaterial — see call site.
+// Fire-and-forget: generate and persist the material's AI summary. Not
+// awaited by uploadMaterial — see call site. Runs independently of (and in
+// parallel with) autoSuggestYoutubeResources below.
+async function autoGenerateMaterialSummary(materialId, text) {
+  try {
+    const prompt = `You are a teaching assistant. Read this material and return a JSON summary.
+
+Text (first 30000 chars):
+${text.slice(0, 30000)}
+
+Return ONLY valid JSON with exactly these keys:
+{
+  "short": "one sentence capturing the core idea",
+  "paragraph": "4-6 sentence summary paragraph",
+  "detailed": "numbered step-by-step detailed breakdown"
+}
+Detect the language and reply in the same language.`;
+
+    let out = (await askGroq(prompt)).trim();
+    out = out.replace(/```json\s*/g, "").replace(/```\s*/g, "");
+    const start = out.indexOf("{");
+    const end = out.lastIndexOf("}") + 1;
+    const parsed2 = JSON.parse(out.slice(start, end));
+    // The model sometimes returns "detailed" (and occasionally the others)
+    // as a JSON array instead of a string despite the prompt — mysql2
+    // expands an array parameter into extra placeholders, which breaks the
+    // INSERT below with "Column count doesn't match value count".
+    const asText = v => Array.isArray(v) ? v.join("\n") : (v && typeof v === "object" ? JSON.stringify(v) : v);
+
+    await pool.query(
+      "INSERT INTO material_summaries (material_id, summary_short, summary_paragraph, summary_detailed) VALUES (?, ?, ?, ?)",
+      [materialId, asText(parsed2.short), asText(parsed2.paragraph), asText(parsed2.detailed)]
+    );
+  } catch (aiErr) {
+    console.warn("AI summary skipped:", aiErr.message);
+  }
+}
+
+async function autoSuggestYoutubeResources({ materialId, title, summaryData, text, instructions }) {
+  try {
+    const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
+    if (!YOUTUBE_API_KEY) return;
+
+    const contentHint = summaryData
+      ? summaryData.short || summaryData.paragraph
+      : (text ? text.slice(0, 1000) : instructions || title);
+    let searchQuery = `${title} tutorial`;
+    try {
+      const queryPrompt = `A teacher uploaded a lesson titled "${title}".
+Lesson content: ${contentHint}
+
+Generate a short, specific YouTube search query (max 8 words) that would find the most relevant educational video for students learning this topic.
+Return ONLY the search query text, nothing else. No quotes, no explanation.`;
+      const raw = (await askGroq(queryPrompt, 50)).trim();
+      // Reject leaked prompt/instruction text (e.g. "[Paste content here]")
+      // that the model occasionally returns when given little to work with,
+      // rather than searching YouTube for it literally.
+      const looksLikePlaceholder = /\[|\bpaste\b|\bplease provide\b|\byour (query|search)\b|\bgenerate the\b|\binsert\b/i.test(raw);
+      if (raw && raw.length > 3 && raw.length < 100 && !looksLikePlaceholder) searchQuery = raw;
+    } catch {
+      // fallback to title
+    }
+
+    const ytRes = await fetch(
+      `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(searchQuery)}&type=video&maxResults=3&relevanceLanguage=en&key=${YOUTUBE_API_KEY}`,
+      { signal: AbortSignal.timeout(10000) }
+    );
+    if (!ytRes.ok) return;
+    const ytData = await ytRes.json();
+    const aiResources = (ytData.items || []).map(item => ({
+      title: item.snippet.title,
+      url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
+      thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
+      channel: item.snippet.channelTitle,
+      type: "video",
+    }));
+    await pool.query("UPDATE materials SET ai_resources = ? WHERE id = ?", [JSON.stringify(aiResources), materialId]);
+  } catch (resErr) {
+    console.warn("YouTube resources skipped:", resErr.message);
   }
 }
 
@@ -86,6 +182,16 @@ function splitPagesFromMarkedText(markedText) {
   });
 }
 
+// Trusting only the client-reported mimetype is fragile — some upload paths
+// (scripts, certain browsers/OSes for certain files) send a generic
+// mimetype like application/octet-stream for a real .pdf, which silently
+// skipped text extraction entirely (text_content stayed NULL forever, so
+// every AI feature had nothing but the title to work with, unrelated to the
+// file actually being unreadable). The extension is a reliable fallback.
+function isPdfFile(file) {
+  return file.mimetype === "application/pdf" || /\.pdf$/i.test(file.originalname || "");
+}
+
 function stripPageMarkers(markedText) {
   return (markedText || "").replace(PAGE_MARKER_RE, "").replace(/\n{3,}/g, "\n\n").trim();
 }
@@ -96,9 +202,21 @@ function stripPageMarkers(markedText) {
 function replacePageText(markedText, pageNumber, newText) {
   const pages = splitPagesFromMarkedText(markedText);
   if (pages.length === 0) return markedText;
-  return pages
-    .map(p => `${pdfPageMarker(p.page)}${p.page === pageNumber ? newText : p.text}`)
-    .join("\n\n");
+  const existingIndex = pages.findIndex(p => p.page === pageNumber);
+  if (existingIndex >= 0) {
+    pages[existingIndex] = { page: pageNumber, text: newText };
+  } else {
+    // A page with zero extractable text items (pure-image pages, common for
+    // scanned worksheets) never got a marker at extraction time at all —
+    // there's nothing to "replace" for it. Without inserting one here, an
+    // OCR result for that page silently fails to cache: the .map() below
+    // only ever touches pages that already have a marker, so every future
+    // question about this same page pays the full Vision OCR round-trip
+    // again instead of hitting the cache.
+    pages.push({ page: pageNumber, text: newText });
+    pages.sort((a, b) => a.page - b.page);
+  }
+  return pages.map(p => `${pdfPageMarker(p.page)}${p.text}`).join("\n\n");
 }
 
 const FILE_CONTENT_TYPES = {
@@ -499,6 +617,10 @@ async function readPdfPagesWithVision(pdfPath, maxPages = 10) {
         if (desc.trim()) descriptions.push(desc.trim());
       } catch (e) {
         console.warn("[Vision] page read failed:", e.message);
+        // A 429 here is a per-key quota, not a per-page fluke — every
+        // remaining page would fail the same way, so stop instead of paying
+        // the round-trip cost (and the wait) for each one in turn.
+        if (e.status === 429) break;
       }
     }
 
@@ -518,14 +640,63 @@ exports.suggestYoutubeForMaterial = async (req, res) => {
     const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
     if (!YOUTUBE_API_KEY) return res.json({ videos: [], warning: "YOUTUBE_API_KEY not configured" });
 
-    let pdfText = "";
+    const languageHint = (req.body.languageHint || "English").toLowerCase().trim();
+
+    // Direct text prompt — skip cache and AI, search YouTube immediately
+    const manualQuery = (req.body.manualQuery || "").trim();
+    if (manualQuery) {
+      const isKorean = languageHint.includes("korean");
+      const searchQuery = isKorean ? `${manualQuery} 한국어` : manualQuery;
+      const ytUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(searchQuery)}&type=video&maxResults=6&relevanceLanguage=${isKorean ? "ko" : "en"}&key=${YOUTUBE_API_KEY}`;
+      console.log("[YT manualQuery] searchQuery:", searchQuery);
+      console.log("[YT manualQuery] url:", ytUrl.replace(YOUTUBE_API_KEY, "***"));
+      const ytRes = await fetch(ytUrl);
+      const ytData = await ytRes.json();
+      console.log("[YT manualQuery] status:", ytRes.status, "items:", ytData.items?.length, "error:", ytData.error?.message);
+      if (ytData.error) return res.status(500).json({ error: "YouTube API error: " + ytData.error.message });
+      const videos = (ytData.items || []).map(item => ({
+        title: item.snippet.title,
+        channel: item.snippet.channelTitle,
+        thumbnail: item.snippet.thumbnails?.medium?.url || "",
+        url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
+      }));
+      return res.json({ videos, searchQuery });
+    }
+
+    let fileBuf = null;
     let originalFilename = req.file?.originalname || "";
     if (req.file) {
       tempFilePath = req.file.path;
+      try { fileBuf = fs.readFileSync(req.file.path); } catch { /* unreadable */ }
+    }
+
+    // Cache key is the exact PDF bytes (or, with no file, the title) plus
+    // language — re-opening "Create material" with the same file, or
+    // another teacher uploading the identical PDF, skips straight to a
+    // stored result instead of re-spending AI + YouTube API calls on it.
+    const contentHash = crypto.createHash("sha256")
+      .update(fileBuf || title.trim().toLowerCase())
+      .update("|" + languageHint)
+      .digest("hex");
+    // Pagination and an explicit "Re-search" click both mean "give me
+    // something different" — reading from the cache there would return the
+    // exact same videos as last time and make the button look broken.
+    if (!req.body.pageToken && !req.body.forceRefresh) {
+      const [[cached]] = await pool.query(
+        "SELECT videos_json, search_query FROM youtube_suggest_cache WHERE content_hash = ?",
+        [contentHash]
+      );
+      if (cached && cached.videos_json?.length > 0) {
+        await naturalCacheDelay();
+        return res.json({ videos: cached.videos_json, searchQuery: cached.search_query, cached: true });
+      }
+    }
+
+    let pdfText = "";
+    if (fileBuf) {
       try {
-        const buf = fs.readFileSync(req.file.path);
-        const parsed = await pdfParse(buf);
-        pdfText = parsed.text?.slice(0, 3000) || "";
+        const parsed = await pdfParse(fileBuf);
+        pdfText = parsed.text?.slice(0, 30000) || "";
       } catch { /* non-pdf or unreadable */ }
     }
 
@@ -535,65 +706,108 @@ exports.suggestYoutubeForMaterial = async (req, res) => {
 
     const usableText = isOcrUsable(pdfText) ? pdfText : "";
 
-    // If pdf-parse returned little text (image/scanned PDF), read all pages with Groq Vision
+    // If pdf-parse returned little text (image/scanned PDF), read pages with Gemini Vision
     let visionDescription = "";
     if (req.file && pdfText.trim().length < 300) {
-      visionDescription = await readPdfPagesWithVision(req.file.path, 10);
+      visionDescription = await readPdfPagesWithVision(req.file.path, 30);
     }
 
-    let searchQuery = isGenericTitle ? "study tutorial" : `${title} tutorial`;
+    // Pre-translate common Korean educational terms
+    const korToEng = {
+      "토픽": "TOPIK", "어휘": "vocabulary", "듣기": "listening", "읽기": "reading",
+      "쓰기": "writing", "문법": "grammar", "말하기": "speaking", "발음": "pronunciation",
+      "정답": "answer key", "해설": "explanation", "연습": "practice", "시험": "exam",
+      "빈도별": "by frequency", "초급": "beginner", "중급": "intermediate", "고급": "advanced",
+      "한국어": "Korean language", "일본어": "Japanese language", "중국어": "Chinese language",
+      "수학": "math", "과학": "science", "영어": "English", "역사": "history",
+      "모든": "complete", "것": "", "의": "", "을": "", "이": "", "가": "", "에": "",
+      "대한": "about", "위한": "for", "학습": "study", "교재": "textbook", "강의": "lecture",
+    };
+    // Clean filename: translate Korean terms, then strip remaining non-ASCII
+    let cleanFn = originalFilename.replace(/\.(pdf|PDF)$/, "").replace(/[_\-]/g, " ");
+    Object.entries(korToEng).forEach(([kor, eng]) => { cleanFn = cleanFn.replace(new RegExp(kor, "g"), ` ${eng} `); });
+    cleanFn = cleanFn.replace(/[^\x00-\x7F]/g, "").replace(/\s+/g, " ").trim();
+
+    // Build initial searchQuery from cleaned filename (safe fallback)
+    let searchQuery = cleanFn.length > 3 ? `${cleanFn} tutorial` : (isGenericTitle ? "study tutorial" : `${title} tutorial`);
+    // This English summary is shared between query-generation and relevance-scoring
+    let contentSummary = "";
 
     try {
-      // Pre-translate common Korean educational terms so Groq doesn't guess
-      const korToEng = {
-        "토픽": "TOPIK", "어휘": "vocabulary", "듣기": "listening", "읽기": "reading",
-        "쓰기": "writing", "문법": "grammar", "말하기": "speaking", "발음": "pronunciation",
-        "정답": "answer key", "해설": "explanation", "연습": "practice", "시험": "exam",
-        "빈도별": "by frequency", "초급": "beginner", "중급": "intermediate", "고급": "advanced",
-        "한국어": "Korean language", "일본어": "Japanese language", "중국어": "Chinese language",
-        "수학": "math", "과학": "science", "영어": "English", "역사": "history",
-      };
-      let cleanFn = originalFilename.replace(/\.(pdf|PDF)$/, "").replace(/[_]/g, " ");
-      Object.entries(korToEng).forEach(([kor, eng]) => { cleanFn = cleanFn.replace(new RegExp(kor, "g"), eng); });
+      const rawContent = visionDescription || usableText || "";
 
-      const context = [
-        title && !isGenericTitle ? `Material title: "${title}"` : "",
-        originalFilename ? `Filename: "${cleanFn}"` : "",
-        visionDescription ? `\nAI vision read of document: ${visionDescription}` : "",
-        !visionDescription && usableText ? `\nContent excerpt:\n${usableText.slice(0, 1500)}` : "",
-        /korean|한국어|korea/.test(languageHint) ? `\nPreferred video language: Korean. Include "Korean" as a search term.` : "",
-      ].filter(Boolean).join("\n");
+      // ── Step 1: Ask AI to summarise what the PDF is actually about (English) ──
+      if (rawContent.trim().length > 50) {
+        const summaryPrompt = `You are reading an educational document. Summarise what it is about in 2-3 sentences in English only.
+Be specific: name the exact subject, exam name, skill area, level, and any notable topics covered.
+Do NOT copy raw text — write a clear English description.
 
-      const queryPrompt = `Identify the subject of this educational material and extract 3-5 key English search terms.
+Document filename: "${cleanFn || originalFilename}"
+${title && !isGenericTitle ? `Material title: "${title}"` : ""}
+Document content:
+${rawContent.slice(0, 30000)}
 
-${context}
+Return ONLY the summary, nothing else.`;
+
+        const summaryRaw = (await askGroq(summaryPrompt, 120)).trim()
+          .replace(/[^\x00-\x7F\n.,'!?%()-]/g, " ").replace(/\s+/g, " ").trim();
+        if (summaryRaw.length > 20) contentSummary = summaryRaw;
+      }
+
+      // ── Step 2: Generate a targeted YouTube search query from the summary ──
+      const queryContext = contentSummary
+        || [
+          title && !isGenericTitle ? `Title: "${title}"` : "",
+          cleanFn ? `Filename: "${cleanFn}"` : "",
+        ].filter(Boolean).join(", ");
+
+      // With nothing to summarize (generic title, no filename, and the
+      // document summary above didn't produce anything), the prompt below
+      // would hand the model an empty "Material summary:" field — which in
+      // practice sometimes makes it echo back a placeholder/instruction
+      // string ("[Paste material summary here...]") instead of admitting it
+      // has nothing to search for. Skip the call and keep the plain
+      // filename/title fallback already set above rather than risk that.
+      if (queryContext.trim().length >= 3) {
+        const isKorean = /korean|한국어|korea/.test(languageHint);
+        const queryPrompt = `Write a YouTube search query (max 10 words, English only) to find the best educational tutorial video for this material.
+
+Material summary: ${queryContext}
+${isKorean ? "Preferred video language: Korean — include the word \"Korean\" in the query." : ""}
 
 Rules:
-- If it's a Korean language exam (TOPIK), include "TOPIK" and "Korean" as terms
-- If it's programming, include the language and concept (e.g. "Java", "JDBC")
-- Always include "tutorial" or "practice" or "lesson" as a term
-- Return ONLY a comma-separated list of terms, nothing else
+- Natural YouTube search phrase (not a comma list)
+- Name the exact subject, exam, or technology
+- End with "tutorial", "lesson", or "explained"
+- No generic filler words like "study" or "material"
 
-Example outputs:
-TOPIK, Korean, vocabulary, practice
-Java, JDBC, database, tutorial
-English, grammar, present tense, lesson`;
+Return ONLY the search query.
 
-      const raw = (await askGroq(queryPrompt, 60)).trim();
-      // Groq returns "term1, term2, term3" — join into search query
-      if (raw && raw.length > 3 && raw.length < 200 && raw.includes(",")) {
-        const terms = raw.split(",").map(t => t.trim()).filter(t => /^[\x00-\x7F]+$/.test(t) && t.length > 1);
-        if (terms.length >= 2) searchQuery = terms.slice(0, 5).join(" ");
-      } else if (raw && raw.length > 3 && raw.length < 100 && /^[\x00-\x7F]+$/.test(raw)) {
-        searchQuery = raw;
+Examples:
+TOPIK Korean writing essay intermediate level tutorial
+Java JDBC database connection PreparedStatement tutorial
+English present perfect tense grammar lesson explained`;
+
+        const raw = (await askGroq(queryPrompt, 30)).trim()
+          .replace(/^["']|["']$/g, "")
+          .replace(/[^\x00-\x7F]/g, "")
+          .trim();
+        // Defense in depth against the same failure mode: reject anything
+        // that looks like leaked prompt/instruction text rather than an
+        // actual search phrase, even if the guard above didn't catch it.
+        const looksLikePlaceholder = /\[|\bpaste\b|\bplease provide\b|\byour (query|search)\b|\bgenerate the\b|\binsert\b/i.test(raw);
+        if (raw && raw.length > 5 && raw.length < 120 && !looksLikePlaceholder) searchQuery = raw;
       }
     } catch {
       const fallbackKeywords = extractCodeKeywords(usableText + " " + originalFilename);
-      if (fallbackKeywords.length > 0) searchQuery = `${fallbackKeywords.slice(0, 3).join(" ")} tutorial`;
+      if (fallbackKeywords.length > 0) {
+        searchQuery = `${fallbackKeywords.slice(0, 3).join(" ")} tutorial`;
+      } else if (cleanFn.length > 3) {
+        searchQuery = `${cleanFn} tutorial`;
+      }
     }
 
     const pageToken = req.body.pageToken || "";
-    const languageHint = (req.body.languageHint || "English").toLowerCase().trim();
     let ytLang = "en";
     let ytRegion = "";
     let langQuerySuffix = "";
@@ -603,19 +817,75 @@ English, grammar, present tense, lesson`;
     // append Korean suffix to push YouTube toward Korean-language results
     if (langQuerySuffix) searchQuery = searchQuery + langQuerySuffix;
     const ytLangParam = `&relevanceLanguage=${ytLang}${ytRegion ? `&regionCode=${ytRegion}` : ""}`;
-    const ytUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(searchQuery)}&type=video&maxResults=3${ytLangParam}&key=${YOUTUBE_API_KEY}${pageToken ? `&pageToken=${pageToken}` : ""}`;
+    // Fetch 6 results (no duration filter — too restrictive; AI scoring will filter instead)
+    const ytUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(searchQuery)}&type=video&maxResults=6${ytLangParam}&key=${YOUTUBE_API_KEY}${pageToken ? `&pageToken=${pageToken}` : ""}`;
     const ytRes = await fetch(ytUrl, { signal: AbortSignal.timeout(10000) });
     if (!ytRes.ok) return res.json({ videos: [] });
 
     const ytData = await ytRes.json();
-    const videos = (ytData.items || []).map(item => ({
+    const rawVideos = (ytData.items || []).map(item => ({
       title: item.snippet.title,
+      description: (item.snippet.description || "").slice(0, 200),
       url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
       thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
       channel: item.snippet.channelTitle,
     }));
 
-    res.json({ videos, searchQuery, nextPageToken: ytData.nextPageToken || null });
+    // AI relevance filter — only run if we have enough topic context to judge by
+    let videos = rawVideos;
+    const topicContext = [
+      contentSummary,
+      !contentSummary && !isGenericTitle ? `Material title: "${title}"` : "",
+      !contentSummary && cleanFn ? `Subject: "${cleanFn}"` : "",
+    ].filter(Boolean).join("\n");
+
+    if (rawVideos.length > 0 && topicContext.trim().length > 10) {
+      try {
+        const videoList = rawVideos.map((v, i) => `${i + 1}. "${v.title}" — ${v.description}`).join("\n");
+        const scorePrompt = `Rate how relevant each YouTube video is to this educational material.
+
+Material: ${topicContext}
+
+Videos:
+${videoList}
+
+Output ONLY a JSON array of integer scores, one per video, like: [8, 2, 7, 1, 9, 4]
+10 = perfectly matches the material topic. 1 = completely unrelated.
+Output the array only, no other text.`;
+
+        const scoreRaw = (await askGroq(scorePrompt, 40)).trim();
+        const match = scoreRaw.match(/\[[\d,\s]+\]/);
+        if (match) {
+          const scores = JSON.parse(match[0]);
+          const scored = rawVideos.map((v, i) => ({ ...v, score: scores[i] ?? 5 }));
+          scored.sort((a, b) => b.score - a.score);
+          // Show videos scoring ≥5, always show at least 2 even if scores are low
+          const cutoff = scored[1]?.score >= 5 ? 5 : 0;
+          videos = scored.filter(v => v.score >= cutoff).slice(0, 3);
+        }
+      } catch {
+        // Scoring failed — return raw results unchanged
+      }
+    }
+
+    const cleanVideos = videos.slice(0, 3).map(({ score: _s, description: _d, ...rest }) => rest);
+
+    // Cache first-page results only — pagination is explicitly asking for
+    // fresh alternatives, caching it would defeat the point of "next page".
+    // Never cache an empty result: a bad/generic query or a transient
+    // YouTube API hiccup returning 0 videos would otherwise get permanently
+    // stuck as "no videos" for that document — every future search (and
+    // even "Re-search", once its own fresh result also came back empty)
+    // would keep reading that same empty cache entry forever.
+    if (!req.body.pageToken && cleanVideos.length > 0) {
+      pool.query(
+        "INSERT INTO youtube_suggest_cache (content_hash, search_query, videos_json) VALUES (?, ?, ?) " +
+        "ON DUPLICATE KEY UPDATE search_query = VALUES(search_query), videos_json = VALUES(videos_json)",
+        [contentHash, searchQuery, JSON.stringify(cleanVideos)]
+      ).catch(err => console.warn("[YouTube cache] write failed:", err.message));
+    }
+
+    res.json({ videos: cleanVideos, searchQuery, nextPageToken: ytData.nextPageToken || null });
   } catch (err) {
     res.status(500).json({ error: err.message, videos: [] });
   } finally {
@@ -676,7 +946,7 @@ exports.uploadMaterial = async (req, res) => {
 
     // Extract text — only PDFs support extraction (Word/PowerPoint/images are stored as-is)
     let text = "";
-    if (primaryFile.mimetype === "application/pdf") {
+    if (isPdfFile(primaryFile)) {
       const buffer = fs.readFileSync(primaryFile.path);
       text = await extractPdfTextWithPageMarkers(buffer);
     }
@@ -703,36 +973,11 @@ exports.uploadMaterial = async (req, res) => {
       });
     }
 
-    // AI summary — best effort
-    let summaryData = null;
-    try {
-      const prompt = `You are a teaching assistant. Read this material and return a JSON summary.
-
-Text (first 30000 chars):
-${text.slice(0, 30000)}
-
-Return ONLY valid JSON with exactly these keys:
-{
-  "short": "one sentence capturing the core idea",
-  "paragraph": "4-6 sentence summary paragraph",
-  "detailed": "numbered step-by-step detailed breakdown"
-}
-Detect the language and reply in the same language.`;
-
-      let out = (await askGroq(prompt)).trim();
-      out = out.replace(/```json\s*/g, "").replace(/```\s*/g, "");
-      const start = out.indexOf("{");
-      const end = out.lastIndexOf("}") + 1;
-      const parsed2 = JSON.parse(out.slice(start, end));
-
-      await pool.query(
-        "INSERT INTO material_summaries (material_id, summary_short, summary_paragraph, summary_detailed) VALUES (?, ?, ?, ?)",
-        [materialId, parsed2.short, parsed2.paragraph, parsed2.detailed]
-      );
-      summaryData = parsed2;
-    } catch (aiErr) {
-      console.warn("AI summary skipped:", aiErr.message);
-    }
+    // Fire-and-forget: the summary is a single ~3-6s call (short + paragraph
+    // + detailed all in one prompt) — the material picks it up on its next
+    // fetch once the INSERT lands, same non-blocking pattern used below for
+    // the YouTube suggestions. Runs independently of (in parallel with) that.
+    autoGenerateMaterialSummary(materialId, text);
 
     await pool.query(
       "INSERT INTO class_posts (class_id, author_id, content, type, material_id) VALUES (?, ?, ?, 'material', ?)",
@@ -756,53 +1001,20 @@ Detect the language and reply in the same language.`;
       } catch { /* ignore malformed */ }
     }
 
-    if (!aiResources) try {
-      const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
-      if (YOUTUBE_API_KEY) {
-        // Use Groq to generate a precise YouTube search query based on lesson content
-        const contentHint = summaryData
-          ? summaryData.short || summaryData.paragraph
-          : (text ? text.slice(0, 1000) : instructions || title);
-        let searchQuery = `${title} tutorial`;
-        try {
-          const queryPrompt = `A teacher uploaded a lesson titled "${title}".
-Lesson content: ${contentHint}
-
-Generate a short, specific YouTube search query (max 8 words) that would find the most relevant educational video for students learning this topic.
-Return ONLY the search query text, nothing else. No quotes, no explanation.`;
-          const raw = (await askGroq(queryPrompt, 50)).trim();
-          if (raw && raw.length > 3 && raw.length < 100) searchQuery = raw;
-        } catch {
-          // fallback to title
-        }
-
-        const ytRes = await fetch(
-          `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(searchQuery)}&type=video&maxResults=3&relevanceLanguage=en&key=${YOUTUBE_API_KEY}`,
-          { signal: AbortSignal.timeout(10000) }
-        );
-        if (ytRes.ok) {
-          const ytData = await ytRes.json();
-          aiResources = (ytData.items || []).map(item => ({
-            title: item.snippet.title,
-            url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
-            thumbnail: item.snippet.thumbnails?.medium?.url || item.snippet.thumbnails?.default?.url,
-            channel: item.snippet.channelTitle,
-            type: "video",
-          }));
-          await pool.query("UPDATE materials SET ai_resources = ? WHERE id = ?", [JSON.stringify(aiResources), materialId]);
-        }
-      }
-    } catch (resErr) {
-      console.warn("YouTube resources skipped:", resErr.message);
-    }
+    // Fire-and-forget: 2 sequential network calls (Groq query-gen + YouTube
+    // search) add ~3s to the upload response if awaited here. The material
+    // picks the result up on its next fetch once the UPDATE below lands.
+    // summaryData isn't available yet (also backgrounded, above) — falls
+    // back to the raw extracted text as its content hint, same as always
+    // when no summary is available.
+    if (!aiResources) autoSuggestYoutubeResources({ materialId, title, summaryData: null, text, instructions });
 
     res.status(201).json({
       id: materialId, title, instructions, week,
       file_url: `/uploads/${filePath}`,
-      summary: summaryData,
+      summary: null,
       ai_resources: aiResources,
       files,
-      warning: summaryData ? undefined : "Uploaded. AI summary unavailable (check GROQ_API_KEY).",
     });
   } catch (err) {
     console.error(err.message);
@@ -823,6 +1035,52 @@ exports.materialAI = async (req, res) => {
     );
     if (mats.length === 0) return res.status(404).json({ error: "Material not found" });
     const mat = mats[0];
+
+    // Same across the whole handler: Settings only offers "en"/"my" as app
+    // language (see Settings.jsx), so anything else collapses to English
+    // rather than silently caching under an arbitrary lang value.
+    const materialAiLang = req.body.lang === "my" ? "my" : "en";
+
+    // Summary/quiz/highlights are pure functions of the material's own
+    // content in a given language — the same for every student who opens it
+    // in that language — so the first person to open "AI Study Mentor" in a
+    // language pays for the AI call and everyone after (in that same
+    // language) gets the cached result for free. lang is part of the cache
+    // key so a Korean-set and Myanmar-set student never share a response
+    // written in the other one's language.
+    if (["summary", "quiz", "highlights"].includes(action)) {
+      const [[cachedAi]] = await pool.query(
+        "SELECT result_json FROM material_ai_cache WHERE material_id = ? AND action = ? AND lang = ?",
+        [req.params.materialId, action, materialAiLang]
+      );
+      if (cachedAi) {
+        await naturalCacheDelay();
+        return res.json({ data: cachedAi.result_json, cached: true });
+      }
+    }
+
+    // Cache first-turn assistant questions only — a question with prior
+    // conversation history depends on that history for its answer, so it
+    // can't be safely reused for a different conversation. Checked before
+    // the RAG lookup below so a cache hit skips that call too, not just
+    // the AI completion.
+    const isFreshAssistantQuestion = action === "chat" && req.body.mode === "assistant" && !(history || []).length && message;
+    let chatCacheKey = null;
+    if (isFreshAssistantQuestion) {
+      chatCacheKey = crypto.createHash("sha256")
+        .update(message.trim().toLowerCase())
+        .update("|" + (req.body.lang || "en"))
+        .update("|" + (req.body.currentPage || ""))
+        .digest("hex");
+      const [[cached]] = await pool.query(
+        "SELECT answer FROM material_chat_cache WHERE material_id = ? AND question_hash = ?",
+        [req.params.materialId, chatCacheKey]
+      );
+      if (cached) {
+        await naturalCacheDelay();
+        return res.json({ reply: cached.answer, cached: true });
+      }
+    }
 
     // Build retrieval query: for chat use the user's message, for others use action keywords
     const retrievalQuery = action === "chat" && message
@@ -849,16 +1107,22 @@ exports.materialAI = async (req, res) => {
 
     if (action === "chat" && req.body.mode === "assistant") {
       const { lang, currentPage, totalPages } = req.body;
-      const isEn = lang === "en";
 
-      const langInstruction = isEn
-        ? `Respond in English only. For technical terms, use English as-is.`
-        : `မြန်မာဘာသာ ဖြင့်သာ ဖြေဆိုပါ။ Technical term များကို English ဖြင့် ထားပါ၊ ရှင်းပြချက်ကို မြန်မာ ဖြင့် ပေးပါ။`;
+      // The student picks whatever language they type in, question by
+      // question — it does not follow the Settings display language. The
+      // system prompt below is therefore always authored in English (it's
+      // instructions to the model, never shown to the student) so nothing in
+      // it competes with langInstruction; only langInstruction decides what
+      // language the actual reply comes back in, detected fresh off each
+      // question. Writing part of the prompt in a fixed language (e.g.
+      // matching req.body.lang, which only reflects the UI setting) was
+      // found to make the model imitate that language's example wording —
+      // e.g. the scope-refusal example below — even when the student's
+      // question was in a different language entirely.
+      const langInstruction = `Detect the language the student's latest question (the final "user" message) is written in, and reply in that exact same language — regardless of what language this system prompt, the document, or earlier messages in the conversation are in. Keep technical/domain terms in their original language (e.g. English or Korean) when there's no natural equivalent, but write the surrounding explanation in the detected language. This applies to every part of your reply, including if you have to say you can't answer something — that refusal must also be in the detected language, not translated from an English example.`;
 
       const pageContext = currentPage && totalPages
-        ? (isEn
-            ? `The student is currently viewing page ${currentPage} of ${totalPages}.`
-            : `ကျောင်းသား လက်ရှိ ကြည့်နေသည့် စာမျက်နှာမှာ ${totalPages} ထဲမှ ${currentPage} ဖြစ်သည်။`)
+        ? `The student is currently viewing page ${currentPage} of ${totalPages}.`
         : "";
 
       // Pages are only available for materials uploaded after the page-marker
@@ -885,34 +1149,25 @@ exports.materialAI = async (req, res) => {
       }
 
       const currentPageBlock = currentPageHasText
-        ? (isEn
-            ? `\n\nCurrent page (page ${currentPage}) content, verbatim:\n${currentPageEntry.text}`
-            : `\n\nလက်ရှိ စာမျက်နှာ (page ${currentPage}) ၏ အကြောင်းအရာ:\n${currentPageEntry.text}`)
+        ? `\n\nCurrent page (page ${currentPage}) content, verbatim:\n${currentPageEntry.text}`
         : "";
 
       const extractedLength = cleanTextContent.length;
       const avgCharsPerPage = totalPages ? extractedLength / totalPages : Infinity;
 
       const pageSpecificWarning = currentPage && pages.length > 0 && !currentPageHasText
-        ? (isEn
-            ? `No extractable text was found for page ${currentPage} specifically — it's likely an image-based slide. Don't guess its content; say so honestly if asked about it. The rest of the document below may still be usable for other questions.`
-            : `စာမျက်နှာ ${currentPage} အတွက် စာသား ထုတ်ယူ၍ မရခဲ့ပါ — ပုံစံ slide ဖြစ်နိုင်ပါသည်။ ဒီစာမျက်နှာ အကြောင်း မေးခွန်းအတွက် မှန်းဆ၍ မဖြေဘဲ ရိုးသားစွာ ပြောပါ။ အောက်ပါ document အခြားအပိုင်းများကိုမူ အခြား မေးခွန်းများအတွက် အသုံးပြု၍ ရနိုင်ပါသည်။`)
+        ? `No extractable text was found for page ${currentPage} specifically — it's likely an image-based slide. Don't guess its content; say so honestly if asked about it. The rest of the document below may still be usable for other questions.`
         : "";
 
       const documentWideSparseWarning = pages.length === 0 && avgCharsPerPage < 80
-        ? (isEn
-            ? `Only ${extractedLength} characters of text could be extracted from this ${totalPages}-page document in total — most pages, likely including the current one, are image-based slides with no extractable text. You do NOT have reliable access to specific page content. If asked about "this page" or details you cannot verify in the Material content below, honestly say you can't read that page's content because it appears to be an image-based slide, instead of guessing or inventing details.`
-            : `ဤ ${totalPages} မျက်နှာ document တစ်ခုလုံးမှ စာသား ${extractedLength} လုံးသာ ထုတ်ယူနိုင်ခဲ့သည် — စာမျက်နှာအများစု (လက်ရှိ စာမျက်နှာ အပါအဝင် ဖြစ်နိုင်သည်) သည် စာသား ထုတ်ယူ၍ မရသော ပုံစံ slide များ ဖြစ်သည်။ ဤ စာမျက်နှာ အတွက် တိကျသော အကြောင်းအရာ ရရှိထားခြင်း မရှိပါ။ "ဒီ page" သို့မဟုတ် အောက်ပါ Material content တွင် အတည်ပြုနိုင်ခြင်း မရှိသော အသေးစိတ်များကို မေးမြန်းပါက၊ မှန်းဆ၍ မဖြေဘဲ ဤ စာမျက်နှာကို ပုံစံ slide ဖြစ်၍ ဖတ်၍ မရကြောင်း ရိုးသားစွာ ပြောပါ။`)
+        ? `Only ${extractedLength} characters of text could be extracted from this ${totalPages}-page document in total — most pages, likely including the current one, are image-based slides with no extractable text. You do NOT have reliable access to specific page content. If asked about "this page" or details you cannot verify in the Material content below, honestly say you can't read that page's content because it appears to be an image-based slide, instead of guessing or inventing details.`
         : "";
 
       const sparseWarning = pageSpecificWarning || documentWideSparseWarning;
 
-      const scopeInstruction = isEn
-        ? `You only discuss this lesson's material. If the student asks something unrelated to this document (general chit-chat, other subjects, unrelated topics), politely say you can only help with this lesson's content and ask what they'd like to know about it — do not answer the unrelated question.`
-        : `သင်သည် ဤ သင်ခန်းစာ အကြောင်းအရာကိုသာ ဆွေးနွေးပါသည်။ ကျောင်းသားက ဤ document နှင့် မသက်ဆိုင်သော မေးခွန်း (ယေဘုယျ စကားစမြည်၊ အခြား ဘာသာရပ်များ) မေးပါက၊ ဤ သင်ခန်းစာ အကြောင်းအရာကိုသာ ကူညီနိုင်ကြောင်း ယဉ်ကျေးစွာ ပြောပြီး ဘာသိချင်သည်ကို ပြန်မေးပါ — မသက်ဆိုင်သော မေးခွန်းကို လုံးဝ မဖြေပါနှင့်။`;
+      const scopeInstruction = `You only discuss this lesson's material. If the student asks something unrelated to this document (general chit-chat, other subjects, unrelated topics), politely say (in the detected language, not literally translated from this English sentence) that you can only help with this lesson's content and ask what they'd like to know about it — do not answer the unrelated question.`;
 
-      const systemContent = isEn
-        ? `You are a helpful AI study assistant for this lesson material. ${langInstruction} ${scopeInstruction}
+      const systemContent = `You are a helpful AI study assistant for this lesson material. ${langInstruction} ${scopeInstruction}
 ${pageContext}${currentPageBlock}
 
 Material content (full document):
@@ -920,16 +1175,7 @@ ${context}
 
 ${sparseWarning}
 
-Answer the student's question directly and naturally. When asked about the current page, prioritize the "Current page" content above — it's the exact text of that page. Only state facts that are actually supported by the content above — never invent page numbers, headings, or details you cannot verify.`
-        : `သင်သည် ဤ သင်ခန်းစာ အတွက် အထောက်အကူပြု AI study assistant ဖြစ်သည်။ ${langInstruction} ${scopeInstruction}
-${pageContext}${currentPageBlock}
-
-သင်ခန်းစာ အကြောင်းအရာ (document တစ်ခုလုံး):
-${context}
-
-${sparseWarning}
-
-ကျောင်းသား၏ မေးခွန်းကို တိုက်ရိုက်နှင့် သဘာဝကျစွာ ဖြေပါ။ လက်ရှိ စာမျက်နှာနှင့် ပတ်သက်၍ မေးလျှင် အထက်ပါ "Current page" အကြောင်းအရာကို ဦးစားပေး အသုံးပြုပါ — ၎င်းသည် ထိုစာမျက်နှာ၏ အတိအကျ စာသား ဖြစ်သည်။ အထက်ပါ အကြောင်းအရာ တွင် အမှန်တကယ် ရှိသော အချက်များကိုသာ ပြောပါ — စိစစ်၍ မရသော စာမျက်နှာနံပါတ်၊ ခေါင်းစဉ် (သို့) အသေးစိတ်များကို လုံးဝ မတီထွင်ပါနှင့်။`;
+Answer the student's question directly and naturally. When asked about the current page, prioritize the "Current page" content above — it's the exact text of that page. Only state facts that are actually supported by the content above — never invent page numbers, headings, or details you cannot verify.`;
 
       const msgs = [
         { role: "system", content: systemContent },
@@ -937,7 +1183,17 @@ ${sparseWarning}
         { role: "user", content: message },
       ];
       const completion = await completeText({ messages: msgs, maxTokens: 600 });
-      return res.json({ reply: completion.choices[0].message.content });
+      const reply = completion.choices[0].message.content;
+
+      if (chatCacheKey) {
+        pool.query(
+          "INSERT INTO material_chat_cache (material_id, question_hash, question, answer, lang) VALUES (?, ?, ?, ?, ?) " +
+          "ON DUPLICATE KEY UPDATE answer = VALUES(answer)",
+          [req.params.materialId, chatCacheKey, message, reply, lang || "en"]
+        ).catch(err => console.warn("[Chat cache] write failed:", err.message));
+      }
+
+      return res.json({ reply });
     }
 
     if (action === "chat") {
@@ -946,50 +1202,50 @@ ${sparseWarning}
 
       const levelGuide = isEn ? {
         beginner: {
-          style: `The student is just starting to learn this material.`,
+          style: `The student is just starting to learn this material. Be patient and encouraging — the goal right now is building confidence, not testing limits.`,
           qStyle: `Ask simple, fundamental questions (e.g. define a term, what is X)`,
-          explain: `If wrong, gently correct and explain simply with 1-2 examples.`,
+          explain: `If wrong, gently correct — name the specific misconception if it's a common one for beginners at this material, then explain simply with 1-2 concrete examples.`,
           correct: `✅ Correct!`,
           wrong: `❌ Not quite —`,
           summary: `Great job! Here's a summary of what we covered:`,
         },
         intermediate: {
-          style: `The student knows the basics but has some gaps.`,
+          style: `The student knows the basics but has some gaps. Push a little past their comfort zone — the goal is closing those specific gaps, not repeating what they already know.`,
           qStyle: `Ask application-based questions (e.g. where/why do we use X)`,
-          explain: `If wrong, explain the concept connection clearly.`,
+          explain: `If wrong, name what they likely confused it with and explain the distinction clearly, not just the correct answer in isolation.`,
           correct: `✅ Correct!`,
           wrong: `❌ Not quite —`,
           summary: `Good effort! Here's a summary of what we covered:`,
         },
         advanced: {
-          style: `The student knows the material well.`,
-          qStyle: `Ask challenging questions (edge cases, compare/contrast, problem-solving)`,
-          explain: `If wrong, give a deeper explanation and follow up with a harder angle.`,
+          style: `The student knows the material well. Treat them like a peer, not a beginner — the goal is stress-testing edge cases and exam-trap-style questions, not restating the basics.`,
+          qStyle: `Ask challenging questions (edge cases, compare/contrast, problem-solving, "which of these is NOT true" style traps)`,
+          explain: `If wrong, don't just correct it — explain why the trap was tempting, give a deeper explanation, and follow up with a harder angle.`,
           correct: `✅ Correct!`,
           wrong: `❌ Not quite —`,
           summary: `Excellent! Here's a summary of the topics we explored:`,
         },
       } : {
         beginner: {
-          style: `ကျောင်းသားသည် ဤသင်ခန်းစာကို ယခုမှ စတင်သင်ကြားနေသူဖြစ်သည်။`,
+          style: `ကျောင်းသားသည် ဤသင်ခန်းစာကို ယခုမှ စတင်သင်ကြားနေသူဖြစ်သည်။ စိတ်ရှည်ပြီး အားပေးဆက်ဆံပါ — အခုအဓိကရည်ရွယ်ချက်က confidence တည်ဆောက်ဖို့ဖြစ်သည်၊ စမ်းသပ်ဖို့မဟုတ်ပါ။`,
           qStyle: `အလွယ်ဆုံး အခြေခံမေးခွန်းများ မေးပါ (ဥပမာ - အဓိပ္ပာယ်ဖွင့်ဆို၊ ဘာလဲ ဆိုတာမျိုး)`,
-          explain: `မှားရင် ဒဏ်မပေးဘဲ ရိုးရှင်းစွာ ပြင်ပြောပြီး ရှင်းပြပါ။ နမူနာ ၁-၂ ခု ပေးပါ။`,
+          explain: `မှားရင် ဒဏ်မပေးဘဲ ပြင်ပြောပါ — beginner တွေ ဒီနေရာမှာ ဘယ်လိုမှားတတ်လဲဆိုတာကို အမည်တပ်ပြီး ရှင်းပြပါ၊ နမူနာ ၁-၂ ခု ပေးပါ။`,
           correct: `✅ မှန်ပါတယ်!`,
           wrong: `❌ မဟုတ်သေးပါ —`,
           summary: `ကောင်းပါတယ်! ဒါကို အကျဉ်းချုပ်ပြမည်:`,
         },
         intermediate: {
-          style: `ကျောင်းသားသည် အခြေခံသိသော်လည်း အချို့ concept များ မရှင်းသေးပါ။`,
+          style: `ကျောင်းသားသည် အခြေခံသိသော်လည်း အချို့ concept များ မရှင်းသေးပါ။ comfort zone အနည်းငယ် ကျော်ပြီး မေးပါ — target ကတော့ ဒီ gap အတိအကျကို ပိတ်ဖို့ဖြစ်ပါတယ်။`,
           qStyle: `application-based မေးခွန်းများ မေးပါ (ဘယ်နေရာသုံးသလဲ၊ ဘာကြောင့်သုံးသလဲ မျိုး)`,
-          explain: `မှားရင် ဘာကြောင့်မှားတယ်ဆိုတာ concept ချိတ်ဆက်ပြီး ရှင်းပြပါ။`,
+          explain: `မှားရင် ဘာနဲ့ရောထွေးနေလဲဆိုတာ အမည်တပ်ပြီး ခွဲခြားရှင်းပြပါ၊ မှန်ကန်တဲ့အဖြေကိုပဲ ပြောပြီး မရပ်ပါနဲ့။`,
           correct: `✅ မှန်ပါတယ်!`,
           wrong: `❌ မဟုတ်သေးပါ —`,
           summary: `ကောင်းတယ်! ဒါကို အကျဉ်းချုပ်ပြမည်:`,
         },
         advanced: {
-          style: `ကျောင်းသားသည် သင်ခန်းစာကို ကောင်းစွာ သိသည်ဟု ယူဆသည်။`,
-          qStyle: `ခက်ခဲသောမေးခွန်းများ မေးပါ (edge case၊ compare/contrast၊ problem-solving မျိုး)`,
-          explain: `မှားရင် deeper explanation ပေးပြီး ပိုခက်သောအသွင် ဆက်ရှင်းပြပါ။`,
+          style: `ကျောင်းသားသည် သင်ခန်းစာကို ကောင်းစွာ သိသည်ဟု ယူဆသည်။ peer တစ်ယောက်လို ဆက်ဆံပါ — target ကတော့ edge case နဲ့ exam-trap ပုံစံမေးခွန်းတွေကို စမ်းသပ်ဖို့ဖြစ်ပါတယ်။`,
+          qStyle: `ခက်ခဲသောမေးခွန်းများ မေးပါ (edge case၊ compare/contrast၊ problem-solving၊ "ဘယ်ဟာက မှားလဲ" ပုံစံ trap များ)`,
+          explain: `မှားရင် ဖြေချက်ကိုပဲ မပြင်ဘဲ — ဒီ trap က ဘာကြောင့် စွဲဆောင်နိုင်ခဲ့လဲဆိုတာ ရှင်းပြပြီး၊ deeper explanation နဲ့ ပိုခက်သောအသွင် ဆက်ရှင်းပြပါ။`,
           correct: `✅ မှန်ပါတယ်!`,
           wrong: `❌ မဟုတ်သေးပါ —`,
           summary: `အလွန်ကောင်းတယ်! ဒါကို အကျဉ်းချုပ်ပြမည်:`,
@@ -1047,20 +1303,53 @@ ${context}
       return res.json({ reply: completion.choices[0].message.content });
     }
 
+    // The student picked this language in Settings specifically so they're
+    // not stuck needing a second AI/translator just to understand the
+    // first one's explanation — every human-readable field below must
+    // actually be written in it, not just the source material's language.
+    const materialAiLangInstruction = materialAiLang === "my"
+      ? `Write every explanation, example, and description in Burmese (Myanmar language) — the student reads Burmese, not the material's own language. A technical term itself may stay in its original language (Korean/English) when there's no natural Burmese equivalent, but the surrounding explanation must be Burmese.`
+      : `Write every explanation, example, and description in English.`;
+
     let systemPrompt = "";
     let userPrompt = "";
 
     if (action === "highlights") {
-      systemPrompt = `You are a study assistant. Always respond with valid JSON only. No explanation, no markdown.`;
-      userPrompt = `Extract 8 key terms from this material. Return JSON: {"data":[{"term":"...","explanation":"..."}]}
+      systemPrompt = `You are an expert study coach for language and exam-prep learners (this platform's students are largely preparing for the Korean TOPIK exam). Always respond with valid JSON only. No explanation, no markdown.`;
+      userPrompt = `Extract the 8 most important terms from this material for someone studying it for the first time.
+For each term, judge which category it belongs to and give a short usage example that shows it in context (a real sentence, not a definition restated).
+
+${materialAiLangInstruction} (the "category" value itself must stay exactly one of the English words vocabulary/grammar/concept/formula — only "explanation" and "example" follow the language instruction.)
+
+Return JSON: {"data":[{"term":"...","category":"vocabulary|grammar|concept|formula","explanation":"1-2 sentences, plain and concrete","example":"one short example sentence or usage showing the term applied"}]}
+
+Pick terms a student would actually get stuck on — skip anything too obvious. Order roughly by how foundational each term is (most fundamental first).
+
 Material: ${context.slice(0, 6000)}`;
     } else if (action === "summary") {
-      systemPrompt = `You are a study assistant. Always respond with valid JSON only. No explanation, no markdown.`;
-      userPrompt = `Summarize this material in exactly 5 bullet points. Return JSON: {"data":["point1","point2","point3","point4","point5"]}
+      systemPrompt = `You are an expert study coach for language and exam-prep learners (this platform's students are largely preparing for the Korean TOPIK exam). Always respond with valid JSON only. No explanation, no markdown.`;
+      userPrompt = `Summarize this material as exactly 5 points, but don't just restate content flatly — give each point a role so a student skimming gets both the "what" and the "why it matters":
+- 1 point labeled "Core concept": the single most important idea in this material
+- 2-3 points labeled "Key point": specific facts, rules, or steps worth remembering
+- 1 point labeled "Why it matters": how this connects to the exam or to real use, or what it builds toward
+
+${materialAiLangInstruction} (the "label" value itself must stay exactly one of "Core concept"/"Key point"/"Why it matters" in English — only "detail" follows the language instruction.)
+
+Return JSON: {"data":[{"label":"Core concept|Key point|Why it matters","detail":"1-2 concrete sentences, no filler"}]}
+
 Material: ${context.slice(0, 6000)}`;
     } else if (action === "quiz") {
-      systemPrompt = `You are a quiz generator. Always respond with valid JSON only. No explanation, no markdown.`;
-      userPrompt = `Create 3 multiple choice questions. Return JSON: {"data":[{"question":"...","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"A","explanation":"..."}]}
+      systemPrompt = `You are an expert exam-question writer for language and exam-prep learners (this platform's students are largely preparing for the Korean TOPIK exam). Always respond with valid JSON only. No explanation, no markdown.`;
+      userPrompt = `Create 3 multiple choice questions from this material, one at each difficulty: easy, medium, hard.
+- Easy: tests a term or fact stated directly in the material.
+- Medium: requires connecting two ideas from the material or applying a rule to a new example.
+- Hard: an edge case, a common student misconception about this material, or a "which of these is NOT true" style question.
+Each wrong option should be a plausible mistake a real student would make, not a random distractor. In the explanation, say why the correct answer is right AND briefly why the most tempting wrong option is wrong.
+
+${materialAiLangInstruction} (keep the "A. "/"B. "/"C. "/"D. " option prefixes and the "answer" and "difficulty" values in English exactly as specified — only "question", the text after each option's letter prefix, and "explanation" follow the language instruction.)
+
+Return JSON: {"data":[{"question":"...","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"A","explanation":"why correct is right, and why the closest wrong option is wrong","difficulty":"easy|medium|hard"}]}
+
 Material: ${context.slice(0, 6000)}`;
     }
 
@@ -1074,6 +1363,15 @@ Material: ${context.slice(0, 6000)}`;
     });
 
     const parsed = JSON.parse(completion.choices[0].message.content);
+
+    if (["summary", "quiz", "highlights"].includes(action)) {
+      pool.query(
+        "INSERT INTO material_ai_cache (material_id, action, lang, result_json) VALUES (?, ?, ?, ?) " +
+        "ON DUPLICATE KEY UPDATE result_json = VALUES(result_json)",
+        [req.params.materialId, action, materialAiLang, JSON.stringify(parsed.data)]
+      ).catch(err => console.warn("[AI cache] write failed:", err.message));
+    }
+
     return res.json({ data: parsed.data });
   } catch (err) {
     console.error("materialAI error:", err.message);
@@ -1150,7 +1448,12 @@ exports.getMaterialFile = async (req, res) => {
 
     res.setHeader("Content-Type", contentType);
     // "inline" lets the browser render the file instead of triggering a download.
-    res.setHeader("Content-Disposition", `inline; filename="${encodeURIComponent(safeName)}"`);
+    // The frontend and this API are different origins (5173 vs 5001), and the
+    // HTML `download` attribute on an <a> is silently ignored for cross-origin
+    // links — the server's own Content-Disposition wins. So a real download
+    // needs to opt into "attachment" here rather than relying on that attribute.
+    const disposition = req.query.download ? "attachment" : "inline";
+    res.setHeader("Content-Disposition", `${disposition}; filename="${encodeURIComponent(safeName)}"`);
     res.setHeader("Accept-Ranges", "bytes");
     // Deliberately not setting X-Frame-Options: the frontend (5173) and this API (5001)
     // are different origins, so even SAMEORIGIN would block the <iframe>. Express doesn't
@@ -1301,7 +1604,7 @@ exports.inviteStudent = async (req, res) => {
     );
     if (existing) return res.status(400).json({ error: "Already a member" });
 
-    await pool.query("INSERT INTO class_members (class_id, user_id, role) VALUES (?, ?, 'student')", [classId, targetUser.id]);
+    await pool.query("INSERT INTO class_members (class_id, user_id) VALUES (?, ?)", [classId, targetUser.id]);
     res.json({ message: "Invited", user: targetUser });
   } catch (err) { res.status(500).json({ error: err.message }); }
 };
@@ -1337,9 +1640,17 @@ exports.updateMaterial = async (req, res) => {
         try { fs.unlinkSync(oldPath); } catch {}
       }
       filePath = primaryFile.filename;
-      if (primaryFile.mimetype === "application/pdf") {
+      if (isPdfFile(primaryFile)) {
         const buffer = fs.readFileSync(primaryFile.path);
         textContent = await extractPdfTextWithPageMarkers(buffer);
+        // uploadMaterial does this on the initial upload, but a re-upload
+        // through edit was never re-indexing RAG — the assistant chat
+        // prefers RAG chunks over text_content, so a swapped file kept
+        // answering from whatever the *previous* file's chunks were,
+        // indefinitely, even though text_content above was already correct.
+        // /ingest upserts by material_id, so this fully replaces the stale
+        // chunks rather than appending alongside them.
+        ragIngest(primaryFile.path, m.id, primaryFile.originalname || primaryFile.filename);
       } else {
         textContent = null;
       }
@@ -1408,6 +1719,92 @@ exports.getMaterialAssignments = async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 };
 
+// GET /api/classroom/materials/:materialId/comments — private per-student threads with the teacher
+exports.getMaterialComments = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [[m]] = await pool.query("SELECT * FROM materials WHERE id=?", [req.params.materialId]);
+    if (!m) return res.status(404).json({ error: "Not found" });
+    const access = await checkAccess(m.class_id, userId);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+
+    const query = access.role === "teacher"
+      ? `SELECT mc.*, u.name AS author_name FROM material_comments mc JOIN users u ON u.id = mc.author_id WHERE mc.material_id = ? ORDER BY mc.created_at ASC`
+      : `SELECT mc.*, u.name AS author_name FROM material_comments mc JOIN users u ON u.id = mc.author_id WHERE mc.material_id = ? AND (mc.author_id = ? OR mc.target_student_id = ?) ORDER BY mc.created_at ASC`;
+    const params = access.role === "teacher" ? [req.params.materialId] : [req.params.materialId, userId, userId];
+    const [comments] = await pool.query(query, params);
+    res.json(comments);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /api/classroom/materials/:materialId/comments
+exports.addMaterialComment = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [[m]] = await pool.query("SELECT * FROM materials WHERE id=?", [req.params.materialId]);
+    if (!m) return res.status(404).json({ error: "Not found" });
+    const access = await checkAccess(m.class_id, userId);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+
+    const { content, target_student_id } = req.body;
+    if (!content?.trim()) return res.status(400).json({ error: "Comment cannot be empty" });
+
+    const targetId = access.role === "teacher" ? (target_student_id || null) : userId;
+    if (access.role === "teacher" && !targetId) return res.status(400).json({ error: "target_student_id is required" });
+
+    const [result] = await pool.query(
+      "INSERT INTO material_comments (material_id, author_id, target_student_id, content) VALUES (?, ?, ?, ?)",
+      [req.params.materialId, userId, targetId, content.trim()]
+    );
+    const [[comment]] = await pool.query(
+      `SELECT mc.*, u.name AS author_name FROM material_comments mc JOIN users u ON u.id = mc.author_id WHERE mc.id = ?`,
+      [result.insertId]
+    );
+    res.status(201).json(comment);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// PUT /api/classroom/material-comments/:commentId  (author only, teacher or student)
+exports.editMaterialComment = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [[comment]] = await pool.query("SELECT * FROM material_comments WHERE id = ?", [req.params.commentId]);
+    if (!comment) return res.status(404).json({ error: "Not found" });
+    if (comment.author_id !== userId) return res.status(403).json({ error: "You can only edit your own comments" });
+
+    const { content } = req.body;
+    if (!content?.trim()) return res.status(400).json({ error: "Comment cannot be empty" });
+
+    await pool.query("UPDATE material_comments SET content=? WHERE id=?", [content.trim(), req.params.commentId]);
+    const [[updated]] = await pool.query(
+      `SELECT mc.*, u.name AS author_name FROM material_comments mc JOIN users u ON u.id = mc.author_id WHERE mc.id = ?`,
+      [req.params.commentId]
+    );
+    res.json(updated);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// DELETE /api/classroom/material-comments/:commentId  (author only, teacher or student)
+exports.deleteMaterialComment = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [[comment]] = await pool.query("SELECT * FROM material_comments WHERE id = ?", [req.params.commentId]);
+    if (!comment) return res.status(404).json({ error: "Not found" });
+    if (comment.author_id !== userId) return res.status(403).json({ error: "You can only delete your own comments" });
+
+    await pool.query("DELETE FROM material_comments WHERE id=?", [req.params.commentId]);
+    res.json({ message: "Deleted" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 // POST /api/classroom/tts  { text }
 // Speaks AI Chat replies aloud in voice mode with a natural ElevenLabs voice
 // instead of the browser's built-in (robotic) speech synthesis.
@@ -1448,5 +1845,198 @@ exports.listUpcomingDeadlines = async (req, res) => {
       [userId, userId, userId]
     );
     res.json({ deadlines });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+// POST /api/classroom/classes/:id/notes  (teacher → student)
+exports.sendNote = async (req, res) => {
+  const { id: classId } = req.params;
+  const { studentId, category, message } = req.body;
+  const teacherId = req.user.id;
+  try {
+    const [[cls]] = await pool.query("SELECT * FROM classes WHERE id=?", [classId]);
+    if (!cls || cls.teacher_id !== teacherId) return res.status(403).json({ error: "Not teacher of this class" });
+    const [[teacher]] = await pool.query("SELECT name FROM users WHERE id=?", [teacherId]);
+    const categoryLabel = { concern: "Attendance/Grade concern", reminder: "General reminder", positive: "Positive feedback" }[category] || category;
+    await pool.query(
+      "INSERT INTO notifications (user_id, type, title, message, link_url) VALUES (?,?,?,?,?)",
+      [studentId, "teacher_note", `Note from ${teacher.name}`, `[${categoryLabel}] ${message}`, `/classroom/${classId}`]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+// DELETE /api/classroom/materials/:id  (teacher only)
+exports.deleteMaterial = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [[m]] = await pool.query("SELECT * FROM materials WHERE id=?", [req.params.id]);
+    if (!m) return res.status(404).json({ error: "Not found" });
+    const access = await checkAccess(m.class_id, userId);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+    if (access.role !== "teacher") return res.status(403).json({ error: "Teachers only" });
+
+    // Delete primary file from disk if it exists
+    if (m.file_path) {
+      const abs = path.join(__dirname, "../../uploads", m.file_path);
+      fs.unlink(abs, () => {});
+    }
+
+    // Delete extra attachments
+    const [extras] = await pool.query("SELECT file_path FROM material_files WHERE material_id=?", [m.id]);
+    extras.forEach(f => {
+      if (f.file_path) fs.unlink(path.join(__dirname, "../../uploads", f.file_path), () => {});
+    });
+
+    // Cascade delete (comments, files, highlights, etc.)
+    await pool.query("DELETE FROM material_files WHERE material_id=?", [m.id]);
+    await pool.query("DELETE FROM material_comments WHERE material_id=?", [m.id]);
+    await pool.query("DELETE FROM pdf_highlights WHERE material_id=?", [m.id]).catch(() => {});
+    await pool.query("DELETE FROM bookmarks WHERE material_id=?", [m.id]).catch(() => {});
+    await pool.query("DELETE FROM materials WHERE id=?", [m.id]);
+
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+// GET /api/classroom/classes/:id/members/rich  (teacher: members with grade% + attendance%)
+exports.getRichMembers = async (req, res) => {
+  const { id: classId } = req.params;
+  const teacherId = req.user.id;
+  try {
+    const [[cls]] = await pool.query("SELECT * FROM classes WHERE id=?", [classId]);
+    if (!cls || cls.teacher_id !== teacherId) return res.status(403).json({ error: "Not teacher of this class" });
+
+    const [students] = await pool.query(
+      `SELECT u.id, u.name, u.email FROM users u
+       JOIN class_members cm ON cm.user_id = u.id WHERE cm.class_id = ?`,
+      [classId]
+    );
+    const [assignments] = await pool.query(
+      "SELECT id, points FROM assignments WHERE class_id=? AND is_draft=0 ORDER BY created_at ASC",
+      [classId]
+    );
+    const [allSubs] = await pool.query(
+      `SELECT s.student_id, s.assignment_id, s.grade FROM submissions s
+       JOIN assignments a ON a.id=s.assignment_id WHERE a.class_id=? AND s.grade IS NOT NULL`,
+      [classId]
+    );
+    const [attSessions] = await pool.query(
+      "SELECT id FROM attendance_sessions WHERE class_id=?", [classId]
+    );
+    const sessionIds = attSessions.map(s => s.id);
+    const attRecords = sessionIds.length
+      ? (await pool.query("SELECT student_id, status FROM attendance_records WHERE session_id IN (?)", [sessionIds]))[0]
+      : [];
+
+    const subMap = {};
+    allSubs.forEach(s => {
+      if (!subMap[s.student_id]) subMap[s.student_id] = [];
+      subMap[s.student_id].push(s);
+    });
+    const attMap = {};
+    attRecords.forEach(r => {
+      if (!attMap[r.student_id]) attMap[r.student_id] = [];
+      attMap[r.student_id].push(r.status);
+    });
+
+    const rows = students.map(st => {
+      const subs = subMap[st.id] || [];
+      const earned = subs.reduce((acc, s) => acc + s.grade, 0);
+      const possible = subs.reduce((acc, s) => {
+        const a = assignments.find(a => a.id === s.assignment_id);
+        return acc + (a?.points || 0);
+      }, 0);
+      const gradePct = possible > 0 ? Math.round((earned / possible) * 100) : null;
+
+      const att = attMap[st.id] || [];
+      const totalSessions = sessionIds.length;
+      const presentCount = att.filter(s => s === "present" || s === "late").length;
+      const attPct = totalSessions > 0 ? Math.round((presentCount / totalSessions) * 100) : null;
+
+      return { id: st.id, name: st.name, email: st.email, gradePct, attPct };
+    });
+
+    res.json({ students: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+// ─── AI Tutor (Hint-Only Mode) ────────────────────────────────────────────────
+// Schema (ai_tutor_config table) lives in scripts/setup_db.js — this used to
+// bootstrap itself here via a bare pool.query() fired at module load, same
+// anti-pattern as posts.controller.js and attendance.controller.js before it
+// (real, unmocked query the instant this module is require()'d — silently
+// corrupts any test that mocks pool.query and asserts on exactly which
+// queries ran, since this fires before the test body ever gets a chance to
+// set that mock up).
+
+// GET /classroom/classes/:id/ai-tutor  — teacher & student can read
+exports.getAITutorConfig = async (req, res) => {
+  try {
+    const [[row]] = await pool.query(
+      "SELECT * FROM ai_tutor_config WHERE class_id=?", [req.params.id]
+    );
+    res.json(row || null);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+// POST /classroom/classes/:id/ai-tutor  — teacher only: save config
+exports.saveAITutorConfig = async (req, res) => {
+  const userId = req.user.id;
+  try {
+    const [[cls]] = await pool.query("SELECT teacher_id FROM classes WHERE id=?", [req.params.id]);
+    if (!cls) return res.status(404).json({ error: "Class not found" });
+    if (cls.teacher_id !== userId) return res.status(403).json({ error: "Teachers only" });
+    const { lesson_context, homework_context, enabled } = req.body;
+    await pool.query(
+      `INSERT INTO ai_tutor_config (class_id, lesson_context, homework_context, enabled, created_by)
+       VALUES (?,?,?,?,?)
+       ON DUPLICATE KEY UPDATE lesson_context=VALUES(lesson_context), homework_context=VALUES(homework_context), enabled=VALUES(enabled)`,
+      [req.params.id, lesson_context || "", homework_context || "", enabled !== false ? 1 : 0, userId]
+    );
+    const [[row]] = await pool.query("SELECT * FROM ai_tutor_config WHERE class_id=?", [req.params.id]);
+    res.json(row);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+};
+
+// POST /classroom/classes/:id/ai-tutor/chat  — student sends message
+exports.aiTutorChat = async (req, res) => {
+  try {
+    const { message, history = [], lang = "en" } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: "message required" });
+
+    const [[config]] = await pool.query(
+      "SELECT * FROM ai_tutor_config WHERE class_id=? AND enabled=1", [req.params.id]
+    );
+
+    const lessonCtx = config?.lesson_context?.trim() || "";
+    const homeworkCtx = config?.homework_context?.trim() || "";
+
+    const systemPrompt = `You are a Socratic AI Tutor for a classroom. Your role is to guide students to discover answers themselves — never give direct answers.
+
+STRICT RULES (never break):
+1. NEVER give the direct answer to any question.
+2. When a student is stuck or says "I don't know": give ONE small hint or a guiding question — just enough to nudge their thinking.
+3. For homework problems: ONLY give approach hints, never solve them.
+4. Ask follow-up questions to check their understanding step by step.
+5. Praise correct reasoning; gently redirect wrong reasoning with hints.
+6. Keep hints minimal — one clue at a time.
+7. Detect the student's language and always respond in the same language (Myanmar/English/Korean etc.).
+8. Be warm, encouraging, and patient.
+
+${lessonCtx ? `Current lesson context:\n${lessonCtx}` : ""}
+${homeworkCtx ? `\nCurrent homework context:\n${homeworkCtx}` : ""}
+
+Remember: you are a HINT-ONLY tutor. If a student asks for the answer directly, respond with a hint instead.`;
+
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...history.map(h => ({ role: h.role, content: h.content })),
+      { role: "user", content: message },
+    ];
+
+    const completion = await completeText({ messages, maxTokens: 600 });
+    const reply = completion.choices[0].message.content;
+    res.json({ reply });
   } catch (err) { res.status(500).json({ error: err.message }); }
 };

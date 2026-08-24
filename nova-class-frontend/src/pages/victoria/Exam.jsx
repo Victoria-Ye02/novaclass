@@ -193,7 +193,7 @@ export default function Exam() {
             <button key={i} onClick={() => setCurrent(i)}
               style={{
                 ...s.qDot,
-                background: i === current ? "#3B37CC" : answers[i] > 0 ? "#10b981" : "var(--border)",
+                background: i === current ? "var(--primary)" : answers[i] > 0 ? "#10b981" : "var(--border)",
                 color: i === current || answers[i] > 0 ? "#fff" : "var(--text-muted)",
               }}>{i+1}</button>
           ))}
@@ -240,7 +240,7 @@ export default function Exam() {
   if (step === "results" && result) {
     const pct   = Math.round((result.score / result.total) * 100);
     const grade = pct >= 80 ? { label: "Excellent!", icon: "party-popper", color: "#10b981" }
-                : pct >= 60 ? { label: "Good Job!",   icon: "thumbs-up",    color: "#3B37CC" }
+                : pct >= 60 ? { label: "Good Job!",   icon: "thumbs-up",    color: "var(--primary)" }
                 :             { label: "Keep Studying", icon: "flexed-biceps", color: "#f59e0b" };
     return (
       <div style={s.layout}>
@@ -307,11 +307,11 @@ const s = {
   center: { display: "flex", alignItems: "center", justifyContent: "center" },
 
   // Home
-  hero: { textAlign: "center", padding: "48px 20px 40px", background: "linear-gradient(135deg,#3B37CC,#7c3aed)", borderRadius: "20px", color: "#fff", marginBottom: "28px" },
+  hero: { textAlign: "center", padding: "48px 20px 40px", background: "linear-gradient(135deg,var(--primary),var(--primary))", borderRadius: "20px", color: "#fff", marginBottom: "28px" },
   heroIcon: { fontSize: "56px", marginBottom: "16px" },
   heroTitle: { fontSize: "32px", fontWeight: 800, marginBottom: "12px" },
   heroSub: { fontSize: "16px", opacity: 0.85, lineHeight: 1.7, marginBottom: "28px" },
-  startHeroBtn: { background: "#fff", color: "#3B37CC", padding: "14px 36px", borderRadius: "12px", fontSize: "16px", fontWeight: 700, border: "none" },
+  startHeroBtn: { background: "#fff", color: "var(--primary)", padding: "14px 36px", borderRadius: "12px", fontSize: "16px", fontWeight: 700, border: "none" },
   featuresGrid: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "16px" },
   featureCard: { background: "var(--surface)", borderRadius: "14px", padding: "24px", textAlign: "center", border: "1px solid var(--border)" },
   featureIcon: { fontSize: "32px", marginBottom: "12px" },
@@ -325,11 +325,11 @@ const s = {
   sLabel: { display: "block", fontSize: "14px", fontWeight: 600, color: "var(--text-muted)", marginBottom: "10px" },
   optRow: { display: "flex", gap: "10px", flexWrap: "wrap" },
   optBtn: { flex: 1, padding: "10px 16px", border: "2px solid var(--border)", borderRadius: "10px", fontSize: "14px", fontWeight: 500, background: "var(--surface)", color: "var(--text-muted)", minWidth: "100px" },
-  optActive: { borderColor: "#3B37CC", background: "var(--primary-tint)", color: "#3B37CC", fontWeight: 700 },
+  optActive: { borderColor: "var(--primary)", background: "var(--primary-tint)", color: "var(--primary)", fontWeight: 700 },
   settingsInfo: { background: "var(--surface-alt)", padding: "12px 16px", borderRadius: "10px", fontSize: "14px", color: "var(--text-muted)", textAlign: "center", marginBottom: "24px" },
   settingsBtns: { display: "flex", gap: "12px" },
   backBtn: { flex: 1, padding: "12px", border: "1.5px solid var(--border)", borderRadius: "10px", background: "var(--surface)", color: "var(--text-muted)", fontSize: "15px", fontWeight: 600 },
-  beginBtn: { flex: 2, padding: "12px", background: "#3B37CC", color: "#fff", border: "none", borderRadius: "10px", fontSize: "15px", fontWeight: 700 },
+  beginBtn: { flex: 2, padding: "12px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: "10px", fontSize: "15px", fontWeight: 700 },
 
   // Loading
   loadingBox: { textAlign: "center", background: "var(--surface)", padding: "48px", borderRadius: "16px", border: "1px solid var(--border)" },
@@ -341,26 +341,26 @@ const s = {
   examHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" },
   examTitle: { fontSize: "20px", fontWeight: 700, color: "var(--text)" },
   examMeta: { display: "flex", gap: "8px" },
-  metaChip: { background: "var(--primary-tint)", color: "#3B37CC", padding: "4px 12px", borderRadius: "20px", fontSize: "13px", fontWeight: 600 },
+  metaChip: { background: "var(--primary-tint)", color: "var(--primary)", padding: "4px 12px", borderRadius: "20px", fontSize: "13px", fontWeight: 600 },
   examProgress: { height: "6px", background: "var(--border)", borderRadius: "4px", marginBottom: "16px", overflow: "hidden" },
-  examProgressFill: { height: "100%", background: "#3B37CC", borderRadius: "4px", transition: "width 0.3s" },
+  examProgressFill: { height: "100%", background: "var(--primary)", borderRadius: "4px", transition: "width 0.3s" },
   qNav: { display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "20px" },
   qDot: { width: "32px", height: "32px", borderRadius: "8px", fontSize: "13px", fontWeight: 700, border: "none", cursor: "pointer" },
   qCard: { background: "var(--surface)", borderRadius: "16px", padding: "28px", border: "1px solid var(--border)", marginBottom: "20px", flex: 1 },
-  qNum: { fontSize: "13px", color: "#3B37CC", fontWeight: 700, marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.5px" },
-  qText: { fontSize: "18px", fontWeight: 600, color: "var(--text)", lineHeight: 1.7, marginBottom: "24px", padding: "16px", background: "var(--surface-alt)", borderRadius: "10px", borderLeft: "4px solid #3B37CC" },
+  qNum: { fontSize: "13px", color: "var(--primary)", fontWeight: 700, marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.5px" },
+  qText: { fontSize: "18px", fontWeight: 600, color: "var(--text)", lineHeight: 1.7, marginBottom: "24px", padding: "16px", background: "var(--surface-alt)", borderRadius: "10px", borderLeft: "4px solid var(--primary)" },
   optionsGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" },
   optChoice: { display: "flex", alignItems: "center", gap: "12px", padding: "14px 16px", border: "2px solid var(--border)", borderRadius: "10px", fontSize: "15px", background: "var(--surface)", color: "var(--text)", textAlign: "left", cursor: "pointer" },
-  optChosen: { borderColor: "#3B37CC", background: "var(--primary-tint)", color: "#3B37CC", fontWeight: 600 },
-  optSymbol: { fontSize: "18px", fontWeight: 700, color: "#3B37CC", minWidth: "24px" },
+  optChosen: { borderColor: "var(--primary)", background: "var(--primary-tint)", color: "var(--primary)", fontWeight: 600 },
+  optSymbol: { fontSize: "18px", fontWeight: 700, color: "var(--primary)", minWidth: "24px" },
   examNavRow: { display: "flex", justifyContent: "space-between", alignItems: "center" },
   navPrev: { padding: "10px 24px", border: "1.5px solid var(--border)", borderRadius: "10px", background: "var(--surface)", color: "var(--text-muted)", fontSize: "14px", fontWeight: 600 },
-  navNext: { padding: "10px 24px", background: "#3B37CC", color: "#fff", border: "none", borderRadius: "10px", fontSize: "14px", fontWeight: 600 },
+  navNext: { padding: "10px 24px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: "10px", fontSize: "14px", fontWeight: 600 },
   navSubmit: { padding: "10px 24px", background: "#10b981", color: "#fff", border: "none", borderRadius: "10px", fontSize: "14px", fontWeight: 700 },
 
   // Results
   resultHero: { background: "var(--surface)", borderRadius: "16px", padding: "32px", textAlign: "center", border: "1px solid var(--border)", marginBottom: "24px" },
-  bigScore: { fontSize: "72px", fontWeight: 800, color: "#3B37CC", lineHeight: 1 },
+  bigScore: { fontSize: "72px", fontWeight: 800, color: "var(--primary)", lineHeight: 1 },
   bigScoreTotal: { fontSize: "40px", color: "var(--text-faint)" },
   pctBar: { height: "8px", background: "var(--border)", borderRadius: "4px", margin: "16px auto 8px", maxWidth: "300px", overflow: "hidden" },
   pctFill: { height: "100%", borderRadius: "4px" },
@@ -368,13 +368,13 @@ const s = {
   resultGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "24px" },
   resultItem: { background: "var(--surface)", borderRadius: "12px", padding: "16px", border: "1px solid var(--border)" },
   resultHeader: { display: "flex", justifyContent: "space-between", marginBottom: "6px" },
-  resultQ: { fontSize: "12px", fontWeight: 700, color: "#3B37CC", textTransform: "uppercase" },
+  resultQ: { fontSize: "12px", fontWeight: 700, color: "var(--primary)", textTransform: "uppercase" },
   resultQText: { fontSize: "14px", color: "var(--text)", marginBottom: "8px", lineHeight: 1.5 },
   resultAnswer: { fontSize: "13px", color: "var(--text-muted)" },
   explanationCard: { background: "var(--surface)", borderRadius: "16px", padding: "24px", border: "1px solid var(--border)", marginBottom: "24px" },
   expTitle: { fontSize: "16px", fontWeight: 700, color: "var(--text)", marginBottom: "16px" },
   expText: { fontSize: "14px", lineHeight: 1.9, color: "var(--text-muted)" },
   resultBtns: { display: "flex", gap: "12px" },
-  retryBtn: { flex: 1, padding: "13px", background: "#3B37CC", color: "#fff", border: "none", borderRadius: "10px", fontSize: "15px", fontWeight: 700 },
+  retryBtn: { flex: 1, padding: "13px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: "10px", fontSize: "15px", fontWeight: 700 },
   homeBtn: { flex: 1, padding: "13px", background: "var(--surface)", color: "var(--text-muted)", border: "1.5px solid var(--border)", borderRadius: "10px", fontSize: "15px", fontWeight: 600 },
 };

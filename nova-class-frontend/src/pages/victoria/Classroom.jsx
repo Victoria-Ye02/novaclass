@@ -4,8 +4,8 @@ import Sidebar from "../../components/Sidebar";
 import API from "../../services/api";
 
 const CARD_COLORS = [
-  "#1B6CA8", "#E97316", "#9333EA", "#059669",
-  "#DC2626", "#0891B2", "#7C3AED", "#D97706", "#0D9488",
+  "var(--primary)", "#E97316", "var(--primary)", "#059669",
+  "#E05252", "#0891B2", "#9333EA", "#D97706", "#0D9488",
 ];
 
 export default function Classroom() {
@@ -96,66 +96,54 @@ export default function Classroom() {
           const ClassCard = ({ cls, idx }) => {
             const color = CARD_COLORS[idx % CARD_COLORS.length];
             const initial = (cls.teacher_name || "T")[0].toUpperCase();
+            const isTeacher = cls.my_role === "teacher";
             return (
               <div
                 onClick={() => navigate(`/classroom/${cls.id}`)}
                 style={classCard}
-                onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-3px)"; e.currentTarget.style.boxShadow = "0 12px 28px rgba(0,0,0,0.15)"; }}
-                onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "0 2px 8px rgba(0,0,0,0.08)"; }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = color; e.currentTarget.style.boxShadow = `0 4px 20px ${color}22`; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.boxShadow = "none"; }}
               >
-                {/* Colored header */}
-                <div style={{ background: color, padding: "18px 18px 44px", borderRadius: "12px 12px 0 0", position: "relative", overflow: "hidden" }}>
-                  {/* Decorative circles */}
-                  <div style={{ position: "absolute", right: "-16px", top: "-16px", width: "80px", height: "80px", borderRadius: "50%", background: "rgba(255,255,255,0.1)" }} />
-                  <div style={{ position: "absolute", right: "20px", top: "30px", width: "50px", height: "50px", borderRadius: "50%", background: "rgba(255,255,255,0.08)" }} />
+                {/* Left color accent */}
+                <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: "4px", background: color, borderRadius: "12px 0 0 12px" }} />
 
-                  <div style={{ fontSize: "18px", fontWeight: 700, color: "#fff", marginBottom: "4px", lineHeight: 1.3, position: "relative", zIndex: 1 }}>
-                    {cls.name}
+                <div style={{ padding: "18px 18px 18px 22px" }}>
+                  {/* Top row: name + role badge */}
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "10px", marginBottom: "6px" }}>
+                    <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)", lineHeight: 1.3, flex: 1 }}>
+                      {cls.name}
+                    </div>
+                    <span style={{ flexShrink: 0, fontSize: "10px", fontWeight: 700, color: color, background: color + "18", padding: "3px 9px", borderRadius: "20px", marginTop: "2px" }}>
+                      {isTeacher ? "Teacher" : "Student"}
+                    </span>
                   </div>
-                  <div style={{ fontSize: "12px", color: "rgba(255,255,255,0.85)", position: "relative", zIndex: 1 }}>
+
+                  {/* Subject */}
+                  <div style={{ fontSize: "12px", color: "var(--text-faint)", marginBottom: "16px" }}>
                     {cls.subject || "General"}
                   </div>
 
-                  {/* Teacher avatar — overlapping */}
-                  <div style={{
-                    position: "absolute", bottom: "-20px", right: "16px",
-                    width: "44px", height: "44px", borderRadius: "50%",
-                    background: "rgba(255,255,255,0.9)", border: "3px solid var(--surface)",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: "18px", fontWeight: 800, color: color,
-                    boxShadow: "0 2px 8px rgba(0,0,0,0.15)", zIndex: 2,
-                  }}>
-                    {initial}
-                  </div>
-                </div>
-
-                {/* Card body */}
-                <div style={{ padding: "28px 16px 14px" }}>
-                  <div style={{ fontSize: "13px", color: "var(--text-muted)", fontWeight: 500, marginBottom: "10px" }}>
-                    {cls.teacher_name || "Teacher"}
-                  </div>
-
                   {/* Divider */}
-                  <div style={{ borderTop: "1px solid var(--border)", marginBottom: "10px" }} />
+                  <div style={{ borderTop: "1px solid var(--border)", marginBottom: "14px" }} />
 
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ display: "flex", gap: "12px" }}>
-                      <div style={{ textAlign: "center" }}>
-                        <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)" }}>{cls.student_count || 0}</div>
-                        <div style={{ fontSize: "10px", color: "var(--text-faint)" }}>Students</div>
+                  {/* Bottom row */}
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    {/* Teacher info */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                      <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: color + "22", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "12px", fontWeight: 700, color }}>
+                        {initial}
                       </div>
-                      {cls.my_role === "teacher" && cls.code && (
-                        <>
-                          <div style={{ width: "1px", background: "var(--border)" }} />
-                          <div style={{ textAlign: "center" }}>
-                            <div style={{ fontSize: "13px", fontWeight: 700, color: color, letterSpacing: "2px" }}>{cls.code}</div>
-                            <div style={{ fontSize: "10px", color: "var(--text-faint)" }}>Class Code</div>
-                          </div>
-                        </>
-                      )}
+                      <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 500 }}>{cls.teacher_name || "Teacher"}</span>
                     </div>
-                    <div style={{ background: color + "18", color: color, fontSize: "10px", fontWeight: 700, padding: "3px 10px", borderRadius: "20px" }}>
-                      {cls.my_role === "teacher" ? "Teacher" : "Student"}
+
+                    {/* Right: student count or class code */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                      {isTeacher && cls.code && (
+                        <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-muted)", letterSpacing: "1.5px", fontFamily: "monospace" }}>{cls.code}</span>
+                      )}
+                      <span style={{ fontSize: "12px", color: "var(--text-faint)" }}>
+                        {cls.student_count || 0} student{(cls.student_count || 0) !== 1 ? "s" : ""}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -168,8 +156,9 @@ export default function Classroom() {
               {/* Teaching section */}
               {teaching.length > 0 && (
                 <div style={{ marginBottom: "32px" }}>
-                  <div style={{ fontSize: "13px", fontWeight: 700, color: "#3B37CC", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "14px" }}>
-                    👨‍🏫 Teaching ({teaching.length})
+                  <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: "14px", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span>Teaching</span>
+                    <span style={{ background: "var(--surface-alt)", color: "var(--text-muted)", borderRadius: "20px", padding: "1px 8px", fontSize: "11px", fontWeight: 600, letterSpacing: 0, textTransform: "none" }}>{teaching.length}</span>
                   </div>
                   <div style={gridStyle}>
                     {teaching.map((cls, idx) => <ClassCard key={cls.id} cls={cls} idx={idx} />)}
@@ -180,8 +169,9 @@ export default function Classroom() {
               {/* Enrolled section */}
               {enrolled.length > 0 && (
                 <div style={{ marginBottom: "32px" }}>
-                  <div style={{ fontSize: "13px", fontWeight: 700, color: "#059669", textTransform: "uppercase", letterSpacing: "1px", marginBottom: "14px" }}>
-                    🎓 Enrolled ({enrolled.length})
+                  <div style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "1.5px", marginBottom: "14px", display: "flex", alignItems: "center", gap: "6px" }}>
+                    <span>Enrolled</span>
+                    <span style={{ background: "var(--surface-alt)", color: "var(--text-muted)", borderRadius: "20px", padding: "1px 8px", fontSize: "11px", fontWeight: 600, letterSpacing: 0, textTransform: "none" }}>{enrolled.length}</span>
                   </div>
                   <div style={gridStyle}>
                     {enrolled.map((cls, idx) => <ClassCard key={cls.id} cls={cls} idx={idx + teaching.length} />)}
@@ -194,12 +184,11 @@ export default function Classroom() {
                 <div
                   onClick={() => setModal("getstarted")}
                   style={addCard}
-                  onMouseEnter={e => e.currentTarget.style.background = "var(--surface-alt)"}
-                  onMouseLeave={e => e.currentTarget.style.background = "var(--surface)"}
+                  onMouseEnter={e => { e.currentTarget.style.borderColor = "var(--primary)"; e.currentTarget.style.background = "var(--primary-tint)"; }}
+                  onMouseLeave={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "transparent"; }}
                 >
-                  <div style={{ width: "52px", height: "52px", borderRadius: "50%", background: "var(--surface-alt)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "26px", color: "var(--text-faint)" }}>+</div>
-                  <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--text-muted)" }}>Join or Create Class</div>
-                  <div style={{ fontSize: "12px", color: "var(--text-faint)" }}>Start a new learning journey</div>
+                  <div style={{ width: "36px", height: "36px", borderRadius: "10px", background: "var(--surface-alt)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "20px", color: "var(--text-faint)" }}>+</div>
+                  <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-muted)" }}>Join or Create Class</div>
                 </div>
               </div>
             </div>
@@ -351,12 +340,12 @@ const gridStyle = {
 
 const classCard = {
   borderRadius: "12px",
-  overflow: "visible",
+  overflow: "hidden",
   cursor: "pointer",
   background: "var(--surface)",
   border: "1px solid var(--border)",
-  transition: "transform 0.2s, box-shadow 0.2s",
-  boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+  transition: "border-color 0.2s, box-shadow 0.2s",
+  position: "relative",
 };
 
 const teacherAvatarStyle = {
@@ -367,16 +356,16 @@ const teacherAvatarStyle = {
 
 const addCard = {
   borderRadius: "12px",
-  border: "2px dashed var(--border)",
+  border: "1.5px dashed var(--border)",
   display: "flex",
   flexDirection: "column",
   alignItems: "center",
   justifyContent: "center",
-  gap: "10px",
+  gap: "8px",
   cursor: "pointer",
-  minHeight: "170px",
-  background: "var(--surface)",
-  transition: "background 0.15s",
+  minHeight: "100px",
+  background: "transparent",
+  transition: "border-color 0.15s, background 0.15s",
 };
 
 const overlay = {
@@ -395,17 +384,17 @@ const modalBox = {
 };
 
 const btnPrimary = {
-  background: "#3B37CC", color: "#fff",
+  background: "var(--primary)", color: "#fff",
   padding: "11px 20px", borderRadius: "10px",
   fontSize: "14px", fontWeight: 600, border: "none",
   cursor: "pointer", width: "100%",
 };
 
 const btnOutline = {
-  background: "var(--surface)", color: "#3B37CC",
+  background: "var(--surface)", color: "var(--primary)",
   padding: "11px 20px", borderRadius: "10px",
   fontSize: "14px", fontWeight: 600,
-  border: "2px solid #3B37CC", cursor: "pointer", width: "100%",
+  border: "2px solid var(--primary)", cursor: "pointer", width: "100%",
 };
 
 const labelStyle = {

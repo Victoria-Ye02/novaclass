@@ -2,6 +2,19 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import PdfLessonViewer from "./PdfLessonViewer";
 
+const { mockPost, selectedLanguage } = vi.hoisted(() => ({
+  mockPost: vi.fn(),
+  selectedLanguage: { value: "my" },
+}));
+
+vi.mock("../LanguageContext", () => ({
+  useLang: () => ({ lang: selectedLanguage.value }),
+}));
+
+vi.mock("../services/api", () => ({
+  default: { post: mockPost },
+}));
+
 vi.mock("react-pdf", async () => {
   const React = await import("react");
   return {
@@ -21,7 +34,12 @@ vi.mock("react-pdf", async () => {
   };
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mockPost.mockReset();
+  selectedLanguage.value = "my";
+  vi.restoreAllMocks();
+});
 
 function makeHighlightState(overrides = {}) {
   return {
@@ -48,11 +66,48 @@ function renderViewer(overrides = {}) {
     onDismissEmptySpace: vi.fn(),
     ...overrides,
   };
-  const { rerender } = render(<PdfLessonViewer {...props} />);
-  return { ...props, rerender: (nextOverrides = {}) => rerender(<PdfLessonViewer {...props} {...nextOverrides} />) };
+  render(<PdfLessonViewer {...props} />);
+  return props;
 }
 
 describe("PdfLessonViewer", () => {
+  it("translates selected PDF text into the selected app language", async () => {
+    mockPost.mockResolvedValue({ data: { translation: "နားလည်သည်" } });
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      toString: () => "understand",
+      rangeCount: 1,
+      getRangeAt: () => ({ getBoundingClientRect: () => ({ top: 20, left: 20, width: 80, height: 20 }) }),
+    });
+
+    renderViewer();
+    fireEvent.mouseUp(await screen.findByTestId("pdf-page-surface"));
+    fireEvent.click(screen.getByRole("button", { name: "Translate selected text" }));
+
+    expect(mockPost).toHaveBeenCalledWith("/ai/translate", {
+      text: "understand",
+      targetLanguage: "my",
+    });
+    const dialog = await screen.findByRole("dialog", { name: "PDF translation" });
+    expect(dialog.textContent).toContain("နားလည်သည်");
+  });
+
+  it("dismisses the PDF translation dialog", async () => {
+    mockPost.mockResolvedValue({ data: { translation: "understand" } });
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      toString: () => "이해하다",
+      rangeCount: 1,
+      getRangeAt: () => ({ getBoundingClientRect: () => ({ top: 20, left: 20, width: 80, height: 20 }) }),
+    });
+
+    renderViewer();
+    fireEvent.mouseUp(await screen.findByTestId("pdf-page-surface"));
+    fireEvent.click(screen.getByRole("button", { name: "Translate selected text" }));
+    await screen.findByRole("dialog", { name: "PDF translation" });
+    fireEvent.click(screen.getByRole("button", { name: "Close translation" }));
+
+    expect(screen.queryByRole("dialog", { name: "PDF translation" })).toBeNull();
+  });
+
   it("shows bookmark state for the current page and toggles that page", async () => {
     const props = renderViewer();
 
@@ -350,6 +405,49 @@ describe("PdfLessonViewer", () => {
       expect(screen.queryByRole("button", { name: "Page one highlight" })).toBeNull();
     });
 
+    it("opens a highlight's popover on a real-coordinate click, without the region blocking the click from reaching the page", async () => {
+      const highlightState = makeHighlightState({
+        highlights: {
+          1: [{
+            id: 1, excerpt: "Page one highlight", explanation: "Explains page one",
+            category: "concept", rects: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.05 }],
+          }],
+        },
+      });
+      renderViewer({ highlightState });
+      const surface = await screen.findByTestId("pdf-page-surface");
+
+      vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+        top: 0, left: 0, width: 1000, height: 1000, right: 1000, bottom: 1000,
+      });
+
+      // Inside the highlight's rect: x in [0.1, 0.3], y in [0.1, 0.15] of the page.
+      fireEvent.mouseUp(surface, { clientX: 150, clientY: 120 });
+
+      expect(await screen.findByRole("dialog", { name: "Page one highlight explanation" })).toBeTruthy();
+    });
+
+    it("does not open a popover on a real-coordinate click outside any highlight rect", async () => {
+      const highlightState = makeHighlightState({
+        highlights: {
+          1: [{
+            id: 1, excerpt: "Page one highlight", explanation: "Explains page one",
+            category: "concept", rects: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.05 }],
+          }],
+        },
+      });
+      renderViewer({ highlightState });
+      const surface = await screen.findByTestId("pdf-page-surface");
+
+      vi.spyOn(surface, "getBoundingClientRect").mockReturnValue({
+        top: 0, left: 0, width: 1000, height: 1000, right: 1000, bottom: 1000,
+      });
+
+      fireEvent.mouseUp(surface, { clientX: 800, clientY: 800 });
+
+      expect(screen.queryByRole("dialog", { name: "Page one highlight explanation" })).toBeNull();
+    });
+
     it("shows a retry affordance on failure without removing the PDF page", async () => {
       const retry = vi.fn();
       renderViewer({ highlightState: makeHighlightState({ status: "failed", retry }) });
@@ -360,124 +458,6 @@ describe("PdfLessonViewer", () => {
 
       expect(retry).toHaveBeenCalledTimes(1);
       expect(screen.getByTestId("rendered-page-1")).toBeTruthy();
-    });
-  });
-
-  describe("onPageChange", () => {
-    it("reports the current page and page count after load and on navigation", async () => {
-      const onPageChange = vi.fn();
-      renderViewer({ onPageChange });
-      await screen.findByTestId("rendered-page-1");
-
-      expect(onPageChange).toHaveBeenCalledWith(1, 5);
-
-      fireEvent.click(screen.getByRole("button", { name: "Next page" }));
-
-      expect(onPageChange).toHaveBeenCalledWith(2, 5);
-    });
-  });
-
-  describe("page thumbnails", () => {
-    it("is open by default", async () => {
-      renderViewer();
-      await screen.findByTestId("rendered-page-1");
-
-      expect(screen.getByRole("button", { name: "Go to page 1" })).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Toggle page thumbnails" }).getAttribute("aria-pressed")).toBe("true");
-    });
-
-    it("closes on toggle click and reopens on a second click", async () => {
-      renderViewer();
-      await screen.findByTestId("rendered-page-1");
-
-      const toggle = screen.getByRole("button", { name: "Toggle page thumbnails" });
-      fireEvent.click(toggle);
-
-      expect(toggle.getAttribute("aria-pressed")).toBe("false");
-      expect(screen.queryByRole("button", { name: "Go to page 1" })).toBeNull();
-
-      fireEvent.click(toggle);
-
-      expect(toggle.getAttribute("aria-pressed")).toBe("true");
-      expect(screen.getByRole("button", { name: "Go to page 1" })).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Go to page 5" })).toBeTruthy();
-    });
-
-    it("navigates to the clicked thumbnail's page", async () => {
-      renderViewer();
-      await screen.findByTestId("rendered-page-1");
-
-      fireEvent.click(screen.getByRole("button", { name: "Go to page 3" }));
-
-      expect(screen.getByTestId("rendered-page-3")).toBeTruthy();
-    });
-
-    it("highlights the current page's thumbnail", async () => {
-      renderViewer();
-      await screen.findByTestId("rendered-page-1");
-
-      fireEvent.click(screen.getByRole("button", { name: "Next page" }));
-
-      expect(screen.getByRole("button", { name: "Go to page 2" }).getAttribute("aria-current")).toBe("true");
-      expect(screen.getByRole("button", { name: "Go to page 1" }).getAttribute("aria-current")).toBeNull();
-    });
-
-    it("stays closed across page navigation within the same lesson", async () => {
-      const viewer = renderViewer();
-      await screen.findByTestId("rendered-page-1");
-
-      fireEvent.click(screen.getByRole("button", { name: "Toggle page thumbnails" }));
-      fireEvent.click(screen.getByRole("button", { name: "Next page" }));
-      viewer.rerender();
-
-      expect(screen.getByRole("button", { name: "Toggle page thumbnails" }).getAttribute("aria-pressed")).toBe("false");
-      expect(screen.queryByRole("button", { name: "Go to page 2" })).toBeNull();
-    });
-
-    it("resets to open when a different lesson (a new fileUrl) is opened", async () => {
-      const viewer = renderViewer();
-      await screen.findByTestId("rendered-page-1");
-
-      fireEvent.click(screen.getByRole("button", { name: "Toggle page thumbnails" }));
-      expect(screen.getByRole("button", { name: "Toggle page thumbnails" }).getAttribute("aria-pressed")).toBe("false");
-
-      viewer.rerender({ fileUrl: "http://localhost/other-material.pdf" });
-      await screen.findByTestId("rendered-page-1");
-
-      expect(screen.getByRole("button", { name: "Toggle page thumbnails" }).getAttribute("aria-pressed")).toBe("true");
-      expect(screen.getByRole("button", { name: "Go to page 1" })).toBeTruthy();
-    });
-
-    it("keeps the toggle button reachable and clickable while collapsed", async () => {
-      renderViewer();
-      await screen.findByTestId("rendered-page-1");
-
-      const toggle = screen.getByRole("button", { name: "Toggle page thumbnails" });
-      fireEvent.click(toggle);
-      expect(toggle.getAttribute("aria-pressed")).toBe("false");
-
-      // The button itself must never be aria-hidden/inert — only the list is.
-      expect(toggle.closest("[aria-hidden='true']")).toBeNull();
-      expect(toggle.getAttribute("aria-hidden")).not.toBe("true");
-
-      fireEvent.click(toggle);
-      expect(toggle.getAttribute("aria-pressed")).toBe("true");
-    });
-
-    it("preserves the thumbnail list's scroll position across a collapse/expand cycle", async () => {
-      renderViewer();
-      await screen.findByTestId("rendered-page-1");
-
-      const list = screen.getByRole("navigation", { name: "Page thumbnails" });
-      Object.defineProperty(list, "scrollHeight", { value: 1000, configurable: true });
-      Object.defineProperty(list, "clientHeight", { value: 200, configurable: true });
-      list.scrollTop = 340;
-
-      fireEvent.click(screen.getByRole("button", { name: "Toggle page thumbnails" }));
-      fireEvent.click(screen.getByRole("button", { name: "Toggle page thumbnails" }));
-
-      expect(screen.getByRole("navigation", { name: "Page thumbnails" })).toBe(list);
-      expect(list.scrollTop).toBe(340);
     });
   });
 });

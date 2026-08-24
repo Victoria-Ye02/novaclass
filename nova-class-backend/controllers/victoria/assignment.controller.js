@@ -138,7 +138,14 @@ exports.getAssignment = async (req, res) => {
         "SELECT * FROM submissions WHERE assignment_id = ? AND student_id = ?",
         [req.params.id, userId]
       );
-      return res.json({ ...assignment, my_submission: sub || null, files });
+      let subFiles = [];
+      if (sub) {
+        [subFiles] = await pool.query(
+          "SELECT * FROM submission_files WHERE submission_id = ?",
+          [sub.id]
+        ).catch(() => [[]]);
+      }
+      return res.json({ ...assignment, my_submission: sub ? { ...sub, submission_files: subFiles } : null, files });
     }
 
     // Teacher: get all submissions
@@ -148,7 +155,22 @@ exports.getAssignment = async (req, res) => {
        WHERE s.assignment_id = ? ORDER BY s.submitted_at DESC`,
       [req.params.id]
     );
-    res.json({ ...assignment, submissions, files });
+    // Attach submission_files to each submission
+    const subIds = submissions.map(s => s.id);
+    let allSubFiles = [];
+    if (subIds.length > 0) {
+      [allSubFiles] = await pool.query(
+        `SELECT * FROM submission_files WHERE submission_id IN (${subIds.map(() => "?").join(",")})`,
+        subIds
+      ).catch(() => [[]]);
+    }
+    const filesBySubId = {};
+    allSubFiles.forEach(f => {
+      if (!filesBySubId[f.submission_id]) filesBySubId[f.submission_id] = [];
+      filesBySubId[f.submission_id].push(f);
+    });
+    const submissionsWithFiles = submissions.map(s => ({ ...s, submission_files: filesBySubId[s.id] || [] }));
+    res.json({ ...assignment, submissions: submissionsWithFiles, files });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -165,27 +187,59 @@ exports.submitAssignment = async (req, res) => {
     if (access.error) return res.status(access.status).json({ error: access.error });
     if (access.role !== "student") return res.status(403).json({ error: "Students only" });
 
-    const filePath = req.file ? req.file.filename : null;
+    // Bootstrap submission_files table if not exists
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS submission_files (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        submission_id INT NOT NULL,
+        file_name VARCHAR(255) NOT NULL,
+        file_path VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        INDEX idx_sub (submission_id)
+      )
+    `);
+
+    const uploadedFiles = req.files || [];
     const content = req.body.content || null;
     const now = new Date();
     const isLate = assignment.due_date && now > new Date(assignment.due_date);
     const status = isLate ? "late" : "turned_in";
+
+    // Keep legacy file_path as first file for backwards compat
+    const legacyFilePath = uploadedFiles.length > 0 ? uploadedFiles[0].filename : null;
 
     await pool.query(
       `INSERT INTO submissions (assignment_id, student_id, content, file_path, status, submitted_at)
        VALUES (?, ?, ?, ?, ?, NOW())
        ON DUPLICATE KEY UPDATE content=VALUES(content), file_path=COALESCE(VALUES(file_path), file_path),
        status=VALUES(status), submitted_at=NOW()`,
-      [req.params.id, userId, content, filePath, status]
+      [req.params.id, userId, content, legacyFilePath, status]
     );
 
     const [[sub]] = await pool.query(
       "SELECT * FROM submissions WHERE assignment_id = ? AND student_id = ?",
       [req.params.id, userId]
     );
-    res.json(sub);
+
+    // Replace all submission files for this submission
+    if (uploadedFiles.length > 0) {
+      await pool.query("DELETE FROM submission_files WHERE submission_id = ?", [sub.id]);
+      for (const f of uploadedFiles) {
+        await pool.query(
+          "INSERT INTO submission_files (submission_id, file_name, file_path) VALUES (?, ?, ?)",
+          [sub.id, f.originalname, f.filename]
+        );
+      }
+    }
+
+    const [subFiles] = await pool.query(
+      "SELECT * FROM submission_files WHERE submission_id = ?",
+      [sub.id]
+    );
+
+    res.json({ ...sub, submission_files: subFiles });
   } catch (err) {
-    if (req.file) fs.unlink(req.file.path, () => {});
+    if (req.files) req.files.forEach(f => fs.unlink(f.path, () => {}));
     res.status(500).json({ error: err.message });
   }
 };
@@ -516,8 +570,11 @@ exports.getStreamStats = async (req, res) => {
 
     if (access.role === "teacher") {
       // Teacher: submissions across all students
+      // class_members only ever holds students — the teacher is tracked via
+      // classes.teacher_id, not as a member row — so no role filter needed
+      // (the table has no `role` column at all).
       const [[{ students }]] = await pool.query(
-        "SELECT COUNT(*) AS students FROM class_members WHERE class_id=? AND role='student'", [classId]
+        "SELECT COUNT(*) AS students FROM class_members WHERE class_id=?", [classId]
       );
       totalExpected = total * students;
       const [[{ submitted }]] = await pool.query(

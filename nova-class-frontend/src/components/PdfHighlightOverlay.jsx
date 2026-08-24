@@ -5,9 +5,20 @@ function toPercent(fraction) {
   return `${fraction * 100}%`;
 }
 
-export default function PdfHighlightOverlay({ highlights = [], visible, onSelect }) {
+export default function PdfHighlightOverlay({ highlights = [], visible, onSelect, activateId }) {
   const [selectedId, setSelectedId] = useState(null);
   const containerRef = useRef(null);
+
+  // Real mouse drags for text selection must reach the text layer underneath
+  // uninterrupted, including over highlighted words — a word a student wants
+  // translated is exactly the word they're most likely to try to drag-select.
+  // So these regions can't capture the pointer themselves (see the CSS
+  // pointerEvents: "none" below); the parent hit-tests plain clicks against
+  // highlight rects instead and drives selection through this prop.
+  useEffect(() => {
+    if (activateId == null) return;
+    setSelectedId(activateId);
+  }, [activateId]);
 
   // A new `highlights` array reference means the page changed (or the
   // underlying data was refreshed) — either way, a stale popover shouldn't
@@ -68,7 +79,7 @@ export default function PdfHighlightOverlay({ highlights = [], visible, onSelect
               top: toPercent(rect.y),
               width: toPercent(rect.width),
               height: toPercent(rect.height),
-              pointerEvents: "auto",
+              pointerEvents: "none",
             }}
             aria-label={highlight.excerpt}
             onClick={(event) => {

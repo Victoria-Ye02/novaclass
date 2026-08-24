@@ -92,13 +92,22 @@ describe("PdfHighlightOverlay", () => {
     expect(onSelect).toHaveBeenCalledWith(highlight);
   });
 
-  it("keeps pointer events off the layer but on for each region button", () => {
+  it("keeps pointer events off the layer and off each region button, so a real mouse drag can select the text underneath", () => {
     render(<PdfHighlightOverlay highlights={[highlight]} visible />);
 
     const overlay = screen.getByTestId("pdf-highlight-overlay");
     const region = screen.getByRole("button", { name: "Key idea" });
 
     expect(overlay.style.pointerEvents).toBe("none");
-    expect(region.style.pointerEvents).toBe("auto");
+    expect(region.style.pointerEvents).toBe("none");
+  });
+
+  it("opens a highlight's popover when the parent drives selection via activateId", () => {
+    const { rerender } = render(<PdfHighlightOverlay highlights={[highlight]} visible activateId={null} />);
+    expect(screen.queryByRole("dialog", { name: "Key idea explanation" })).toBeNull();
+
+    rerender(<PdfHighlightOverlay highlights={[highlight]} visible activateId={3} />);
+
+    expect(screen.getByRole("dialog", { name: "Key idea explanation" })).toBeTruthy();
   });
 });

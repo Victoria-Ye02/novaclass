@@ -23,8 +23,9 @@ NovaClass는 선생님과 학생이 수업을 만들고 참여하고, 자료를 
 |  | 구글 클래스룸 등 기존 LMS | NovaClass |
 |---|---|---|
 | 자료 요약 | 선생님이 직접 정리 | AI가 3단계(한 줄/단락/상세)로 자동 요약 |
-| 언어 지원 | 단일 언어 UI | 영어/미얀마어 UI 지원 |
+| 언어 지원 | 단일 언어 UI | 영어/미얀마어/한국어/베트남어 UI + 실시간 번역 |
 | 학습 지원 | 자료 배포까지만 | AI 튜터(K.MATE)가 질의응답·퀴즈까지 이어서 지원 |
+| 학생 관리 | 명단 확인 정도 | 석차·출석률·위험군(at-risk) 자동 감지 + 교사 노트 전송 |
 
 ---
 
@@ -32,9 +33,26 @@ NovaClass는 선생님과 학생이 수업을 만들고 참여하고, 자료를 
 
 - **회원가입 / 로그인** — 선생님(teacher) / 학생(student) 역할 구분
 - **클래스 개설 및 참여** — 초대 코드로 학생이 클래스에 참여
-- **수업 자료 업로드 + AI 요약** — PDF/문서를 올리면 AI가 짧은 요약 / 문단 요약 / 상세 요약 3단계로 정리
-- **K.MATE AI 튜터** — 한국어로 질문하면 답변, TOPIK 연습 퀴즈 생성 및 채점
-- **대시보드** — 내 클래스, 학습 현황 한눈에 보기
+- **수업 자료 업로드 + AI 요약** — PDF/문서를 올리면 AI가 짧은 요약 / 문단 요약 / 상세 요약 3단계로 정리, 관련 유튜브 자료 자동 추천
+- **자료별 하이라이트 · 댓글** — PDF 위 형광펜 표시 저장, 공개/비공개 댓글 스레드
+- **과제 (Assignment)** — 제출/채점/반려, AI가 제출 답안을 미리 점검, 댓글
+- **출석 (Attendance)** — 세션별 출석 체크, 첨부파일 포함 결석계 제출 및 검토
+- **성적 · 학생 관리 (Grades / People)** — 석차, 성적 추이(스파크라인), 위험군(at-risk) 자동 감지, 교사→학생 노트 전송
+- **게시글 / 공지 (Posts)** — 좋아요, 상단 고정, 댓글
+- **학습 자료실 (Resources)** — 링크/파일 형태의 참고 자료 모음
+- **캘린더** — 클래스별 일정 등록/조회
+- **알림** — 과제 등록, 채점 완료 등 실시간 알림 (Dashboard 종 아이콘)
+- **클래스별 AI 튜터** — 교사가 진도/과제 컨텍스트를 지정하면 학생 질문에 맞춰 답변
+- **K.MATE AI 튜터** — 한국어로 질문하면 답변, TOPIK 연습 퀴즈 생성 및 채점, 음성 답변(TTS)
+- **멀티모달 파일 분석** — 이미지/오디오/PDF/DOCX를 올리면 AI가 내용을 읽고 질문에 답변
+- **대시보드** — AI가 정리해주는 오늘 할 일, 마감 임박 배너, 출석 현황, 알림, 캘린더 한눈에 보기
+- **다국어 UI + 실시간 번역** — 영어/미얀마어/한국어/베트남어 지원
+
+---
+
+## 개발 중인 기능
+
+- **화상 수업 연동 (Meeting)** — 설계만 되어 있고 아직 정식 기능은 없음
 
 ---
 
@@ -59,22 +77,12 @@ React 19 + Vite                 (프론트엔드)
 Node.js / Express 5  ◄──────►  MySQL   (백엔드)
         │
         ▼
-Groq (K.MATE 채팅·퀴즈·자료 분석)
-Anthropic Claude (AI 보조 기능)
+Groq(OpenRouter 경유) — 채팅·요약·퀴즈·과제 점검 등 텍스트 생성 전반
+Groq Whisper — 음성 파일 텍스트 변환
+Google Cloud Vision — 이미지 속 텍스트/사물 인식, PDF 스캔본 OCR
+Gemini — 텍스트 레이어가 깨진 PDF 페이지 판독
+ElevenLabs — K.MATE 음성 답변(TTS)
 ```
-
----
-
-## 개발 중인 기능
-
-아래 기능들은 설계 및 초기 작업이 진행 중이며, 아직 정식으로 동작하지 않습니다:
-
-- 과제 제출/관리 (Assignment)
-- 출석 관리 (Attendance)
-- 성적 관리 (Grades)
-- 게시글/공지 (Posts)
-- 학습 자료실 (Resources)
-- 화상 수업 연동 (Meeting)
 
 ---
 
@@ -116,6 +124,6 @@ npm install
 npm run dev       # http://localhost:5173
 ```
 
-`nova-class-backend/.env`에 `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GROQ_API_KEY`, `CLAUDE_API_KEY`, `JWT_SECRET` 설정이 필요합니다.
+`nova-class-backend/.env`에 DB 접속 정보(`DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`), `JWT_SECRET`, 그리고 AI 연동 키(`GROQ_API_KEY`, `OPENROUTER_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, `GEMINI_API_KEY`, `ELEVENLABS_API_KEY`)가 필요합니다. 전체 목록은 [`nova-class-backend/.env.example`](nova-class-backend/.env.example) 참고.
 
 자세한 폴더 구조와 협업 규칙은 [`docs/PROJECT.md`](docs/PROJECT.md) 참고.

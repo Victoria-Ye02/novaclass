@@ -1,63 +1,259 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import Sidebar from "../../components/Sidebar";
 import Icon from "../../components/Icon";
 import API from "../../services/api";
 
 const symbols = ["①", "②", "③", "④"];
-const TOPIC_ICON = { grammar: "note", vocabulary: "book", mixed: "target" };
+const ROUNDS = ["102nd", "96nd", "91st"];
+// Reading/Writing are drawn randomly across ALL exam rounds regardless of any
+// round choice, so a round only actually matters for Listening (tied to one
+// specific recording) — question counts are fixed by the TOPIK II blueprint,
+// so they're hardcoded here rather than needing a fetch before showing the picker.
+const SECTIONS = [
+  { key: "reading",   label: "Reading",   icon: "book",       minutes: 70, questionCount: 50 },
+  { key: "listening", label: "Listening", icon: "headphones", minutes: 60, questionCount: 50 },
+  { key: "writing",   label: "Writing",   icon: "pencil",     minutes: 50, questionCount: 4  },
+];
 
 function formatText(text) {
-  return text
+  return String(text || "")
     .replace(/<[^>]*>/g, "")
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
     .replace(/\n/g, "<br>");
 }
 
-export default function Exam() {
-  const [step, setStep]       = useState("home");   // home | settings | loading | exam | results
-  const [topic, setTopic]     = useState("mixed");
-  const [count, setCount]     = useState(5);
-  const [lang, setLang]       = useState("English");
-  const [questions, setQs]    = useState([]);
-  const [answers, setAnswers] = useState([]);
-  const [current, setCurrent] = useState(0);
-  const [result, setResult]   = useState(null);
-  const [timeLeft, setTime]   = useState(null);
+// Listening prompts embed the full dialogue transcript alongside the direction
+// line and printed options (ingested from the Transcript PDF for grading) —
+// showing that on screen while the audio plays defeats the point of a
+// listening test, so keep only the "※ ..." direction line(s) and the
+// "①②③④" option line(s) and drop everything else (the transcript itself).
+function listeningPromptForDisplay(prompt) {
+  const lines = String(prompt || "").split("\n");
+  const kept = lines.filter(line => /^\s*※/.test(line) || /[①②③④]/.test(line));
+  return kept.length ? kept.join("\n") : prompt;
+}
 
-  async function startExam() {
-    setStep("loading");
-    try {
-      const res = await API.post("/kmate/quiz/generate", { topic, count });
-      setQs(res.data.questions);
-      setAnswers(new Array(res.data.questions.length).fill(0));
-      setCurrent(0);
-      setTime(count * 60); // 1 min per question
-      setStep("exam");
-    } catch {
-      setStep("settings");
-      alert("❌ Failed to generate exam. Make sure both servers are running.");
+// Prompts keep the source exam's own printed question number (e.g. "2.",
+// "4.") at the start of the sentence — since questions are pulled from
+// different original papers, that number has nothing to do with this app's
+// own "Question N of 50" position and is just confusing to show, so drop it.
+function stripLeadingQuestionNumber(text) {
+  return String(text || "").replace(/^\s*\d+\.\s*/gm, "");
+}
+
+// Splits a question's prompt text (instruction header + passage/question line(s),
+// then the ①②③④ options — all one block of text, since reading/listening questions
+// carry no separately structured options field) into { stem, options }, for the
+// review screen where each of the 4 options needs to render as its own row rather
+// than the compact symbol-only buttons used while taking the exam. Falls back to
+// options: null (render the raw stem only) if the text doesn't cleanly split into
+// exactly 4 options, e.g. an unusual/malformed prompt.
+function splitPromptIntoStemAndOptions(text) {
+  const raw = String(text || "");
+  const lines = raw.split("\n");
+  const optionLineIdx = lines.findIndex(l => /[①②③④]/.test(l));
+  if (optionLineIdx === -1) return { stem: raw.trim(), options: null };
+
+  const stem = lines.slice(0, optionLineIdx).join("\n").trim();
+  const optionsBlock = lines.slice(optionLineIdx).join(" ");
+  const options = [...optionsBlock.matchAll(/[①②③④]\s*([^①②③④]*)/g)].map(m => m[1].trim());
+  return { stem, options: options.length === 4 && options.every(Boolean) ? options : null };
+}
+
+function formatClock(totalSeconds) {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+export default function Exam() {
+  const [step, setStep]     = useState("home"); // home | loading | picker | listeningRounds | exam | grading | results
+  const [examData, setExamData] = useState(null);
+  const [section, setSection]   = useState(null);
+  const [secondsLeft, setSecondsLeft] = useState(0);
+
+  // The round a listening attempt was fetched with — the only part of the
+  // exam where "round" is a meaningful choice at all.
+  const [listeningRound, setListeningRound] = useState(null);
+
+  const [readingAnswers, setReadingAnswers]     = useState({});
+  const [listeningAnswers, setListeningAnswers] = useState({});
+  const [writingAnswers, setWritingAnswers]     = useState({});
+
+  // Each of the 3 parts is graded as its own separate mock test — this keeps
+  // the latest submission result per section so the picker screen can show
+  // which parts are done, and results always reflect just the part you took.
+  const [sectionResults, setSectionResults] = useState({});
+  const [result, setResult]     = useState(null);
+  const [showReview, setShowReview] = useState(false);
+  const [analytics, setAnalytics]         = useState(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
+  const submitRef = useRef(null);
+
+  useEffect(() => {
+    if (step !== "exam") return;
+    const id = setInterval(() => {
+      setSecondsLeft(s => {
+        if (s <= 1) {
+          clearInterval(id);
+          submitRef.current?.();
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [step]);
+
+  function answersFor(key) {
+    if (key === "reading") return [readingAnswers, setReadingAnswers];
+    if (key === "listening") return [listeningAnswers, setListeningAnswers];
+    return [writingAnswers, setWritingAnswers];
+  }
+
+  function answeredCountFor(key) {
+    const [answers] = answersFor(key);
+    if (key === "writing") return Object.values(answers).filter(v => (v || "").trim()).length;
+    return Object.keys(answers).length;
+  }
+
+  function sectionLabel(key) {
+    if (key === "listening") {
+      return `TOPIK II - Listening${listeningRound ? ` (${listeningRound} round)` : ""} - Mock Test`;
     }
+    return `TOPIK II - ${SECTIONS.find(s => s.key === key).label} - Mock Test`;
+  }
+
+  // Reading/Writing only need to be fetched once (any round works, the
+  // content doesn't depend on it). Listening always fetches fresh against
+  // whichever round was just chosen, since that's the one real choice here.
+  async function enterSection(key, opts = {}) {
+    const needsFetch = key === "listening" || !examData?.[key];
+    if (needsFetch) {
+      setStep("loading");
+      const round = key === "listening" ? (opts.round || listeningRound || "102nd") : "102nd";
+      try {
+        const res = await API.get("/topik/exam/fresh", { params: { listening_round: round } });
+        setExamData(prev => ({ ...(prev || {}), exam_id: prev?.exam_id || res.data.exam_id, [key]: res.data[key] }));
+        if (key === "listening") {
+          setListeningRound(round);
+          setListeningAnswers({});
+        }
+      } catch (err) {
+        setStep("picker");
+        alert("❌ Failed to load the exam. " + (err.response?.data?.error?.message || "Make sure the exam service is running."));
+        return;
+      }
+    }
+    setSection(key);
+    setSecondsLeft(SECTIONS.find(s => s.key === key).minutes * 60);
+    setShowReview(false);
+    setStep("exam");
   }
 
   async function submitExam() {
-    setStep("loading");
+    if (!examData || !section) return;
+    setStep("grading");
     try {
-      const res = await API.post("/kmate/quiz/check", { questions, answers, language: lang });
+      const payload = { exam_id: examData.exam_id, reading_answers: [], listening_answers: [], writing_answers: [] };
+      const [answers] = answersFor(section);
+      const questions = examData[section].questions;
+      if (section === "writing") {
+        payload.writing_answers = questions
+          .filter(q => (answers[q.id] || "").trim())
+          .map(q => ({ question_id: q.id, question_number: q.question_number, user_answer: answers[q.id] }));
+      } else {
+        const list = questions
+          .filter(q => answers[q.id])
+          .map(q => ({ question_id: q.id, question_number: q.question_number, selected_option: answers[q.id] }));
+        payload[`${section}_answers`] = list;
+        // Sent alongside the answered list so the backend can still log/explain
+        // questions the student skipped, not just the ones they answered.
+        payload[`${section}_unanswered_ids`] = questions.filter(q => !answers[q.id]).map(q => q.id);
+      }
+
+      const res = await API.post("/topik/exam/submit", payload);
       setResult(res.data);
+      setSectionResults(prev => ({ ...prev, [section]: res.data }));
       setStep("results");
-    } catch {
+      loadAnalytics({ silent: true });
+    } catch (err) {
       setStep("exam");
-      alert("❌ Submission failed.");
+      alert("❌ Submission failed. " + (err.response?.data?.error?.message || err.response?.data?.error || ""));
     }
   }
 
-  function reset() {
-    setStep("home"); setQs([]); setAnswers([]); setCurrent(0); setResult(null);
+  useEffect(() => {
+    submitRef.current = submitExam;
+  });
+
+  async function loadAnalytics(opts = {}) {
+    setAnalyticsLoading(true);
+    try {
+      const res = await API.get("/topik/analytics");
+      setAnalytics(res.data);
+    } catch (err) {
+      if (!opts.silent) {
+        alert("❌ Failed to load study plan. " + (err.response?.data?.error?.message || err.response?.data?.error || ""));
+      }
+    }
+    setAnalyticsLoading(false);
   }
 
-  const q = questions[current];
-  const answered = answers.filter(a => a > 0).length;
+  // Shared "study guide" block — used on both the section-picker screen (manual
+  // button, checked against overall history) and, retitled, right on the results
+  // screen after a submission (auto-loaded via loadAnalytics({ silent: true })
+  // in submitExam above).
+  function renderStudyGuide(title) {
+    return (
+      <div style={s.explanationCard}>
+        {!analytics ? (
+          <button style={s.retryBtn} onClick={() => loadAnalytics()} disabled={analyticsLoading}>
+            <Icon name="bot" size={14} style={{ marginRight: "4px" }} />
+            {analyticsLoading ? "Loading..." : "View My Study Plan"}
+          </button>
+        ) : (
+          <>
+            <h3 style={s.expTitle}><Icon name="bot" size={16} style={{ marginRight: "6px" }} />{title}</h3>
+            <div style={s.expText} dangerouslySetInnerHTML={{ __html: formatText(analytics.study_plan.summary_myanmar) }} />
+            <div style={s.weeklyPlan}>
+              {analytics.study_plan.weekly_plan.map((d, i) => (
+                <div key={i} style={s.dayCard}>
+                  <div style={s.dayLabel}>{d.day}</div>
+                  <div style={s.dayFocus}>{d.focus_topic}</div>
+                  <div style={s.dayTask}>{d.practice_task}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  function startExam() {
+    setExamData(null);
+    setSection(null);
+    setListeningRound(null);
+    setReadingAnswers({});
+    setListeningAnswers({});
+    setWritingAnswers({});
+    setSectionResults({});
+    setResult(null);
+    setAnalytics(null);
+    setShowReview(false);
+    setStep("picker");
+  }
+
+  function reset() {
+    setStep("home");
+    setExamData(null);
+    setSection(null);
+    setResult(null);
+    setSectionResults({});
+    setAnalytics(null);
+  }
 
   // ── HOME ──────────────────────────────
   if (step === "home") return (
@@ -65,231 +261,351 @@ export default function Exam() {
       <Sidebar />
       <main style={s.main}>
         <div style={s.hero}>
-          <Icon name="test-passed" size={56} style={s.heroIcon} />
-          <h1 style={s.heroTitle}>TOPIK II Exam Mode</h1>
-          <p style={s.heroSub}>Practice with AI-generated TOPIK II exam questions.<br />Get instant scoring and detailed explanations.</p>
-          <button style={s.startHeroBtn} onClick={() => setStep("settings")}>
-            <Icon name="rocket" size={16} style={{ marginRight: "6px" }} />Start Exam
+          <Icon name="test-passed" size={48} style={s.heroIcon} />
+          <h1 style={s.heroTitle}>TOPIK II Practice Exam</h1>
+          <p style={s.heroSub}>Full-length past TOPIK II exam — real Reading, Listening &amp; Writing questions, graded by K.MATE.</p>
+
+          <div style={s.statRow}>
+            <div style={s.statChip}><div style={s.statNum}>104</div><div style={s.statLabel}>Questions</div></div>
+            <div style={s.statChip}><div style={s.statNum}>180</div><div style={s.statLabel}>Minutes</div></div>
+            <div style={s.statChip}><div style={s.statNum}>300</div><div style={s.statLabel}>Total Points</div></div>
+          </div>
+
+          <button style={s.startHeroBtn} onClick={startExam}>
+            <Icon name="rocket" size={16} style={{ marginRight: "6px" }} />Start Test
           </button>
         </div>
-
-        <div style={s.featuresGrid}>
-          {[
-            { icon: "bot",      title: "AI-Generated",    desc: "Fresh questions every time based on real TOPIK II patterns" },
-            { icon: "combo-chart", title: "Instant Scoring",  desc: "Know your score immediately after submitting" },
-            { icon: "idea",     title: "Full Explanation", desc: "K.Mate explains every answer in detail" },
-            { icon: "globe",    title: "Any Language",     desc: "Get explanations in English, Korean, or Burmese" },
-          ].map((f, i) => (
-            <div key={i} style={s.featureCard}>
-              <Icon name={f.icon} size={32} style={s.featureIcon} />
-              <div style={s.featureTitle}>{f.title}</div>
-              <div style={s.featureDesc}>{f.desc}</div>
-            </div>
-          ))}
-        </div>
       </main>
     </div>
   );
 
-  // ── SETTINGS ──────────────────────────
-  if (step === "settings") return (
-    <div style={s.layout}>
-      <Sidebar />
-      <main style={s.main}>
-        <div style={s.settingsCard}>
-          <h2 style={s.settingsTitle}><Icon name="settings" size={22} style={{ marginRight: "6px" }} />Exam Settings</h2>
-
-          <div style={s.settingsSection}>
-            <label style={s.sLabel}>Choose Topic</label>
-            <div style={s.optRow}>
-              {[
-                { val: "grammar",    label: "Grammar"    },
-                { val: "vocabulary", label: "Vocabulary" },
-                { val: "mixed",      label: "Mixed"      },
-              ].map(t => (
-                <button key={t.val} style={{ ...s.optBtn, ...(topic === t.val ? s.optActive : {}) }}
-                  onClick={() => setTopic(t.val)}>
-                  <Icon name={TOPIC_ICON[t.val]} size={14} style={{ marginRight: "4px" }} />{t.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div style={s.settingsSection}>
-            <label style={s.sLabel}>Number of Questions</label>
-            <div style={s.optRow}>
-              {[5, 10, 15, 20].map(n => (
-                <button key={n} style={{ ...s.optBtn, ...(count === n ? s.optActive : {}) }}
-                  onClick={() => setCount(n)}>{n} Questions</button>
-              ))}
-            </div>
-          </div>
-
-          <div style={s.settingsSection}>
-            <label style={s.sLabel}>Explanation Language</label>
-            <div style={s.optRow}>
-              {[
-                { val: "English", label: "🇬🇧 English" },
-                { val: "Korean",  label: "🇰🇷 Korean"  },
-                { val: "Burmese", label: "🇲🇲 Burmese" },
-              ].map(l => (
-                <button key={l.val} style={{ ...s.optBtn, ...(lang === l.val ? s.optActive : {}) }}
-                  onClick={() => setLang(l.val)}>{l.label}</button>
-              ))}
-            </div>
-          </div>
-
-          <div style={s.settingsInfo}>
-            <Icon name="clock" size={14} style={{ marginRight: "4px" }} />Time: {count} minutes &nbsp;|&nbsp;
-            <Icon name="note" size={14} style={{ margin: "0 4px 0 8px" }} />{count} Questions &nbsp;|&nbsp;
-            <Icon name="target" size={14} style={{ margin: "0 4px 0 8px" }} />{topic.charAt(0).toUpperCase()+topic.slice(1)}
-          </div>
-
-          <div style={s.settingsBtns}>
-            <button style={s.backBtn} onClick={reset}>← Back</button>
-            <button style={s.beginBtn} onClick={startExam}>Begin Exam →</button>
-          </div>
-        </div>
-      </main>
-    </div>
-  );
-
-  // ── LOADING ───────────────────────────
-  if (step === "loading") return (
+  // ── LOADING / GRADING ─────────────────
+  if (step === "loading" || step === "grading") return (
     <div style={s.layout}>
       <Sidebar />
       <main style={{ ...s.main, ...s.center }}>
         <div style={s.loadingBox}>
           <Icon name="hourglass" size={48} style={s.loadingIcon} />
-          <h3 style={s.loadingText}>Generating your exam...</h3>
-          <p style={s.loadingSub}>K.Mate is preparing TOPIK II questions for you</p>
+          <h3 style={s.loadingText}>{step === "loading" ? "Loading exam..." : "Grading your answers..."}</h3>
+          <p style={s.loadingSub}>{step === "loading" ? "Fetching the real question bank" : "K.MATE is grading your writing answers"}</p>
+        </div>
+      </main>
+    </div>
+  );
+
+  // ── PICKER — choose which part to take ─
+  if (step === "picker") return (
+    <div style={s.layout}>
+      <Sidebar />
+      <main style={s.main}>
+        <div style={s.pickerHeader}>
+          <div style={s.examTitle}>TOPIK II — Choose a Part</div>
+          <button style={s.homeLinkBtn} onClick={reset}>← Exam Home</button>
+        </div>
+        <p style={s.pickerSub}>Each part has its own timer and is graded separately. Listening lets you pick which past round's recording to use.</p>
+
+        <div style={s.sectionTabs}>
+          {SECTIONS.map(sTab => {
+            const doneStat = sectionResults[sTab.key]?.sections?.find(sc => sc.section === sTab.key);
+            const fullPoints = examData?.[sTab.key]?.total_points;
+            const isListening = sTab.key === "listening";
+
+            return (
+              <button key={sTab.key}
+                style={s.sectionCard}
+                onClick={() => isListening ? setStep("listeningRounds") : enterSection(sTab.key)}
+              >
+                <span style={s.sectionCardText}>
+                  <Icon name={sTab.icon} size={16} style={{ marginRight: "8px" }} />
+                  {sectionLabel(sTab.key)}
+                  <span style={s.sectionCardCount}>{sTab.questionCount} questions · {sTab.minutes} min</span>
+                  {doneStat && (
+                    <span style={s.sectionCardDone}>
+                      <Icon name="checkmark-yes" size={12} style={{ marginRight: "3px" }} />
+                      {Math.round(doneStat.total_score)}/{Math.round(fullPoints)} pts
+                    </span>
+                  )}
+                </span>
+                <span style={s.sectionCardArrow}>→</span>
+              </button>
+            );
+          })}
+        </div>
+
+        {Object.keys(sectionResults).length > 0 && renderStudyGuide("K.MATE's Study Plan")}
+      </main>
+    </div>
+  );
+
+  // ── LISTENING ROUND PICKER — its own page since Listening is the only
+  //    part where a round choice is meaningful ─
+  if (step === "listeningRounds") return (
+    <div style={s.layout}>
+      <Sidebar />
+      <main style={s.main}>
+        <div style={s.pickerHeader}>
+          <div style={s.examTitle}>
+            <button style={s.backBtn} onClick={() => setStep("picker")}>←</button>
+            TOPIK II — Choose a Listening Round
+          </div>
+        </div>
+        <p style={s.pickerSub}>Each round uses that exam's own recording, so pick which one to listen to.</p>
+
+        <div style={s.sectionTabs}>
+          {ROUNDS.map(r => (
+            <button key={r} style={s.sectionCard} onClick={() => enterSection("listening", { round: r })}>
+              <span style={s.sectionCardText}>
+                <Icon name="headphones" size={16} style={{ marginRight: "8px" }} />
+                {r} TOPIK II - Listening - Mock Test
+                <span style={s.sectionCardCount}>50 questions · 60 min</span>
+              </span>
+              <span style={s.sectionCardArrow}>→</span>
+            </button>
+          ))}
         </div>
       </main>
     </div>
   );
 
   // ── EXAM ──────────────────────────────
-  if (step === "exam" && q) return (
-    <div style={s.layout}>
-      <Sidebar />
-      <main style={s.examMain}>
-        {/* Exam Header */}
-        <div style={s.examHeader}>
-          <div style={s.examTitle}><Icon name="note" size={20} style={{ marginRight: "6px" }} />TOPIK II Practice Exam</div>
-          <div style={s.examMeta}>
-            <span style={s.metaChip}>{answered}/{questions.length} Answered</span>
-            <span style={s.metaChip}>Q{current+1}/{questions.length}</span>
+  if (step === "exam" && examData && examData[section] && section) {
+    const sec = examData[section];
+    const [answers, setAnswers] = answersFor(section);
+    const totalAnswered = answeredCountFor(section);
+
+    return (
+      <div style={s.layout}>
+        <Sidebar />
+        <main style={s.examMain}>
+          <div style={s.stickyBar}>
+            <div style={s.stickyTop}>
+              <div style={s.examTitle}>
+                <button style={s.backBtn} onClick={() => setStep("picker")}>←</button>
+                {sectionLabel(section).replace(" - Mock Test", "")}
+              </div>
+              <div style={s.examMeta}>
+                <span style={s.metaChip}>{totalAnswered}/{sec.question_count} answered</span>
+                <span style={{ ...s.metaChip, ...(secondsLeft < 300 ? s.metaChipDanger : {}) }}>
+                  <Icon name="hourglass" size={13} style={{ marginRight: "4px" }} />{formatClock(secondsLeft)}
+                </span>
+                <button style={s.navSubmit} onClick={submitExam}>Submit Answers</button>
+              </div>
+            </div>
+            {section === "listening" && examData.listening.audio_path && (
+              <div style={s.audioBox}>
+                <Icon name="headphones" size={16} style={{ marginRight: "8px" }} />
+                <audio controls src={examData.listening.audio_path} style={{ flex: 1 }} />
+              </div>
+            )}
           </div>
-        </div>
 
-        {/* Progress */}
-        <div style={s.examProgress}>
-          <div style={{ ...s.examProgressFill, width: `${((current+1)/questions.length)*100}%` }} />
-        </div>
+          <div style={s.qList}>
+            {sec.questions.map((q, idx) => (
+              <div key={q.id} style={s.qCard}>
+                {/* q.question_number is the question's own printed number from its original
+                    exam paper (rounds are mixed together), not its position in this list —
+                    labeling by idx keeps the header in the same order the cards are shown. */}
+                <div style={s.qNum}>Question {idx + 1} of {sec.questions.length} <span style={s.qPoints}>({q.points} pts)</span></div>
+                {q.image_url && <img src={q.image_url} alt="" style={s.qImage} />}
+                <pre style={s.qText}>{stripLeadingQuestionNumber(section === "listening" ? listeningPromptForDisplay(q.prompt) : q.prompt)}</pre>
 
-        {/* Question Navigator */}
-        <div style={s.qNav}>
-          {questions.map((_, i) => (
-            <button key={i} onClick={() => setCurrent(i)}
-              style={{
-                ...s.qDot,
-                background: i === current ? "var(--primary)" : answers[i] > 0 ? "#10b981" : "var(--border)",
-                color: i === current || answers[i] > 0 ? "#fff" : "var(--text-muted)",
-              }}>{i+1}</button>
-          ))}
-        </div>
-
-        {/* Question */}
-        <div style={s.qCard}>
-          <div style={s.qNum}>Question {current+1}</div>
-          <div style={s.qText}>{q.q}</div>
-          <div style={s.optionsGrid}>
-            {q.opts.map((opt, i) => (
-              <button key={i}
-                style={{
-                  ...s.optChoice,
-                  ...(answers[current] === i+1 ? s.optChosen : {})
-                }}
-                onClick={() => { const a = [...answers]; a[current] = i+1; setAnswers(a); }}
-              >
-                <span style={s.optSymbol}>{symbols[i]}</span>
-                <span>{opt}</span>
-              </button>
+                {section === "writing" ? (
+                  <textarea
+                    style={s.writingArea}
+                    placeholder="한국어로 답을 쓰세요..."
+                    value={answers[q.id] || ""}
+                    onChange={e => setAnswers({ ...answers, [q.id]: e.target.value })}
+                  />
+                ) : (
+                  <div style={s.optionsGrid}>
+                    {symbols.map((sym, i) => (
+                      <button key={i}
+                        style={{ ...s.optChoice, ...(answers[q.id] === i + 1 ? s.optChosen : {}) }}
+                        onClick={() => setAnswers({ ...answers, [q.id]: i + 1 })}>
+                        <span style={s.optSymbol}>{sym}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             ))}
           </div>
-        </div>
 
-        {/* Navigation */}
-        <div style={s.examNavRow}>
-          <button style={s.navPrev} disabled={current === 0} onClick={() => setCurrent(c => c-1)}>← Previous</button>
-          <div style={{ display: "flex", gap: "10px" }}>
-            {current < questions.length-1
-              ? <button style={s.navNext} onClick={() => setCurrent(c => c+1)}>Next →</button>
-              : <button style={s.navSubmit} onClick={submitExam}>
-                  <Icon name="checkmark-yes" size={14} style={{ marginRight: "4px" }} />
-                  Submit Exam ({answered}/{questions.length} answered)
-                </button>
-            }
+          <div style={s.bottomSubmitRow}>
+            <button style={s.navSubmit} onClick={submitExam}>
+              <Icon name="checkmark-yes" size={14} style={{ marginRight: "4px" }} />Submit Answers
+            </button>
           </div>
-        </div>
-      </main>
-    </div>
-  );
+        </main>
+      </div>
+    );
+  }
 
-  // ── RESULTS ───────────────────────────
-  if (step === "results" && result) {
-    const pct   = Math.round((result.score / result.total) * 100);
+  // ── RESULTS — for the part just submitted ─
+  if (step === "results" && result && section) {
+    const sTab = SECTIONS.find(x => x.key === section);
+    const sc = result.sections.find(x => x.section === section) || result.sections[0];
+    // topik-ai-prep only grades questions actually submitted, so sc.max_score/
+    // total_questions reflect just those (e.g. 49/98 if one was skipped) — the
+    // real section size/points come from examData instead, so a skipped
+    // question counts against you (0 pts) rather than shrinking the total.
+    const fullTotal = examData[section].question_count;
+    const fullMax = examData[section].total_points;
+    const reviews = sc.question_reviews || [];
+    // Reading/Listening now submit every question (answered + unanswered), so the
+    // backend logs one review per question -- skipped is derived from those rather
+    // than a count diff. Writing doesn't get question_reviews, so keep the old diff.
+    const skipped = reviews.length
+      ? reviews.filter(r => r.user_answer === null).length
+      : fullTotal - sc.total_questions;
+    const pct = Math.round((sc.total_score / fullMax) * 100);
     const grade = pct >= 80 ? { label: "Excellent!", icon: "party-popper", color: "#10b981" }
-                : pct >= 60 ? { label: "Good Job!",   icon: "thumbs-up",    color: "var(--primary)" }
-                :             { label: "Keep Studying", icon: "flexed-biceps", color: "#f59e0b" };
+      : pct >= 60 ? { label: "Good Job!", icon: "thumbs-up", color: "var(--primary)" }
+      : { label: "Keep Studying", icon: "flexed-biceps", color: "#f59e0b" };
+    const [answers] = answersFor(section);
+    // Question content (stem/passage, instruction header, options) for the review
+    // screen is mapped straight from examData -- already in hand from taking the
+    // exam -- keyed by id, no extra fetch needed.
+    const questionById = Object.fromEntries(examData[section].questions.map(q => [q.id, q]));
+
     return (
       <div style={s.layout}>
         <Sidebar />
         <main style={s.main}>
-          {/* Score Card */}
           <div style={s.resultHero}>
-            <div style={s.bigScore}>{result.score}<span style={s.bigScoreTotal}>/{result.total}</span></div>
+            <div style={s.resultLabel}>{sectionLabel(section)}</div>
+            <div style={s.bigScore}>{Math.round(sc.total_score)}<span style={s.bigScoreTotal}>/{Math.round(fullMax)}</span></div>
             <div style={{ color: grade.color, fontSize: "20px", fontWeight: 700 }}>
               {grade.label} <Icon name={grade.icon} size={18} />
             </div>
             <div style={s.pctBar}>
               <div style={{ ...s.pctFill, width: `${pct}%`, background: grade.color }} />
             </div>
-            <div style={s.pctLabel}>{pct}% Score</div>
+            <div style={s.pctLabel}>{pct}% Score &nbsp;·&nbsp; {sc.correct_count}/{fullTotal} correct</div>
           </div>
 
-          {/* Per-question result */}
-          <div style={s.resultGrid}>
-            {result.results.map((r, i) => (
-              <div key={i} style={{ ...s.resultItem, borderLeft: `4px solid ${r.is_correct ? "#10b981" : "#ef4444"}` }}>
-                <div style={s.resultHeader}>
-                  <span style={s.resultQ}>Q{i+1}</span>
-                  <span style={{ color: r.is_correct ? "#10b981" : "#ef4444", fontWeight: 700 }}>
-                    <Icon name={r.is_correct ? "checkmark-yes" : "cancel"} size={14} style={{ marginRight: "4px" }} />
-                    {r.is_correct ? "Correct" : "Wrong"}
-                  </span>
-                </div>
-                <div style={s.resultQText}>{r.question}</div>
-                <div style={s.resultAnswer}>
-                  Correct: <strong>{symbols[r.correct_answer-1]} {r.options[r.correct_answer-1]}</strong>
-                  {!r.is_correct && <> &nbsp;|&nbsp; You: <span style={{color:"#ef4444"}}>{symbols[r.user_answer-1]} {r.options[r.user_answer-1]}</span></>}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* K.Mate Explanation */}
-          <div style={s.explanationCard}>
-            <h3 style={s.expTitle}><Icon name="bot" size={16} style={{ marginRight: "6px" }} />K.Mate's Explanation</h3>
-            <div style={s.expText} dangerouslySetInnerHTML={{ __html: formatText(result.explanation) }} />
-          </div>
+          {skipped > 0 && (
+            <div style={s.warningBox}>⚠️ {skipped} question{skipped > 1 ? "s" : ""} left unanswered — counted as incorrect.</div>
+          )}
+          {result.warnings?.length > 0 && (
+            <div style={s.warningBox}>
+              {result.warnings.map((w, i) => <div key={i}>⚠️ {w}</div>)}
+            </div>
+          )}
 
           <div style={s.resultBtns}>
-            <button style={s.retryBtn} onClick={() => setStep("settings")}>
-              <Icon name="refresh" size={14} style={{ marginRight: "4px" }} />Try Again
+            <button style={s.retryBtn} onClick={() => setShowReview(v => !v)}>
+              <Icon name="note" size={14} style={{ marginRight: "4px" }} />{showReview ? "Hide" : "Review"} My Answers
             </button>
-            <button style={s.homeBtn} onClick={reset}>
-              <Icon name="home" size={14} style={{ marginRight: "4px" }} />Back to Exam Home
+          </div>
+
+          {showReview && examData && (
+            <div style={s.explanationCard}>
+              <h3 style={s.expTitle}>Review My Answers — {sTab.label}</h3>
+              {reviews.length > 0 ? (
+                [...reviews].sort((a, b) => a.question_number - b.question_number).map(r => {
+                  const q = questionById[r.question_id];
+                  const rawPrompt = q ? (section === "listening" ? listeningPromptForDisplay(q.prompt) : q.prompt) : "";
+                  const { stem, options } = splitPromptIntoStemAndOptions(stripLeadingQuestionNumber(rawPrompt));
+                  const correctNum = Number(r.correct_answer);
+                  const chosenNum = r.user_answer !== null ? Number(r.user_answer) : null;
+
+                  return (
+                    <div key={r.question_id} style={s.reviewItem}>
+                      <div style={s.reviewTopRow}>
+                        <div style={s.reviewQNum}>
+                          Q{r.question_number}
+                          <span style={{ ...s.reviewBadge, ...(r.is_correct ? s.reviewBadgeOk : s.reviewBadgeBad) }}>
+                            {r.is_correct ? "✅" : "❌"}
+                          </span>
+                        </div>
+                        {!options && (
+                          <div style={s.reviewAnswer}>
+                            {chosenNum ? `${symbols[chosenNum - 1]} chosen` : "No answer"}
+                            {!r.is_correct && <> · correct: {symbols[correctNum - 1]}</>}
+                          </div>
+                        )}
+                      </div>
+
+                      {q && (
+                        <div style={s.reviewQuestionBlock}>
+                          {q.image_url && <img src={q.image_url} alt="" style={s.qImage} />}
+                          {stem && <pre style={s.reviewStemText}>{stem}</pre>}
+                          {options && (
+                            <div style={s.reviewOptionsList}>
+                              {options.map((optText, i) => {
+                                const optNum = i + 1;
+                                const isCorrectOpt = optNum === correctNum;
+                                const isChosenOpt = chosenNum !== null && optNum === chosenNum;
+                                return (
+                                  <div key={i} style={{
+                                    ...s.reviewOptChoice,
+                                    ...(isCorrectOpt ? s.reviewOptCorrect : isChosenOpt ? s.reviewOptWrong : {}),
+                                  }}>
+                                    <span style={s.reviewOptSymbol}>{symbols[i]}</span>
+                                    <span style={s.reviewOptText}>{optText}</span>
+                                    {isCorrectOpt && (
+                                      <span style={s.reviewOptBadgeOk}>
+                                        ✓ Correct Answer{isChosenOpt ? " (Your Answer)" : ""}
+                                      </span>
+                                    )}
+                                    {isChosenOpt && !isCorrectOpt && (
+                                      <span style={s.reviewOptBadgeBad}>✗ Your Answer</span>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          {options && chosenNum === null && (
+                            <div style={s.reviewAnswer}>No answer selected</div>
+                          )}
+                        </div>
+                      )}
+
+                      {r.explanation && (
+                        <div style={s.explanationBlock}>
+                          <div style={s.explanationRow}>
+                            <span style={s.explanationLabel}>မှန်ကန်သော အဖြေနှင့် အကြောင်းအရင်း</span>
+                            <span style={s.explanationText}>{r.explanation.correct_answer_explanation}</span>
+                          </div>
+                          <div style={s.explanationRow}>
+                            <span style={s.explanationLabel}>မှားယွင်းရသည့် အကြောင်းအရင်း</span>
+                            <span style={s.explanationText}>{r.explanation.wrong_answer_explanation}</span>
+                          </div>
+                          <div style={s.explanationRow}>
+                            <span style={s.explanationLabel}>အဓိက ပါဝင်သော သဒ္ဒါ/ဝေါဟာရ</span>
+                            <span style={s.explanationText}>{r.explanation.grammar_vocab_focus}</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                examData[section].questions
+                  .map((q, idx) => ({ q, idx }))
+                  .filter(({ q }) => answers[q.id])
+                  .map(({ q, idx }) => (
+                    <div key={q.id} style={s.reviewItem}>
+                      <div style={s.reviewTopRow}>
+                        <div style={s.reviewQNum}>Q{idx + 1}</div>
+                        <div style={s.reviewAnswer}>{answers[q.id]}</div>
+                      </div>
+                    </div>
+                  ))
+              )}
+            </div>
+          )}
+
+          {renderStudyGuide("မြန်မာဘာသာ AI သုံးသပ်ချက်နှင့် လေ့လာရန် လမ်းညွှန်")}
+
+          <div style={s.resultBtns}>
+            <button style={s.retryBtn} onClick={() => enterSection(section)}>
+              <Icon name="refresh" size={14} style={{ marginRight: "4px" }} />Retake This Part
+            </button>
+            <button style={s.homeBtn} onClick={() => setStep("picker")}>
+              <Icon name="home" size={14} style={{ marginRight: "4px" }} />Back to All Sections
             </button>
           </div>
         </main>
@@ -303,33 +619,19 @@ export default function Exam() {
 const s = {
   layout: { display: "flex", minHeight: "100vh", background: "var(--bg)" },
   main: { marginLeft: "240px", flex: 1, padding: "32px 40px" },
-  examMain: { marginLeft: "240px", flex: 1, padding: "24px 40px", display: "flex", flexDirection: "column" },
+  examMain: { marginLeft: "240px", flex: 1, display: "flex", flexDirection: "column" },
   center: { display: "flex", alignItems: "center", justifyContent: "center" },
 
   // Home
-  hero: { textAlign: "center", padding: "48px 20px 40px", background: "linear-gradient(135deg,var(--primary),var(--primary))", borderRadius: "20px", color: "#fff", marginBottom: "28px" },
-  heroIcon: { fontSize: "56px", marginBottom: "16px" },
-  heroTitle: { fontSize: "32px", fontWeight: 800, marginBottom: "12px" },
-  heroSub: { fontSize: "16px", opacity: 0.85, lineHeight: 1.7, marginBottom: "28px" },
+  hero: { textAlign: "center", padding: "56px 20px 48px", background: "linear-gradient(135deg,var(--primary),#7c3aed)", borderRadius: "20px", color: "#fff", maxWidth: "720px", margin: "40px auto" },
+  heroIcon: { fontSize: "48px", marginBottom: "12px" },
+  heroTitle: { fontSize: "30px", fontWeight: 800, marginBottom: "10px" },
+  heroSub: { fontSize: "15px", opacity: 0.85, lineHeight: 1.7, marginBottom: "28px" },
+  statRow: { display: "flex", justifyContent: "center", gap: "16px", marginBottom: "28px" },
+  statChip: { background: "rgba(255,255,255,0.14)", borderRadius: "12px", padding: "14px 22px", minWidth: "100px" },
+  statNum: { fontSize: "24px", fontWeight: 800 },
+  statLabel: { fontSize: "12px", opacity: 0.85, marginTop: "2px" },
   startHeroBtn: { background: "#fff", color: "var(--primary)", padding: "14px 36px", borderRadius: "12px", fontSize: "16px", fontWeight: 700, border: "none" },
-  featuresGrid: { display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: "16px" },
-  featureCard: { background: "var(--surface)", borderRadius: "14px", padding: "24px", textAlign: "center", border: "1px solid var(--border)" },
-  featureIcon: { fontSize: "32px", marginBottom: "12px" },
-  featureTitle: { fontSize: "15px", fontWeight: 700, color: "var(--text)", marginBottom: "6px" },
-  featureDesc: { fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6 },
-
-  // Settings
-  settingsCard: { background: "var(--surface)", borderRadius: "16px", padding: "36px", border: "1px solid var(--border)", maxWidth: "600px", margin: "0 auto" },
-  settingsTitle: { fontSize: "22px", fontWeight: 700, marginBottom: "28px", color: "var(--text)" },
-  settingsSection: { marginBottom: "24px" },
-  sLabel: { display: "block", fontSize: "14px", fontWeight: 600, color: "var(--text-muted)", marginBottom: "10px" },
-  optRow: { display: "flex", gap: "10px", flexWrap: "wrap" },
-  optBtn: { flex: 1, padding: "10px 16px", border: "2px solid var(--border)", borderRadius: "10px", fontSize: "14px", fontWeight: 500, background: "var(--surface)", color: "var(--text-muted)", minWidth: "100px" },
-  optActive: { borderColor: "var(--primary)", background: "var(--primary-tint)", color: "var(--primary)", fontWeight: 700 },
-  settingsInfo: { background: "var(--surface-alt)", padding: "12px 16px", borderRadius: "10px", fontSize: "14px", color: "var(--text-muted)", textAlign: "center", marginBottom: "24px" },
-  settingsBtns: { display: "flex", gap: "12px" },
-  backBtn: { flex: 1, padding: "12px", border: "1.5px solid var(--border)", borderRadius: "10px", background: "var(--surface)", color: "var(--text-muted)", fontSize: "15px", fontWeight: 600 },
-  beginBtn: { flex: 2, padding: "12px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: "10px", fontSize: "15px", fontWeight: 700 },
 
   // Loading
   loadingBox: { textAlign: "center", background: "var(--surface)", padding: "48px", borderRadius: "16px", border: "1px solid var(--border)" },
@@ -337,44 +639,89 @@ const s = {
   loadingText: { fontSize: "20px", fontWeight: 700, color: "var(--text)", marginBottom: "8px" },
   loadingSub: { fontSize: "14px", color: "var(--text-muted)" },
 
-  // Exam
-  examHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" },
-  examTitle: { fontSize: "20px", fontWeight: 700, color: "var(--text)" },
-  examMeta: { display: "flex", gap: "8px" },
-  metaChip: { background: "var(--primary-tint)", color: "var(--primary)", padding: "4px 12px", borderRadius: "20px", fontSize: "13px", fontWeight: 600 },
-  examProgress: { height: "6px", background: "var(--border)", borderRadius: "4px", marginBottom: "16px", overflow: "hidden" },
-  examProgressFill: { height: "100%", background: "var(--primary)", borderRadius: "4px", transition: "width 0.3s" },
-  qNav: { display: "flex", gap: "6px", flexWrap: "wrap", marginBottom: "20px" },
-  qDot: { width: "32px", height: "32px", borderRadius: "8px", fontSize: "13px", fontWeight: 700, border: "none", cursor: "pointer" },
-  qCard: { background: "var(--surface)", borderRadius: "16px", padding: "28px", border: "1px solid var(--border)", marginBottom: "20px", flex: 1 },
+  // Picker
+  pickerHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" },
+  pickerSub: { fontSize: "14px", color: "var(--text-muted)", marginBottom: "20px" },
+  homeLinkBtn: { padding: "8px 16px", border: "1.5px solid var(--border)", borderRadius: "8px", background: "var(--surface)", color: "var(--text-muted)", fontSize: "13px", fontWeight: 600 },
+
+  // Exam — sticky bar + continuous scroll
+  stickyBar: { position: "sticky", top: 0, zIndex: 5, background: "var(--bg)", paddingTop: "20px", paddingBottom: "12px", borderBottom: "1px solid var(--border)" },
+  stickyTop: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 40px", marginBottom: "12px" },
+  examTitle: { fontSize: "18px", fontWeight: 700, color: "var(--text)", display: "flex", alignItems: "center", gap: "10px" },
+  backBtn: { width: "30px", height: "30px", borderRadius: "8px", border: "1.5px solid var(--border)", background: "var(--surface)", color: "var(--text-muted)", fontSize: "15px", fontWeight: 700 },
+  examMeta: { display: "flex", gap: "8px", alignItems: "center" },
+  metaChip: { background: "var(--primary-tint)", color: "var(--primary)", padding: "5px 12px", borderRadius: "20px", fontSize: "13px", fontWeight: 700, display: "flex", alignItems: "center" },
+  metaChipDanger: { background: "#fee2e2", color: "#ef4444" },
+  sectionTabs: { display: "flex", flexDirection: "column", gap: "10px", marginBottom: "10px" },
+  sectionCard: {
+    display: "flex", alignItems: "center", justifyContent: "space-between",
+    width: "100%", padding: "16px 18px", borderRadius: "10px",
+    border: "2px solid var(--border)", background: "var(--surface)",
+    color: "var(--text-muted)", fontSize: "14px", fontWeight: 600, textAlign: "left",
+  },
+  sectionCardText: { display: "flex", alignItems: "center", flexWrap: "wrap", gap: "4px", color: "var(--text)" },
+  sectionCardCount: { marginLeft: "12px", fontSize: "12px", fontWeight: 500, color: "var(--text-faint)" },
+  sectionCardDone: { marginLeft: "12px", fontSize: "12px", fontWeight: 700, color: "#10b981", display: "flex", alignItems: "center" },
+  sectionCardArrow: {
+    display: "flex", alignItems: "center", justifyContent: "center",
+    width: "34px", height: "34px", borderRadius: "8px",
+    border: "1.5px solid var(--primary)", color: "var(--primary)", fontSize: "16px", flexShrink: 0,
+  },
+  audioBox: { display: "flex", alignItems: "center", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "12px", padding: "10px 16px", margin: "0 40px" },
+  navSubmit: { padding: "9px 20px", background: "#10b981", color: "#fff", border: "none", borderRadius: "10px", fontSize: "13px", fontWeight: 700, cursor: "pointer" },
+
+  qList: { padding: "20px 40px 8px", display: "flex", flexDirection: "column", gap: "16px" },
+  qCard: { background: "var(--surface)", borderRadius: "16px", padding: "24px", border: "1px solid var(--border)" },
   qNum: { fontSize: "13px", color: "var(--primary)", fontWeight: 700, marginBottom: "12px", textTransform: "uppercase", letterSpacing: "0.5px" },
-  qText: { fontSize: "18px", fontWeight: 600, color: "var(--text)", lineHeight: 1.7, marginBottom: "24px", padding: "16px", background: "var(--surface-alt)", borderRadius: "10px", borderLeft: "4px solid var(--primary)" },
-  optionsGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" },
-  optChoice: { display: "flex", alignItems: "center", gap: "12px", padding: "14px 16px", border: "2px solid var(--border)", borderRadius: "10px", fontSize: "15px", background: "var(--surface)", color: "var(--text)", textAlign: "left", cursor: "pointer" },
-  optChosen: { borderColor: "var(--primary)", background: "var(--primary-tint)", color: "var(--primary)", fontWeight: 600 },
-  optSymbol: { fontSize: "18px", fontWeight: 700, color: "var(--primary)", minWidth: "24px" },
-  examNavRow: { display: "flex", justifyContent: "space-between", alignItems: "center" },
-  navPrev: { padding: "10px 24px", border: "1.5px solid var(--border)", borderRadius: "10px", background: "var(--surface)", color: "var(--text-muted)", fontSize: "14px", fontWeight: 600 },
-  navNext: { padding: "10px 24px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: "10px", fontSize: "14px", fontWeight: 600 },
-  navSubmit: { padding: "10px 24px", background: "#10b981", color: "#fff", border: "none", borderRadius: "10px", fontSize: "14px", fontWeight: 700 },
+  qPoints: { color: "var(--text-faint)", fontWeight: 500, textTransform: "none" },
+  qText: { fontSize: "16px", fontWeight: 500, color: "var(--text)", lineHeight: 1.8, marginBottom: "20px", padding: "16px", background: "var(--surface-alt)", borderRadius: "10px", borderLeft: "4px solid var(--primary)", whiteSpace: "pre-wrap", fontFamily: "inherit" },
+  qImage: { display: "block", maxWidth: "100%", borderRadius: "10px", border: "1px solid var(--border)", marginBottom: "16px" },
+  optionsGrid: { display: "flex", gap: "12px" },
+  optChoice: { flex: 1, display: "flex", alignItems: "center", justifyContent: "center", padding: "14px", borderWidth: "2px", borderStyle: "solid", borderColor: "var(--border)", borderRadius: "10px", background: "var(--surface)", cursor: "pointer" },
+  optChosen: { borderColor: "var(--primary)", background: "var(--primary-tint)" },
+  optSymbol: { fontSize: "20px", fontWeight: 700, color: "var(--primary)" },
+  writingArea: { width: "100%", minHeight: "150px", padding: "14px", border: "1.5px solid var(--border)", borderRadius: "10px", fontSize: "15px", lineHeight: 1.7, background: "var(--surface)", color: "var(--text)", resize: "vertical" },
+  bottomSubmitRow: { display: "flex", justifyContent: "center", padding: "12px 40px 40px" },
 
   // Results
   resultHero: { background: "var(--surface)", borderRadius: "16px", padding: "32px", textAlign: "center", border: "1px solid var(--border)", marginBottom: "24px" },
+  resultLabel: { fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "12px" },
   bigScore: { fontSize: "72px", fontWeight: 800, color: "var(--primary)", lineHeight: 1 },
   bigScoreTotal: { fontSize: "40px", color: "var(--text-faint)" },
   pctBar: { height: "8px", background: "var(--border)", borderRadius: "4px", margin: "16px auto 8px", maxWidth: "300px", overflow: "hidden" },
   pctFill: { height: "100%", borderRadius: "4px" },
   pctLabel: { fontSize: "16px", color: "var(--text-muted)" },
-  resultGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "24px" },
-  resultItem: { background: "var(--surface)", borderRadius: "12px", padding: "16px", border: "1px solid var(--border)" },
-  resultHeader: { display: "flex", justifyContent: "space-between", marginBottom: "6px" },
-  resultQ: { fontSize: "12px", fontWeight: 700, color: "var(--primary)", textTransform: "uppercase" },
-  resultQText: { fontSize: "14px", color: "var(--text)", marginBottom: "8px", lineHeight: 1.5 },
-  resultAnswer: { fontSize: "13px", color: "var(--text-muted)" },
-  explanationCard: { background: "var(--surface)", borderRadius: "16px", padding: "24px", border: "1px solid var(--border)", marginBottom: "24px" },
+  warningBox: { background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "10px", padding: "12px 16px", fontSize: "13px", color: "var(--text-muted)", marginBottom: "20px" },
+  explanationCard: { background: "var(--surface)", borderRadius: "16px", padding: "24px", border: "1px solid var(--border)", marginBottom: "20px" },
   expTitle: { fontSize: "16px", fontWeight: 700, color: "var(--text)", marginBottom: "16px" },
-  expText: { fontSize: "14px", lineHeight: 1.9, color: "var(--text-muted)" },
-  resultBtns: { display: "flex", gap: "12px" },
+  expText: { fontSize: "14px", lineHeight: 1.9, color: "var(--text-muted)", marginBottom: "16px" },
+  reviewItem: { display: "flex", flexDirection: "column", gap: "12px", padding: "18px 0", borderBottom: "1px solid var(--border)", fontSize: "13px" },
+  reviewTopRow: { display: "flex", gap: "10px", alignItems: "baseline" },
+  reviewQNum: { fontWeight: 700, color: "var(--text)", fontSize: "15px", minWidth: "36px", display: "flex", alignItems: "center", gap: "6px" },
+  reviewAnswer: { color: "var(--text-muted)", whiteSpace: "pre-wrap" },
+  reviewBadge: { fontSize: "12px" },
+  reviewBadgeOk: {},
+  reviewBadgeBad: {},
+  reviewQuestionBlock: { display: "flex", flexDirection: "column", gap: "10px" },
+  reviewStemText: { fontSize: "15px", fontWeight: 500, color: "var(--text)", lineHeight: 1.8, margin: 0, padding: "14px 16px", background: "var(--surface-alt)", borderRadius: "10px", borderLeft: "4px solid var(--primary)", whiteSpace: "pre-wrap", fontFamily: "inherit" },
+  reviewOptionsList: { display: "flex", flexDirection: "column", gap: "8px" },
+  reviewOptChoice: { display: "flex", alignItems: "center", gap: "10px", padding: "10px 14px", borderRadius: "8px", border: "1.5px solid var(--border)", background: "var(--surface)" },
+  reviewOptCorrect: { border: "1.5px solid #10b981", background: "rgba(16,185,129,0.1)" },
+  reviewOptWrong: { border: "1.5px solid #ef4444", background: "rgba(239,68,68,0.1)" },
+  reviewOptSymbol: { fontWeight: 700, color: "var(--primary)", flexShrink: 0 },
+  reviewOptText: { flex: 1, color: "var(--text)", lineHeight: 1.6 },
+  reviewOptBadgeOk: { fontSize: "11px", fontWeight: 700, color: "#10b981", whiteSpace: "nowrap" },
+  reviewOptBadgeBad: { fontSize: "11px", fontWeight: 700, color: "#ef4444", whiteSpace: "nowrap" },
+  explanationBlock: { display: "flex", flexDirection: "column", gap: "8px", background: "var(--surface-alt)", borderRadius: "10px", padding: "12px 14px" },
+  explanationRow: { display: "flex", flexDirection: "column", gap: "2px" },
+  explanationLabel: { fontSize: "11px", fontWeight: 700, color: "var(--primary)", textTransform: "uppercase", letterSpacing: "0.3px" },
+  explanationText: { fontSize: "13px", color: "var(--text)", lineHeight: 1.7 },
+  weeklyPlan: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(160px,1fr))", gap: "10px" },
+  dayCard: { background: "var(--surface-alt)", borderRadius: "10px", padding: "12px" },
+  dayLabel: { fontSize: "12px", fontWeight: 700, color: "var(--primary)", marginBottom: "4px" },
+  dayFocus: { fontSize: "13px", fontWeight: 600, color: "var(--text)", marginBottom: "4px" },
+  dayTask: { fontSize: "12px", color: "var(--text-muted)", lineHeight: 1.5 },
+  resultBtns: { display: "flex", gap: "12px", marginBottom: "20px" },
   retryBtn: { flex: 1, padding: "13px", background: "var(--primary)", color: "#fff", border: "none", borderRadius: "10px", fontSize: "15px", fontWeight: 700 },
   homeBtn: { flex: 1, padding: "13px", background: "var(--surface)", color: "var(--text-muted)", border: "1.5px solid var(--border)", borderRadius: "10px", fontSize: "15px", fontWeight: 600 },
 };

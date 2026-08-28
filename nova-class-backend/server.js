@@ -25,7 +25,7 @@ app.use("/api/notifications", require("./routes/victoria/notification.routes"));
 app.use("/api/calendar",      require("./routes/victoria/calendar.routes"));
 
 // --- Thine's routes (add as they land in routes/thine/) ---
-// app.use("/api/...", require("./routes/thine/xxx.routes"));
+app.use("/api/topik", require("./routes/thine/exam.routes"));
 
 app.get("/", (req, res) => res.json({ status: "✅ Nova Class API running", port: process.env.PORT || 5001 }));
 

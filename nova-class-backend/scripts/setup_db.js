@@ -342,6 +342,17 @@ async function setup() {
     )
   `);
 
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS kmate_history (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      user_id INT NOT NULL,
+      question TEXT NOT NULL,
+      answer TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+  `);
+
   console.log("✅ All tables created successfully");
   await conn.end();
 }

@@ -1,5 +1,5 @@
 import { useCallback, useState, useEffect, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import API from "../../services/api";
 import PdfLessonViewer from "../../components/PdfLessonViewer";
 import Icon from "../../components/Icon";
@@ -22,9 +22,17 @@ async function fetchMaterial(materialId) {
 }
 
 // Checked live (not cached at module load) so tests can stub it per-case,
-// and so the real app reflects whatever the current browser actually supports.
-function getSpeechRecognitionAPI() {
-  return typeof window !== "undefined" ? window.SpeechRecognition || window.webkitSpeechRecognition : undefined;
+// and so the real app reflects whatever the current browser actually
+// supports. Voice input records raw audio and transcribes it with Whisper
+// (see /api/multimodal/transcribe) instead of the browser's own
+// SpeechRecognition — SpeechRecognition doesn't cover every language this
+// app supports (Burmese, notably; Whisper does), and using our own
+// recording also means the exact same pipeline works for every language
+// without per-browser/per-locale gaps.
+function getVoiceInputSupport() {
+  return typeof navigator !== "undefined"
+    && Boolean(navigator.mediaDevices?.getUserMedia)
+    && typeof window.MediaRecorder !== "undefined";
 }
 
 const VOICE_STATUS_LABEL = {
@@ -34,6 +42,22 @@ const VOICE_STATUS_LABEL = {
   ready: "Tap to talk",
 };
 
+// How long a run of silence has to last, once real speech has started, before
+// a turn is considered finished and sent off for transcription. Lower feels
+// snappier but risks cutting someone off mid-sentence during a natural
+// pause; higher feels laggy. 900ms is a middle ground — short enough that
+// the reply doesn't feel delayed, long enough for a normal breath/pause.
+const VOICE_SILENCE_TIMEOUT_MS = 900;
+// Anything shorter than this run of speech is treated as noise, not an
+// answer — a brief mic/speaker echo blip is unlikely to stay above the RMS
+// threshold this long, real speech easily does.
+const VOICE_MIN_SPEECH_MS = 500;
+// Hard safety cap per turn so a stuck mic can't record forever.
+const VOICE_MAX_TURN_MS = 20000;
+// RMS amplitude (0..1) above which the mic is considered "someone is
+// talking". Tuned for a typical laptop mic in a normal room; a very noisy
+// room may need this raised to avoid false triggers.
+const VOICE_RMS_THRESHOLD = 0.02;
 function AIChatPanel({ materialId, currentPage, totalPages }) {
   const { lang } = useLang();
   const [messages, setMessages] = useState([
@@ -48,33 +72,137 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
   const [sending, setSending] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState("ready");
-  const [voiceTranscript, setVoiceTranscript] = useState("");
   const [voiceQuestion, setVoiceQuestion] = useState("");
   const [voiceReply, setVoiceReply] = useState("");
+  // Captions (the spoken text on screen) are a per-viewer preference — some
+  // want to read along, others find it noisy. Remember the choice so it sticks
+  // across turns and sessions. Wrapped in try/catch: localStorage can throw or
+  // be empty (private windows, cleared storage) and the panel must still work.
+  const [captionsOn, setCaptionsOn] = useState(() => {
+    try { return localStorage.getItem("nova_voice_captions") !== "off"; } catch { return true; }
+  });
+  function toggleCaptions() {
+    setCaptionsOn(prev => {
+      const next = !prev;
+      try { localStorage.setItem("nova_voice_captions", next ? "on" : "off"); } catch { /* ignore */ }
+      return next;
+    });
+  }
   const bottomRef = useRef(null);
-  const recognitionRef = useRef(null);
+  const audioRef = useRef(null);
+  // Monotonic counter bumped every time voice output is stopped — i.e. at every
+  // interruption or new turn. An async reply (TTS/LLM) captures it before its
+  // await and bails if it no longer matches after, so a stale answer that was
+  // still in flight when the student moved on never plays over the new one.
+  const playbackSeqRef = useRef(0);
+  // Mic + recording plumbing, set up once per voice-mode session (not once
+  // per turn) so the browser's permission prompt only ever appears the one
+  // time, and re-armed as a fresh MediaRecorder per turn.
+  const micStreamRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const analyserRef = useRef(null);
+  const recorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
+  const vadFrameRef = useRef(null);
+  const turnStartedAtRef = useRef(0);
+  const speechStartedAtRef = useRef(0);
+  const lastVoiceAtRef = useRef(0);
+  // Read inside the voice-activity loop and async STT/TTS callbacks instead
+  // of the `voiceOpen`/`voiceStatus` state values directly — those closures
+  // capture whatever render created them, so a stale read would keep the
+  // mic running after the panel closed, or miss a barge-in. Kept in sync
+  // manually (not via an effect) so it's already correct on the very next
+  // callback; voiceStatusRef only gates the voice-activity loop, where a
+  // render's worth of lag is harmless.
+  const voiceOpenRef = useRef(false);
+  const voiceStatusRef = useRef(voiceStatus);
+  useEffect(() => { voiceStatusRef.current = voiceStatus; }, [voiceStatus]);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
-  const speechSupported = getSpeechRecognitionAPI();
+  const speechSupported = getVoiceInputSupport();
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView?.({ behavior: "smooth" });
   }, [messages]);
 
-  // Voice mode's own mic/speech lifecycle must never survive the component
-  // that owns it — closing the material or switching lessons mid-conversation
-  // would otherwise leave the mic listening or speech still queued.
+  // AIChatPanel is remounted with key={materialId} (see MaterialPreview)
+  // whenever the student switches lessons, so a plain mount-only effect here
+  // already loads the right lesson's history without needing materialId as
+  // a dependency. Replaces the default greeting only if there's a saved
+  // conversation to resume — an empty/failed fetch just leaves it as-is.
+  useEffect(() => {
+    let active = true;
+    API.get(`/classroom/materials/${materialId}/chat-history`)
+      .then(({ data }) => {
+        if (!active || !data.messages?.length) return;
+        setMessages(data.messages.map(m => ({ role: m.role, text: m.content })));
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [materialId]);
+
+  // Voice mode's own mic/recording lifecycle must never survive the
+  // component that owns it — closing the material or switching lessons
+  // mid-conversation would otherwise leave the mic recording or a turn
+  // still pending.
   useEffect(() => {
     return () => {
-      recognitionRef.current?.stop();
-      window.speechSynthesis?.cancel();
+      releaseMic();
+      stopAllVoiceOutput();
     };
   }, []);
+
+  async function ensureMic() {
+    if (micStreamRef.current) return micStreamRef.current;
+    // Explicit, not just relying on the browser default: echoCancellation
+    // matters most here — without it, the mic (especially laptop mic +
+    // speakers, no headphones) can pick up Nova's own TTS audio right back
+    // out of the speakers and misread it as the student talking.
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    micStreamRef.current = stream;
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AudioContextClass();
+    const source = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    source.connect(analyser);
+    audioCtxRef.current = ctx;
+    analyserRef.current = analyser;
+    return stream;
+  }
+
+  function releaseMic() {
+    cancelAnimationFrame(vadFrameRef.current);
+    recorderRef.current = null;
+    micStreamRef.current?.getTracks().forEach(track => track.stop());
+    micStreamRef.current = null;
+    audioCtxRef.current?.close().catch(() => {});
+    audioCtxRef.current = null;
+    analyserRef.current = null;
+  }
+
+  // Root-mean-square amplitude of the current mic input, 0 (silence) to
+  // roughly 1 (loud) — a simple, cheap enough-for-this stand-in for real
+  // voice-activity detection, checked on every animation frame.
+  function currentVoiceVolume() {
+    const analyser = analyserRef.current;
+    if (!analyser) return 0;
+    const data = new Uint8Array(analyser.fftSize);
+    analyser.getByteTimeDomainData(data);
+    let sumSquares = 0;
+    for (let i = 0; i < data.length; i++) {
+      const normalized = (data[i] - 128) / 128;
+      sumSquares += normalized * normalized;
+    }
+    return Math.sqrt(sumSquares / data.length);
+  }
 
   // Shared by the text input's Send button and voice mode, so a spoken
   // question gets the exact same assistant-mode request and history as a
   // typed one. Returns the reply text so voice mode knows what to speak.
-  async function sendMessage(text) {
+  async function sendMessage(text, { voice = false } = {}) {
     if (!text || sending) return null;
     setMessages(prev => [...prev, { role: "user", text }]);
     setSending(true);
@@ -91,6 +219,7 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
         currentPage,
         totalPages,
         lang,
+        voice,
       });
       replyText = data.reply || data.response || "...";
     } catch {
@@ -109,68 +238,242 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
   }
 
   function openVoiceMode() {
+    voiceOpenRef.current = true;
     setVoiceOpen(true);
     startListening();
   }
 
   function closeVoiceMode() {
-    recognitionRef.current?.stop();
-    window.speechSynthesis?.cancel();
+    voiceOpenRef.current = false;
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      try { recorderRef.current.stop(); } catch { /* already stopped */ }
+    }
+    releaseMic();
+    stopAllVoiceOutput();
     setVoiceOpen(false);
     setVoiceStatus("ready");
-    setVoiceTranscript("");
     setVoiceQuestion("");
     setVoiceReply("");
   }
 
-  function startListening() {
+  // Tapping the orb while Nova is talking cuts her off immediately — the
+  // backup path for when voice barge-in (the voice-activity loop below)
+  // either isn't confident enough to trigger on its own, no microphone is
+  // available, or the student would rather just tap.
+  function interruptAndListen() {
+    stopAllVoiceOutput();
+    if (recorderRef.current && recorderRef.current.state === "recording") {
+      // speak() already has a recorder running in the background to watch
+      // for exactly this — just relabel it as a real listening turn instead
+      // of stopping and reopening the mic.
+      const now = Date.now();
+      turnStartedAtRef.current = now;
+      speechStartedAtRef.current = now;
+      lastVoiceAtRef.current = now;
+      setVoiceStatus("listening");
+    } else {
+      startListening();
+    }
+  }
+
+  // Once the panel is open, the mic re-opens itself after every reply (and
+  // after a silent/no-speech timeout) so the conversation just keeps going —
+  // the student never has to tap the orb again mid-conversation, only to
+  // start it and to end it.
+  async function startListening() {
     if (!speechSupported) return;
-    const recognition = new speechSupported();
-    recognition.lang = "en-US";
-    recognition.interimResults = true;
-    recognition.maxAlternatives = 1;
-    let finalTranscript = "";
-    recognition.onresult = (e) => {
-      let interim = "";
-      finalTranscript = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const result = e.results[i];
-        if (result.isFinal) finalTranscript += result[0].transcript;
-        else interim += result[0].transcript;
-      }
-      setVoiceTranscript(finalTranscript || interim);
-      if (finalTranscript) recognition.stop();
-    };
-    recognition.onerror = () => setVoiceStatus("ready");
-    recognition.onend = () => {
-      const spoken = finalTranscript.trim();
-      if (spoken) handleVoiceResult(spoken);
-      else setVoiceStatus("ready");
-    };
-    recognitionRef.current = recognition;
-    setVoiceTranscript("");
+    try {
+      await ensureMic();
+    } catch {
+      // Permission denied, no mic present, etc. — nothing to fall back to.
+      setVoiceStatus("ready");
+      return;
+    }
+    if (!voiceOpenRef.current) return; // closed while the permission prompt was up
     setVoiceReply("");
+    turnStartedAtRef.current = Date.now();
+    speechStartedAtRef.current = 0;
+    lastVoiceAtRef.current = Date.now();
     setVoiceStatus("listening");
-    recognition.start();
+    beginRecordingSegment();
+  }
+
+  // Starts one MediaRecorder segment on the already-open mic stream and the
+  // voice-activity loop that watches it. Used both to open a normal
+  // listening turn and, from speak(), to watch for a barge-in while Nova
+  // talks — same recording either way, only the current voiceStatus (read
+  // fresh each frame in the loop below) decides what a detected voice means.
+  function beginRecordingSegment() {
+    const stream = micStreamRef.current;
+    if (!stream) return;
+    let recorder;
+    try {
+      recorder = new MediaRecorder(stream);
+    } catch {
+      return;
+    }
+    recordedChunksRef.current = [];
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunksRef.current.push(e.data); };
+    recorder.onstop = finishTurn;
+    recorderRef.current = recorder;
+    recorder.start();
+    runVoiceActivityLoop();
+  }
+
+  function runVoiceActivityLoop() {
+    const tick = () => {
+      const recorder = recorderRef.current;
+      if (!recorder || recorder.state !== "recording") return;
+      const now = Date.now();
+      const isVoice = currentVoiceVolume() > VOICE_RMS_THRESHOLD;
+
+      if (voiceStatusRef.current === "speaking") {
+        // The first sound of the student's voice interrupts Nova immediately
+        // — the recording just keeps going, now capturing their question.
+        if (isVoice) {
+          stopAllVoiceOutput();
+          turnStartedAtRef.current = now;
+          speechStartedAtRef.current = now;
+          lastVoiceAtRef.current = now;
+          setVoiceStatus("listening");
+        }
+      } else if (voiceStatusRef.current === "listening") {
+        if (isVoice) {
+          if (!speechStartedAtRef.current) speechStartedAtRef.current = now;
+          lastVoiceAtRef.current = now;
+        }
+        const spokeLongEnough = speechStartedAtRef.current
+          && (now - speechStartedAtRef.current) >= VOICE_MIN_SPEECH_MS;
+        const silentFor = now - lastVoiceAtRef.current;
+        const elapsed = now - turnStartedAtRef.current;
+        if ((spokeLongEnough && silentFor >= VOICE_SILENCE_TIMEOUT_MS) || elapsed >= VOICE_MAX_TURN_MS) {
+          try { recorder.stop(); } catch { /* already stopped */ }
+          return; // onstop → finishTurn takes it from here; stop polling
+        }
+      }
+      vadFrameRef.current = requestAnimationFrame(tick);
+    };
+    vadFrameRef.current = requestAnimationFrame(tick);
+  }
+
+  // The recorder's onstop handler — runs whether a turn ended because the
+  // student finished talking, because it timed out, or because voice mode
+  // was closed mid-turn.
+  async function finishTurn() {
+    const chunks = recordedChunksRef.current;
+    recordedChunksRef.current = [];
+    const hadSpeech = Boolean(speechStartedAtRef.current);
+    if (!voiceOpenRef.current) return;
+
+    if (!hadSpeech || chunks.length === 0) {
+      // Silence or noise-only — keep the conversation going rather than
+      // dropping back to a state that needs a manual tap to resume.
+      startListening();
+      return;
+    }
+
+    setVoiceStatus("thinking");
+    try {
+      const mimeType = recorderRef.current?.mimeType || "audio/webm";
+      const extension = mimeType.split("/")[1]?.split(";")[0] || "webm";
+      const blob = new Blob(chunks, { type: mimeType });
+      const form = new FormData();
+      form.append("audio", blob, `voice-question.${extension}`);
+      form.append("lang", lang);
+      const { data } = await API.post("/multimodal/transcribe", form);
+      const text = (data.text || "").trim();
+      if (text) { await handleVoiceResult(text); return; }
+    } catch { /* fall through to just listening again */ }
+    if (voiceOpenRef.current) startListening();
+    else setVoiceStatus("ready");
   }
 
   async function handleVoiceResult(text) {
     setVoiceQuestion(text);
     setVoiceStatus("thinking");
-    const reply = await sendMessage(text);
+    const seq = playbackSeqRef.current;
+    const reply = await sendMessage(text, { voice: true });
+    // "End call" (closeVoiceMode) can land while the reply is still being
+    // generated — don't speak into a closed panel. And if the student already
+    // moved on to a newer question (the sequence was bumped), drop this reply
+    // so an old answer doesn't get spoken over the new one.
+    if (!voiceOpenRef.current || seq !== playbackSeqRef.current) { setVoiceStatus("ready"); return; }
     if (!reply) { setVoiceStatus("ready"); return; }
     setVoiceReply(reply);
     speak(reply);
   }
 
-  function speak(text) {
-    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) { setVoiceStatus("ready"); return; }
-    window.speechSynthesis.cancel();
+  // Shared by both TTS paths so listening always resumes the same way once
+  // Nova finishes talking (or fails to).
+  function resumeAfterSpeaking() {
+    if (!voiceOpenRef.current) { setVoiceStatus("ready"); return; }
+    if (recorderRef.current && recorderRef.current.state === "recording") {
+      // The barge-in watcher speak() started was already running silently
+      // through the whole reply with nothing detected — just relabel it as
+      // the next listening turn instead of stopping and reopening the mic.
+      const now = Date.now();
+      turnStartedAtRef.current = now;
+      lastVoiceAtRef.current = now;
+      setVoiceStatus("listening");
+    } else {
+      startListening();
+    }
+  }
+
+  // The ElevenLabs <audio> element and the browser's own speechSynthesis are
+  // two entirely separate playback engines — nothing stops both from being
+  // audible at once if one starts before the other's been told to stop.
+  // Every path into either voice output goes through here first so a
+  // fallback (or a fresh reply) never overlaps whatever was already playing.
+  function stopAllVoiceOutput() {
+    // Bump first: any TTS/reply already awaiting a response is now stale and
+    // must not play, even though its audio element doesn't exist yet for the
+    // pause() below to catch.
+    playbackSeqRef.current += 1;
+    audioRef.current?.pause();
+    audioRef.current = null;
+    window.speechSynthesis?.cancel();
+  }
+
+  function speakWithBrowserVoice(text) {
+    if (!window.speechSynthesis || !window.SpeechSynthesisUtterance) { resumeAfterSpeaking(); return; }
+    stopAllVoiceOutput();
     const utterance = new window.SpeechSynthesisUtterance(text);
-    utterance.onend = () => setVoiceStatus("ready");
-    utterance.onerror = () => setVoiceStatus("ready");
+    utterance.onend = resumeAfterSpeaking;
+    utterance.onerror = resumeAfterSpeaking;
     setVoiceStatus("speaking");
     window.speechSynthesis.speak(utterance);
+  }
+
+  // Prefer the ElevenLabs voice (same one as the Nova agent) over the
+  // browser's built-in speech synthesis — falls back to the browser voice
+  // if ElevenLabs is unavailable (e.g. not configured, or plan limits)
+  // rather than going silent.
+  async function speak(text) {
+    setVoiceStatus("speaking");
+    stopAllVoiceOutput();
+    const seq = playbackSeqRef.current; // this reply's playback generation
+    if (micStreamRef.current) beginRecordingSegment(); // watch for a barge-in while she talks
+    // Every language — Burmese included — goes through /classroom/tts now: the
+    // backend routes Burmese to Azure (my-MM-NilarNeural), which ElevenLabs
+    // can't pronounce, and everything else to ElevenLabs. The browser voice
+    // stays as a last-resort fallback below if the request or playback fails.
+    try {
+      const { data } = await API.post("/classroom/tts", { text }, { responseType: "blob" });
+      // The TTS round-trip can outlast this reply's turn. Bail if the panel
+      // closed (End call) OR a newer turn/interruption bumped the sequence
+      // while the audio was in flight — otherwise this stale reply plays on
+      // top of the new one, two voices at once.
+      if (!voiceOpenRef.current || seq !== playbackSeqRef.current) return;
+      const url = URL.createObjectURL(data);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => { URL.revokeObjectURL(url); resumeAfterSpeaking(); };
+      audio.onerror = () => { URL.revokeObjectURL(url); speakWithBrowserVoice(text); };
+      await audio.play();
+    } catch {
+      if (voiceOpenRef.current && seq === playbackSeqRef.current) speakWithBrowserVoice(text);
+    }
   }
 
   return (
@@ -215,34 +518,58 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
 
       {voiceOpen && (
         <div style={voiceOverlay}>
-          <button type="button" onClick={closeVoiceMode} style={voiceCloseBtn} aria-label="Close voice chat">✕</button>
+          <button
+            type="button" onClick={closeVoiceMode} style={voiceCloseBtn} aria-label="Close voice chat"
+            onMouseEnter={e => { e.currentTarget.style.background = "var(--border)"; }}
+            onMouseLeave={e => { e.currentTarget.style.background = "var(--surface-alt)"; }}
+          >✕</button>
+
+          <div style={voiceOrbStage}>
+            <button
+              type="button"
+              onClick={voiceStatus === "ready" ? startListening : voiceStatus === "speaking" ? interruptAndListen : undefined}
+              disabled={voiceStatus === "thinking"}
+              style={{
+                ...voiceOrb,
+                ...(voiceStatus === "listening" ? voiceOrbListening : {}),
+                ...(voiceStatus === "thinking" ? voiceOrbThinking : {}),
+                ...(voiceStatus === "speaking" ? voiceOrbSpeaking : {}),
+              }}
+              aria-label={voiceStatus === "ready" ? "Start talking" : voiceStatus === "speaking" ? "Interrupt and talk" : undefined}
+            >
+              <Icon name="microphone" size={30} alt="" style={{ filter: "brightness(0) invert(1)" }} />
+            </button>
+            <div
+              aria-hidden="true"
+              style={{
+                ...voiceOrbHalo,
+                ...(voiceStatus === "listening" ? voiceOrbHaloListening : {}),
+                ...(voiceStatus === "thinking" ? voiceOrbHaloThinking : {}),
+                ...(voiceStatus === "speaking" ? voiceOrbHaloSpeaking : {}),
+              }}
+            />
+          </div>
+
+          <div style={voiceStatusBlock}>
+            <div style={voiceStatusRow}>
+              {voiceStatus === "listening" && <span style={voiceStatusDot} />}
+              <span style={voiceStatusText}>{VOICE_STATUS_LABEL[voiceStatus]}</span>
+            </div>
+            {voiceStatus === "speaking" && (
+              <div style={voiceStatusHint}>Just start talking to interrupt</div>
+            )}
+          </div>
+
           <button
             type="button"
-            onClick={voiceStatus === "ready" ? startListening : undefined}
-            disabled={voiceStatus !== "ready"}
-            style={{
-              ...voiceOrb,
-              ...(voiceStatus === "listening" ? voiceOrbListening : {}),
-              ...(voiceStatus === "thinking" ? voiceOrbThinking : {}),
-              ...(voiceStatus === "speaking" ? voiceOrbSpeaking : {}),
-            }}
-            aria-label={voiceStatus === "ready" ? "Start talking" : undefined}
+            onClick={toggleCaptions}
+            style={voiceCaptionToggle}
+            aria-pressed={captionsOn}
           >
-            {voiceStatus === "speaking" ? (
-              <div style={voiceBars}>
-                {[0, 1, 2, 3].map(i => <span key={i} style={{ ...voiceBar, animationDelay: `${i * 0.12}s` }} />)}
-              </div>
-            ) : (
-              <Icon name="microphone" size={36} alt="" style={{ filter: "brightness(0) invert(1)" }} />
-            )}
+            {captionsOn ? "Hide captions" : "Show captions"}
           </button>
-          <div style={voiceStatusText}>{VOICE_STATUS_LABEL[voiceStatus]}</div>
 
-          {voiceStatus === "listening" && voiceTranscript && (
-            <div style={voiceTranscriptBox}>{voiceTranscript}</div>
-          )}
-
-          {voiceStatus !== "listening" && (voiceQuestion || voiceReply) && (
+          {captionsOn && voiceStatus !== "listening" && (voiceQuestion || voiceReply) && (
             <div style={voiceCaptionBox}>
               {voiceQuestion && <div style={voiceCaptionQuestion}>You: {voiceQuestion}</div>}
               {voiceReply && <div style={voiceCaptionReply}>{voiceReply}</div>}
@@ -250,7 +577,7 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
           )}
 
           <button type="button" onClick={closeVoiceMode} style={voiceEndBtn}>
-            <Icon name="multiply" size={14} alt="" style={{ filter: "brightness(0) invert(1)" }} /> End Voice Chat
+            <Icon name="multiply" size={13} alt="" style={{ filter: "brightness(0) invert(1)" }} /> End Voice Chat
           </button>
         </div>
       )}
@@ -261,6 +588,7 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
 export default function MaterialPreview({ isOverlay = false }) {
   const { id, materialId } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [material, setMaterial] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -363,18 +691,39 @@ export default function MaterialPreview({ isOverlay = false }) {
     return () => { document.body.style.overflow = prevOverflow; };
   }, [isOverlay]);
 
+  // A lesson's additional attachments (material_files) aren't separate
+  // materials — they only exist as rows on this same material. Selecting one
+  // via ?file=<id> reuses this same PDF viewer (AI chat, translate,
+  // everything) instead of falling through to a plain external link, which
+  // is all a bare <a href> to the raw upload could offer.
+  const extraFileId = searchParams.get("file");
+  const activeExtraFile = extraFileId
+    ? (material?.files || []).find(f => String(f.id) === extraFileId)
+    : null;
+
   const token = localStorage.getItem("nova_token");
-  const fileUrl = material?.file_url
+  const fileUrl = activeExtraFile
+    // Extra attachments are served from the unauthenticated /uploads static
+    // route (see server.js) — no ?token needed, unlike the primary file's
+    // auth-gated /api/classroom/materials/:id/file route.
+    ? `${API_ORIGIN}/uploads/${activeExtraFile.file_path}`
+    : material?.file_url
     ? `${API_ORIGIN}/api${material.file_url}?token=${encodeURIComponent(token)}`
     : null;
   // The `download` attribute on <a> is ignored cross-origin — force a real
   // download via the server's Content-Disposition instead (see getMaterialFile).
-  const downloadUrl = fileUrl ? `${fileUrl}&download=1` : null;
-  const ext = material?.file_ext;
+  const downloadUrl = activeExtraFile ? fileUrl : (fileUrl ? `${fileUrl}&download=1` : null);
+  const ext = activeExtraFile
+    ? (activeExtraFile.file_name.split(".").pop() || "").toLowerCase()
+    : material?.file_ext;
+  const previewTitle = activeExtraFile ? activeExtraFile.file_name : (material?.title || "Untitled");
   const typeLabel = FILE_TYPE_LABEL[ext] || "File";
   const isImage = ["png", "jpg", "jpeg", "webp", "gif"].includes(ext);
   const isVideo = ["mp4", "webm"].includes(ext);
   const isPdf = ext === "pdf";
+  // Bookmarks and highlights are page-indexed against the primary file's own
+  // content — meaningless (and potentially page-mismatched) against a
+  // different attached PDF, so both stay off while viewing an extra file.
   const {
     bookmarks,
     syncingPage,
@@ -382,9 +731,9 @@ export default function MaterialPreview({ isOverlay = false }) {
     toggleBookmark,
   } = useMaterialBookmarks({
     materialId,
-    enabled: isPdf && Boolean(fileUrl),
+    enabled: isPdf && Boolean(fileUrl) && !activeExtraFile,
   });
-  const highlightState = useMaterialHighlights({ materialId, enabled: isPdf });
+  const highlightState = useMaterialHighlights({ materialId, enabled: isPdf && !activeExtraFile });
 
   const content = (
     <>
@@ -392,7 +741,7 @@ export default function MaterialPreview({ isOverlay = false }) {
       <div style={topBar}>
         <button onClick={goBack} style={backBtn} aria-label="Back to classroom">←</button>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={fileNameStyle}>{loading ? "Loading…" : material?.title || "Untitled"}</div>
+          <div style={fileNameStyle}>{loading ? "Loading…" : previewTitle}</div>
         </div>
         {matAssignments.length > 0 && (
           <div style={{ position: "relative", flexShrink: 0 }}>
@@ -450,7 +799,7 @@ export default function MaterialPreview({ isOverlay = false }) {
           <span style={badge}>{typeLabel}</span>
         )}
         {fileUrl && (
-          <a href={downloadUrl} download={material?.title} style={downloadBtn}>
+          <a href={downloadUrl} download={previewTitle} style={downloadBtn}>
             ⬇ Download
           </a>
         )}
@@ -480,7 +829,7 @@ export default function MaterialPreview({ isOverlay = false }) {
         ) : isPdf ? (
           <PdfLessonViewer
             fileUrl={fileUrl}
-            title={material.title}
+            title={previewTitle}
             bookmarks={bookmarks}
             syncingPage={syncingPage}
             bookmarkError={bookmarkError}
@@ -504,7 +853,7 @@ export default function MaterialPreview({ isOverlay = false }) {
             <div style={{ fontSize: "15px", color: "#6b7280", marginBottom: "16px" }}>
               Preview isn't available for this file type.
             </div>
-            <a href={downloadUrl} download={material.title} style={retryBtn}>Download</a>
+            <a href={downloadUrl} download={previewTitle} style={retryBtn}>Download</a>
           </div>
         )}
         </div>
@@ -746,7 +1095,8 @@ const micBtn = {
 const voiceOverlay = {
   position: "absolute", inset: 0, background: "var(--surface)",
   display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-  gap: "18px", padding: "32px",
+  gap: "22px", padding: "32px",
+  animation: "overlayFadeIn 200ms ease-out",
 };
 
 const voiceCloseBtn = {
@@ -754,50 +1104,99 @@ const voiceCloseBtn = {
   width: "30px", height: "30px", borderRadius: "50%",
   background: "var(--surface-alt)", border: "1px solid var(--border)", color: "var(--text-muted)",
   fontSize: "14px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
+  transition: "background 0.15s ease",
 };
 
+// The button and its halo share this stage so the halo can sit precisely
+// behind it, independently sized and animated, without affecting layout.
+const voiceOrbStage = {
+  position: "relative", width: "180px", height: "180px",
+  display: "flex", alignItems: "center", justifyContent: "center",
+};
+
+// A liquid, morphing blob rather than a static circle — border-radius (not
+// width/height) is animated so the wobble is paint-only, never triggers
+// layout. Each status runs the same wobble/gradient-shift pair at a
+// different speed, so the orb's motion itself communicates idle vs.
+// listening vs. thinking vs. speaking, the way a live voice assistant's
+// orb does — no separate icon or waveform needed to convey status.
 const voiceOrb = {
-  width: "88px", height: "88px", borderRadius: "50%", border: "none",
-  background: "var(--primary)", display: "flex", alignItems: "center", justifyContent: "center",
+  position: "relative", zIndex: 2,
+  width: "116px", height: "116px", border: "none",
+  borderRadius: "42% 58% 65% 35% / 45% 45% 55% 55%",
+  background: "linear-gradient(135deg, var(--primary-light), var(--primary), var(--primary-dark), var(--primary))",
+  backgroundSize: "300% 300%",
+  boxShadow: "0 12px 32px rgba(59, 55, 204, 0.35)",
+  display: "flex", alignItems: "center", justifyContent: "center",
   cursor: "pointer", transition: "transform 0.2s ease",
+  animation: "voiceOrbWobble 7s ease-in-out infinite, voiceGradientShift 6s ease infinite",
 };
 
 const voiceOrbListening = {
-  background: "linear-gradient(135deg, var(--primary), var(--primary))",
-  animation: "voiceListenPulse 1.6s ease-in-out infinite",
+  animation: "voiceOrbWobble 3.2s ease-in-out infinite, voiceGradientShift 4s ease infinite, voiceListenPulse 1.8s ease-in-out infinite",
   cursor: "default",
 };
 
 const voiceOrbThinking = {
-  background: "linear-gradient(135deg, var(--primary), var(--primary))",
-  cursor: "default", opacity: 0.85,
+  animation: "voiceOrbWobble 2s ease-in-out infinite, voiceGradientShift 2.6s ease infinite",
+  cursor: "default", opacity: 0.88,
 };
 
 const voiceOrbSpeaking = {
-  background: "linear-gradient(135deg, var(--primary), var(--primary))",
-  cursor: "default",
+  animation: "voiceOrbWobble 1.1s ease-in-out infinite, voiceGradientShift 1.4s ease infinite",
 };
 
-const voiceBars = { display: "flex", alignItems: "center", gap: "4px", height: "28px" };
+// A soft blurred halo behind the orb — bigger and hazier than the orb
+// itself, breathing at its own slower rhythm. This is what makes the whole
+// thing read as "a presence in the room" rather than just a button with a
+// pulse animation on it.
+const voiceOrbHalo = {
+  position: "absolute", zIndex: 1, inset: "12px",
+  borderRadius: "50%",
+  background: "radial-gradient(circle, var(--primary-light) 0%, var(--primary) 55%, transparent 75%)",
+  filter: "blur(22px)", opacity: 0.45,
+  animation: "voiceHaloBreathe 5s ease-in-out infinite",
+};
 
-const voiceBar = {
-  width: "4px", height: "100%", borderRadius: "2px", background: "#fff",
-  animation: "voiceSpeakWave 0.9s ease-in-out infinite",
+const voiceOrbHaloListening = { animation: "voiceHaloBreathe 2.4s ease-in-out infinite", opacity: 0.6 };
+const voiceOrbHaloThinking = { animation: "voiceHaloBreathe 1.6s ease-in-out infinite", opacity: 0.4 };
+const voiceOrbHaloSpeaking = { animation: "voiceHaloBreathe 0.9s ease-in-out infinite", opacity: 0.65 };
+
+const voiceStatusBlock = {
+  display: "flex", flexDirection: "column", alignItems: "center", gap: "6px",
+};
+
+const voiceStatusRow = {
+  display: "flex", alignItems: "center", gap: "8px",
+};
+
+const voiceStatusDot = {
+  width: "7px", height: "7px", borderRadius: "50%",
+  background: "var(--success)",
+  animation: "liveDotPulse 1.6s ease-in-out infinite",
 };
 
 const voiceStatusText = {
-  fontSize: "14px", fontWeight: 600, color: "var(--text-muted)",
+  fontSize: "14px", fontWeight: 600, color: "var(--text)", letterSpacing: "0.01em",
 };
 
-const voiceTranscriptBox = {
-  maxWidth: "100%", fontSize: "14px", color: "var(--text)", textAlign: "center",
-  lineHeight: 1.5, padding: "0 8px",
+const voiceStatusHint = {
+  fontSize: "12px", color: "var(--text-faint)",
+};
+
+const voiceCaptionToggle = {
+  background: "transparent", border: "1px solid var(--border)",
+  color: "var(--text-faint)", borderRadius: "20px",
+  padding: "5px 14px", fontSize: "11.5px", fontWeight: 600,
+  cursor: "pointer", letterSpacing: "0.01em",
 };
 
 const voiceCaptionBox = {
   maxWidth: "100%", maxHeight: "160px", overflowY: "auto",
-  display: "flex", flexDirection: "column", gap: "8px",
-  padding: "12px 14px", borderRadius: "12px", background: "var(--surface-alt)",
+  display: "flex", flexDirection: "column", gap: "10px",
+  padding: "14px 16px", borderRadius: "14px",
+  background: "var(--surface-alt)", border: "1px solid var(--border)",
+  animation: "overlayFadeIn 200ms ease-out",
 };
 
 const voiceCaptionQuestion = {
@@ -810,7 +1209,7 @@ const voiceCaptionReply = {
 
 const voiceEndBtn = {
   display: "flex", alignItems: "center", gap: "6px",
-  background: "#ef4444", color: "#fff", border: "none", borderRadius: "20px",
-  padding: "10px 20px", fontSize: "13px", fontWeight: 700, cursor: "pointer",
-  marginTop: "4px",
+  background: "var(--danger)", color: "#fff", border: "none", borderRadius: "20px",
+  padding: "9px 18px", fontSize: "12.5px", fontWeight: 700, cursor: "pointer",
+  marginTop: "4px", letterSpacing: "0.01em",
 };

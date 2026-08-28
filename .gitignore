@@ -11,3 +11,4 @@ build/
 .superpowers/
 nova-class-backend/$SCRATCH/
 nova-class/
+nova-class-backend/uploads/*

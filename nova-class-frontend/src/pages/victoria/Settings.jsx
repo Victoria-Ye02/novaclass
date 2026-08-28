@@ -99,6 +99,8 @@ export default function Settings() {
               {[
                 { code: "en", flag: "🇬🇧", label: "English" },
                 { code: "my", flag: "🇲🇲", label: "မြန်မာ" },
+                { code: "ko", flag: "🇰🇷", label: "한국어" },
+                { code: "vi", flag: "🇻🇳", label: "Tiếng Việt" },
               ].map(l => (
                 <div key={l.code}
                   onClick={() => changeLang(l.code)}

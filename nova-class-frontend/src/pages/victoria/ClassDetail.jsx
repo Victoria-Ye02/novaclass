@@ -228,6 +228,10 @@ export default function ClassDetail() {
   const [topicInput, setTopicInput] = useState("");
 
   const { lang } = useLang();
+  // Small inline dictionary for strings that only exist in this file (not
+  // yet promoted to i18n.js) — falls back to English for any language
+  // without its own entry, so ko/vi never silently render Burmese.
+  const tr = (strings) => strings[lang] ?? strings.en;
   const myName = localStorage.getItem("nova_name") || "You";
 
   useEffect(() => {
@@ -370,7 +374,7 @@ export default function ClassDetail() {
       });
       setTutorHistory([...newHistory, { role: "assistant", content: data.reply }]);
     } catch {
-      setTutorHistory([...newHistory, { role: "assistant", content: lang === "en" ? "AI unavailable. Please try again." : "AI မရနိုင်ပါ။" }]);
+      setTutorHistory([...newHistory, { role: "assistant", content: tr({ en: "AI unavailable. Please try again.", my: "AI မရနိုင်ပါ။", ko: "AI를 사용할 수 없습니다. 다시 시도해 주세요.", vi: "AI hiện không khả dụng. Vui lòng thử lại." }) }]);
     } finally { setTutorSending(false); }
   }
 
@@ -384,7 +388,7 @@ export default function ClassDetail() {
   }
 
   async function handleDeletePost(postId) {
-    if (!window.confirm(lang === "en" ? "Delete this post?" : "ဤ post ကို ဖျက်မည်လား?")) return;
+    if (!window.confirm(tr({ en: "Delete this post?", my: "ဤ post ကို ဖျက်မည်လား?", ko: "이 게시물을 삭제하시겠습니까?", vi: "Xóa bài đăng này?" }))) return;
     try {
       await API.delete(`/classroom/posts/${postId}`);
       setPosts(prev => prev.filter(p => p.id !== postId));
@@ -438,7 +442,7 @@ export default function ClassDetail() {
   }
 
   async function handleRemoveMember(memberId, memberName) {
-    if (!window.confirm(lang === "en" ? `Remove "${memberName}" from this class?` : `"${memberName}" ကို class မှ ဖယ်ရှားမည်လား?`)) return;
+    if (!window.confirm(tr({ en: `Remove "${memberName}" from this class?`, my: `"${memberName}" ကို class မှ ဖယ်ရှားမည်လား?`, ko: `"${memberName}"님을 이 반에서 제거하시겠습니까?`, vi: `Xóa "${memberName}" khỏi lớp học này?` }))) return;
     try {
       await API.delete(`/classroom/classes/${id}/members/${memberId}`);
       setMembers(prev => prev.filter(m => m.id !== memberId));
@@ -501,7 +505,7 @@ export default function ClassDetail() {
     setInviteMsg(null);
     try {
       const { data } = await API.post(`/classroom/classes/${id}/invite`, { email: inviteEmail });
-      setInviteMsg({ ok: true, text: lang === "en" ? `✅ ${data.user.name} has been added to the class` : `✅ ${data.user.name} ကို class ထဲ ထည့်ပြီးပါပြီ` });
+      setInviteMsg({ ok: true, text: tr({ en: `✅ ${data.user.name} has been added to the class`, my: `✅ ${data.user.name} ကို class ထဲ ထည့်ပြီးပါပြီ`, ko: `✅ ${data.user.name}님이 반에 추가되었습니다`, vi: `✅ Đã thêm ${data.user.name} vào lớp học` }) });
       setInviteEmail("");
       // refresh members
       const res = await API.get(`/classroom/classes/${id}/members`);
@@ -655,7 +659,7 @@ export default function ClassDetail() {
       setChatHistory([...newHistory, { role: "assistant", content: data.reply }]);
       setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
     } catch {
-      setChatHistory([...newHistory, { role: "assistant", content: lang === "en" ? "AI unavailable. Please check the backend." : "AI မရနိုင်ပါ။ Backend ကို စစ်ဆေးပါ။" }]);
+      setChatHistory([...newHistory, { role: "assistant", content: tr({ en: "AI unavailable. Please check the backend.", my: "AI မရနိုင်ပါ။ Backend ကို စစ်ဆေးပါ။", ko: "AI를 사용할 수 없습니다. 백엔드를 확인해 주세요.", vi: "AI hiện không khả dụng. Vui lòng kiểm tra backend." }) }]);
     } finally {
       setChatSending(false);
     }
@@ -665,14 +669,25 @@ export default function ClassDetail() {
     setLevelUpLevel(level);
     setChatHistory([]);
     setChatSending(true);
-    const startMsg = lang === "en" ? {
-      beginner: "I'm ready to learn this material from scratch. Please ask me the first question — I'll answer as best I can.",
-      intermediate: "I know the basics of this material. Let's check what I know well.",
-      advanced: "I understand this material well. Challenge me with hard questions.",
-    } : {
-      beginner: "ဒီသင်ခန်းစာကို ယခုမှ စတင်လေ့လာမည်ဆိုတာ သိပြီ။ ပထမဆုံး မေးခွန်းလေး မေးမယ်နော် — ဖြေနိုင်သလောက် ဖြေပေးပါ၊ မမှန်ရင်လဲ ကိစ္စမရှိဘူး။",
-      intermediate: "ဒီသင်ခန်းစာကို တစ်ဝက်လောက် နားလည်ပြီဆိုတာ သိပြီ။ ဘာတွေ ကောင်းကောင်းသိပြီးလဲ စစ်ဆေးကြည့်မယ်နော်။",
-      advanced: "ဒီသင်ခန်းစာကို ကောင်းကောင်းသိပြီဆိုတာ သိပြီ။ ခက်ဆစ်တဲ့ မေးခွန်းတွေနဲ့ စိန်ခေါ်မယ်နော်။",
+    const startMsg = {
+      beginner: tr({
+        en: "I'm ready to learn this material from scratch. Please ask me the first question — I'll answer as best I can.",
+        my: "ဒီသင်ခန်းစာကို ယခုမှ စတင်လေ့လာမည်ဆိုတာ သိပြီ။ ပထမဆုံး မေးခွန်းလေး မေးမယ်နော် — ဖြေနိုင်သလောက် ဖြေပေးပါ၊ မမှန်ရင်လဲ ကိစ္စမရှိဘူး။",
+        ko: "이 자료를 처음부터 배울 준비가 되었어요. 첫 질문을 해주세요 — 최선을 다해 답할게요.",
+        vi: "Tôi đã sẵn sàng học tài liệu này từ đầu. Hãy hỏi tôi câu đầu tiên — tôi sẽ cố gắng trả lời tốt nhất.",
+      }),
+      intermediate: tr({
+        en: "I know the basics of this material. Let's check what I know well.",
+        my: "ဒီသင်ခန်းစာကို တစ်ဝက်လောက် နားလည်ပြီဆိုတာ သိပြီ။ ဘာတွေ ကောင်းကောင်းသိပြီးလဲ စစ်ဆေးကြည့်မယ်နော်။",
+        ko: "이 자료의 기본은 알고 있어요. 제가 얼마나 잘 아는지 확인해 주세요.",
+        vi: "Tôi biết những kiến thức cơ bản của tài liệu này. Hãy kiểm tra xem tôi biết rõ đến đâu.",
+      }),
+      advanced: tr({
+        en: "I understand this material well. Challenge me with hard questions.",
+        my: "ဒီသင်ခန်းစာကို ကောင်းကောင်းသိပြီဆိုတာ သိပြီ။ ခက်ဆစ်တဲ့ မေးခွန်းတွေနဲ့ စိန်ခေါ်မယ်နော်။",
+        ko: "이 자료를 잘 이해하고 있어요. 어려운 질문으로 도전해 주세요.",
+        vi: "Tôi hiểu rõ tài liệu này. Hãy thử thách tôi bằng những câu hỏi khó.",
+      }),
     };
     try {
       const { data } = await API.post(`/classroom/materials/${selectedMat.id}/ai`, {
@@ -685,7 +700,7 @@ export default function ClassDetail() {
       setChatHistory([{ role: "assistant", content: data.reply }]);
       setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
     } catch {
-      setChatHistory([{ role: "assistant", content: lang === "en" ? "AI unavailable. Please check the backend." : "AI မရနိုင်ပါ။ Backend ကို စစ်ဆေးပါ။" }]);
+      setChatHistory([{ role: "assistant", content: tr({ en: "AI unavailable. Please check the backend.", my: "AI မရနိုင်ပါ။ Backend ကို စစ်ဆေးပါ။", ko: "AI를 사용할 수 없습니다. 백엔드를 확인해 주세요.", vi: "AI hiện không khả dụng. Vui lòng kiểm tra backend." }) }]);
     } finally {
       setChatSending(false);
     }
@@ -938,7 +953,7 @@ export default function ClassDetail() {
       });
       setAiCheck({ loading: false, result: data });
     } catch {
-      setAiCheck({ loading: false, result: { isComplete: null, score: null, missing: [], feedback: lang === "en" ? "AI check failed. Please try again later." : "AI စစ်ဆေးမှု မအောင်မြင်ပါ။ နောက်မှ ထပ်ကြိုးစားပါ။" } });
+      setAiCheck({ loading: false, result: { isComplete: null, score: null, missing: [], feedback: tr({ en: "AI check failed. Please try again later.", my: "AI စစ်ဆေးမှု မအောင်မြင်ပါ။ နောက်မှ ထပ်ကြိုးစားပါ။", ko: "AI 점검에 실패했습니다. 나중에 다시 시도해 주세요.", vi: "Kiểm tra AI thất bại. Vui lòng thử lại sau." }) } });
     }
   }
 
@@ -1967,11 +1982,16 @@ export default function ClassDetail() {
                             const fIsPdf = ext === "pdf";
                             const fUrl = `http://localhost:5001/uploads/${f.file_path}`;
                             const fIcon = ext === "docx" || ext === "doc" ? "note" : ext === "pptx" || ext === "ppt" ? "bar-chart" : "attach";
+                            // A PDF extra attachment can go through the same lesson
+                            // viewer (AI chat, translate) as the primary file — other
+                            // formats have no in-app renderer, so they stay a plain link.
                             return (
                               <FileCard key={f.id}
                                 name={f.file_name}
                                 label={extLabel(ext)}
-                                href={fUrl}
+                                {...(fIsPdf
+                                  ? { onClick: () => navigate(`/classroom/${id}/material/${selectedMat.id}?file=${f.id}`, { state: { backgroundLocation: location } }) }
+                                  : { href: fUrl })}
                                 thumbContent={
                                   fIsImg ? (
                                     <img src={fUrl} alt={f.file_name} style={{ width: "120px", height: "80px", objectFit: "cover" }} />
@@ -2477,23 +2497,23 @@ export default function ClassDetail() {
                       <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", padding: "18px 20px", marginBottom: "20px" }}>
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
                           <div style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text)" }}>
-                            {lang === "en" ? "Leave Requests" : "ကြိုတင်ခွင့်တောင်းချက်များ"}
+                            {tr({ en: "Leave Requests", my: "ကြိုတင်ခွင့်တောင်းချက်များ", ko: "휴가 신청", vi: "Đơn xin nghỉ" })}
                             {leaveRequests.filter(r => r.status === "pending").length > 0 && (
                               <span style={{ marginLeft: "8px", background: "rgba(245,158,11,0.12)", color: "#f59e0b", fontSize: "10px", fontWeight: 700, padding: "2px 8px", borderRadius: "999px" }}>
-                                {leaveRequests.filter(r => r.status === "pending").length} {lang === "en" ? "pending" : "ဆိုင်းငံ့"}
+                                {leaveRequests.filter(r => r.status === "pending").length} {tr({ en: "pending", my: "ဆိုင်းငံ့", ko: "대기 중", vi: "đang chờ" })}
                               </span>
                             )}
                           </div>
                         </div>
                         {leaveRequests.length === 0 ? (
                           <div style={{ textAlign: "center", padding: "20px 0", color: "var(--text-faint)", fontSize: "12.5px" }}>
-                            {lang === "en" ? "No leave requests yet" : "ကြိုတင်ခွင့်တောင်းချက် မရှိသေးပါ"}
+                            {tr({ en: "No leave requests yet", my: "ကြိုတင်ခွင့်တောင်းချက် မရှိသေးပါ", ko: "아직 휴가 신청이 없습니다", vi: "Chưa có đơn xin nghỉ nào" })}
                           </div>
                         ) : (
                           <div style={{ display: "flex", flexDirection: "column" }}>
                             {leaveRequests.map((req, i) => {
                               const icons = { medical: "🩺", family: "👪", travel: "✈️", other: "📝" };
-                              const reasonLabels = { medical: lang === "en" ? "Medical" : "ကျန်းမာရေး", family: lang === "en" ? "Family" : "မိသားစု", travel: lang === "en" ? "Travel" : "ခရီးသွား", other: lang === "en" ? "Other" : "အခြား" };
+                              const reasonLabels = { medical: tr({ en: "Medical", my: "ကျန်းမာရေး", ko: "병가", vi: "Lý do sức khỏe" }), family: tr({ en: "Family", my: "မိသားစု", ko: "가족", vi: "Gia đình" }), travel: tr({ en: "Travel", my: "ခရီးသွား", ko: "여행", vi: "Đi lại" }), other: tr({ en: "Other", my: "အခြား", ko: "기타", vi: "Khác" }) };
                               const fromD = req.from_date?.slice(0,10);
                               const toD = req.to_date?.slice(0,10);
                               const dateStr = fromD === toD
@@ -2511,11 +2531,11 @@ export default function ClassDetail() {
                                   </div>
                                   {req.status === "pending" ? (
                                     <span style={{ fontSize: "10px", fontWeight: 700, padding: "4px 10px", borderRadius: "999px", flexShrink: 0, background: "rgba(245,158,11,0.12)", color: "#f59e0b" }}>
-                                      {lang === "en" ? "Pending" : "ဆိုင်းငံ့"}
+                                      {tr({ en: "Pending", my: "ဆိုင်းငံ့", ko: "대기 중", vi: "Đang chờ" })}
                                     </span>
                                   ) : (
                                     <span style={{ fontSize: "10px", fontWeight: 700, padding: "4px 10px", borderRadius: "999px", flexShrink: 0, background: req.status === "approved" ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.1)", color: req.status === "approved" ? "#22c55e" : "#ef4444" }}>
-                                      {req.status === "approved" ? (lang === "en" ? "Approved" : "အတည်ပြုပြီး") : (lang === "en" ? "Rejected" : "ငြင်းပယ်ပြီး")}
+                                      {req.status === "approved" ? (tr({ en: "Approved", my: "အတည်ပြုပြီး", ko: "승인됨", vi: "Đã duyệt" })) : (tr({ en: "Rejected", my: "ငြင်းပယ်ပြီး", ko: "거절됨", vi: "Đã từ chối" }))}
                                     </span>
                                   )}
                                 </div>
@@ -2528,9 +2548,9 @@ export default function ClassDetail() {
                       {/* Stats row */}
                       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: "14px", marginBottom: "24px" }}>
                         {[
-                          { num: totalSessions, lbl: lang === "en" ? "Total Sessions" : "စုစုပေါင်း Session" },
-                          { num: avgRate !== null ? avgRate + "%" : "—", lbl: lang === "en" ? "Avg Attendance" : "ပျမ်းမျှ တက်ရောက်မှု", color: avgRate !== null ? (avgRate >= 75 ? "#0F9D6E" : "#E1483F") : undefined },
-                          { num: pendingCount, lbl: lang === "en" ? "Pending" : "မမှတ်ရသေးသော", color: pendingCount > 0 ? "#D97706" : undefined },
+                          { num: totalSessions, lbl: tr({ en: "Total Sessions", my: "စုစုပေါင်း Session", ko: "전체 세션 수", vi: "Tổng số buổi học" }) },
+                          { num: avgRate !== null ? avgRate + "%" : "—", lbl: tr({ en: "Avg Attendance", my: "ပျမ်းမျှ တက်ရောက်မှု", ko: "평균 출석률", vi: "Tỷ lệ tham dự trung bình" }), color: avgRate !== null ? (avgRate >= 75 ? "#0F9D6E" : "#E1483F") : undefined },
+                          { num: pendingCount, lbl: tr({ en: "Pending", my: "မမှတ်ရသေးသော", ko: "미기록", vi: "Chưa ghi nhận" }), color: pendingCount > 0 ? "#D97706" : undefined },
                         ].map(({ num, lbl, color }) => (
                           <div key={lbl} style={{ background: "var(--primary-tint)", borderRadius: "16px", padding: "16px 18px" }}>
                             <div style={{ fontSize: "22px", fontWeight: 700, color: color || "var(--text)" }}>{num}</div>
@@ -2585,7 +2605,7 @@ export default function ClassDetail() {
                             })}
                           </div>
                           <div style={{ display: "flex", gap: "10px", marginTop: "12px", fontSize: "9.5px", color: "#6B6B85", flexWrap: "wrap" }}>
-                            {[["#22c55e", lang === "en" ? "Taken" : "မှတ်ပြီး"], ["#f59e0b", lang === "en" ? "Pending" : "မမှတ်ရသေး"]].map(([c, label]) => (
+                            {[["#22c55e", tr({ en: "Taken", my: "မှတ်ပြီး", ko: "기록됨", vi: "Đã điểm danh" })], ["#f59e0b", tr({ en: "Pending", my: "မမှတ်ရသေး", ko: "미기록", vi: "Chưa ghi nhận" })]].map(([c, label]) => (
                               <span key={label} style={{ display: "flex", alignItems: "center", gap: "4px" }}>
                                 <span style={{ width: "10px", height: "10px", borderRadius: "3px", background: c, display: "inline-block" }} />{label}
                               </span>
@@ -2602,12 +2622,12 @@ export default function ClassDetail() {
                               <div style={{ fontSize: "12px", fontWeight: 700, color: "var(--text)", marginBottom: "8px" }}>
                                 {new Date(calSelectedDate + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", day: "numeric", month: "long" })}
                                 <span style={{ fontSize: "11px", fontWeight: 400, color: "#A6A6BF", marginLeft: "8px" }}>
-                                  {lang === "en" ? "· No session yet" : "· Session မရှိသေး"}
+                                  {tr({ en: "· No session yet", my: "· Session မရှိသေး", ko: "· 아직 세션 없음", vi: "· Chưa có buổi học" })}
                                 </span>
                               </div>
                               <div style={{ display: "flex", gap: "8px" }}>
                                 <input value={newSessionTitle} onChange={e => setNewSessionTitle(e.target.value)}
-                                  placeholder={lang === "en" ? "Session title…" : "Session ခေါင်းစဉ်…"}
+                                  placeholder={tr({ en: "Session title…", my: "Session ခေါင်းစဉ်…", ko: "세션 제목…", vi: "Tiêu đề buổi học…" })}
                                   onKeyDown={async e => {
                                     if (e.key === "Enter" && newSessionTitle.trim()) {
                                       try {
@@ -2626,7 +2646,7 @@ export default function ClassDetail() {
                                     setNewSessionTitle("");
                                   } catch (err) { console.error(err); }
                                 }} style={{ padding: "9px 18px", borderRadius: "10px", border: "none", background: "#0B0B1E", color: "#fff", fontWeight: 700, fontSize: "13px", cursor: "pointer", whiteSpace: "nowrap" }}>
-                                  {lang === "en" ? "+ Create" : "+ ဖန်တီး"}
+                                  {tr({ en: "+ Create", my: "+ ဖန်တီး", ko: "+ 생성", vi: "+ Tạo" })}
                                 </button>
                               </div>
                             </div>
@@ -2635,7 +2655,7 @@ export default function ClassDetail() {
                           {/* Header row */}
                           <div style={{ padding: "14px 18px 8px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                             <span style={{ fontSize: "12px", fontWeight: 700, color: "#6B6B85", textTransform: "uppercase", letterSpacing: "0.04em" }}>
-                              {lang === "en" ? "All Sessions" : "Session အားလုံး"}
+                              {tr({ en: "All Sessions", my: "Session အားလုံး", ko: "전체 세션", vi: "Tất cả buổi học" })}
                             </span>
                             <span style={{ fontSize: "11px", color: "#A6A6BF" }}>{(attendanceSessions || []).length}</span>
                           </div>
@@ -2645,8 +2665,8 @@ export default function ClassDetail() {
                             {(attendanceSessions || []).length === 0 ? (
                               <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "180px", color: "#A6A6BF" }}>
                                 <div style={{ fontSize: "26px", marginBottom: "8px" }}>📋</div>
-                                <div style={{ fontSize: "13px", fontWeight: 600 }}>{lang === "en" ? "No sessions yet" : "Session မရှိသေးပါ"}</div>
-                                <div style={{ fontSize: "11px", marginTop: "4px" }}>{lang === "en" ? "Pick a date on the calendar to create one" : "Calendar မှ နေ့ရက် ရွေး ဖန်တီးပါ"}</div>
+                                <div style={{ fontSize: "13px", fontWeight: 600 }}>{tr({ en: "No sessions yet", my: "Session မရှိသေးပါ", ko: "아직 세션이 없습니다", vi: "Chưa có buổi học nào" })}</div>
+                                <div style={{ fontSize: "11px", marginTop: "4px" }}>{tr({ en: "Pick a date on the calendar to create one", my: "Calendar မှ နေ့ရက် ရွေး ဖန်တီးပါ", ko: "캘린더에서 날짜를 선택해 생성하세요", vi: "Chọn ngày trên lịch để tạo buổi học" })}</div>
                               </div>
                             ) : (() => {
                               // Group sessions by ISO week (Mon–Sun)
@@ -2699,7 +2719,7 @@ export default function ClassDetail() {
                                                 }
                                                 setRenamingSessionId(null);
                                               }} style={{ fontSize: "11px", fontWeight: 700, color: "#5B5FE9", background: "transparent", border: "none", cursor: "pointer", padding: "0 4px" }}>
-                                                {lang === "en" ? "Save" : "သိမ်း"}
+                                                {tr({ en: "Save", my: "သိမ်း", ko: "저장", vi: "Lưu" })}
                                               </button>
                                               <button onClick={() => setRenamingSessionId(null)} style={{ fontSize: "11px", color: "#A6A6BF", background: "transparent", border: "none", cursor: "pointer", padding: "0 2px" }}>✕</button>
                                             </div>
@@ -2717,14 +2737,14 @@ export default function ClassDetail() {
                                                 </div>
                                                 <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{s.title}</div>
                                                 <div style={{ fontSize: "11px", color: "#6B6B85", marginTop: "1px" }}>
-                                                  {Number(s.total) > 0 ? `${s.present || 0} present · ${s.late || 0} late · ${s.absent || 0} absent` : (lang === "en" ? "Not yet marked" : "မှတ်မရသေး")}
+                                                  {Number(s.total) > 0 ? `${s.present || 0} present · ${s.late || 0} late · ${s.absent || 0} absent` : (tr({ en: "Not yet marked", my: "မှတ်မရသေး", ko: "아직 기록 안 됨", vi: "Chưa điểm danh" }))}
                                                 </div>
                                               </div>
                                               <div style={{ display: "flex", alignItems: "center", gap: "6px", flexShrink: 0, marginLeft: "8px" }}>
                                                 <span style={{ fontSize: "10px", fontWeight: 700, padding: "3px 8px", borderRadius: "999px",
                                                   background: Number(s.total) > 0 ? "rgba(34,197,94,0.12)" : "rgba(249,115,22,0.12)",
                                                   color: Number(s.total) > 0 ? "#22c55e" : "#f97316" }}>
-                                                  {Number(s.total) > 0 ? (lang === "en" ? "Taken ✓" : "မှတ်ပြီး") : (lang === "en" ? "Pending" : "မမှတ်ရသေး")}
+                                                  {Number(s.total) > 0 ? (tr({ en: "Taken ✓", my: "မှတ်ပြီး", ko: "기록됨 ✓", vi: "Đã điểm danh ✓" })) : (tr({ en: "Pending", my: "မမှတ်ရသေး", ko: "미기록", vi: "Chưa ghi nhận" }))}
                                                 </span>
                                                 {/* ⋮ menu button */}
                                                 <button onClick={e => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setSessCtxMenu({ id: s.id, x: r.right - 180, y: r.bottom + 4 }); }}
@@ -2765,7 +2785,7 @@ export default function ClassDetail() {
                     const r34 = 34, circ = 2 * Math.PI * r34;
                     const filled = (rate / 100) * circ;
                     const todayStr = new Date().toISOString().slice(0, 10);
-                    const statusLabel = s => s === "present" ? (lang === "en" ? "Present" : "တက်ရောက်") : s === "late" ? (lang === "en" ? "Late" : "နောက်ကျ") : s === "absent" ? (lang === "en" ? "Absent" : "မတက်") : "—";
+                    const statusLabel = s => s === "present" ? (tr({ en: "Present", my: "တက်ရောက်", ko: "출석", vi: "Có mặt" })) : s === "late" ? (tr({ en: "Late", my: "နောက်ကျ", ko: "지각", vi: "Đi muộn" })) : s === "absent" ? (tr({ en: "Absent", my: "မတက်", ko: "결석", vi: "Vắng mặt" })) : "—";
                     const statusColor = s => s === "present" ? "#16a34a" : s === "late" ? "#d97706" : s === "absent" ? "#dc2626" : "var(--text-faint)";
                     const statusBg = s => s === "present" ? "rgba(34,197,94,0.15)" : s === "late" ? "rgba(245,158,11,0.15)" : "rgba(239,68,68,0.1)";
                     return (
@@ -2775,11 +2795,11 @@ export default function ClassDetail() {
                         {myAttendance.rate !== null && myAttendance.rate < 85 && (
                           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "14px", padding: "14px 18px" }}>
                             <div>
-                              <div style={{ fontSize: "13px", fontWeight: 700, color: "#ef4444" }}>⚠ {lang === "en" ? "Attendance below requirement" : "တက်ရောက်မှုနှုန်း လိုအပ်ချက်အောက်"}</div>
-                              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "3px" }}>{lang === "en" ? `Your attendance is at ${rate}%, below the 85% minimum.` : `တက်ရောက်မှုနှုန်း ${rate}% ဖြစ်ပြီး 85% လိုအပ်ချက်အောက်ဖြစ်နေသည်။`}</div>
+                              <div style={{ fontSize: "13px", fontWeight: 700, color: "#ef4444" }}>⚠ {tr({ en: "Attendance below requirement", my: "တက်ရောက်မှုနှုန်း လိုအပ်ချက်အောက်", ko: "출석률 기준 미달", vi: "Tỷ lệ tham dự dưới yêu cầu" })}</div>
+                              <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "3px" }}>{tr({ en: `Your attendance is at ${rate}%, below the 85% minimum.`, my: `တက်ရောက်မှုနှုန်း ${rate}% ဖြစ်ပြီး 85% လိုအပ်ချက်အောက်ဖြစ်နေသည်။`, ko: `출석률이 ${rate}%로 최소 기준인 85%에 미달합니다.`, vi: `Tỷ lệ tham dự của bạn là ${rate}%, dưới mức tối thiểu 85%.` })}</div>
                             </div>
                             <button style={{ background: "#dc2626", color: "#fff", border: "none", padding: "8px 14px", borderRadius: "9px", fontSize: "11.5px", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", marginLeft: "14px" }}>
-                              {lang === "en" ? "View details" : "အသေးစိတ်"}
+                              {tr({ en: "View details", my: "အသေးစိတ်", ko: "자세히 보기", vi: "Xem chi tiết" })}
                             </button>
                           </div>
                         )}
@@ -2787,12 +2807,12 @@ export default function ClassDetail() {
                         {/* Entry card */}
                         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--primary-tint)", borderRadius: "14px", padding: "16px 20px" }}>
                           <div>
-                            <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)" }}>{lang === "en" ? "Can't make it to class?" : "ကျောင်းမတက်နိုင်ဘူးလား?"}</div>
-                            <div style={{ fontSize: "11.5px", color: "var(--text-faint)", marginTop: "2px" }}>{lang === "en" ? "Let your teacher know in advance and avoid an unexplained absence" : "ကြိုတင် အကြောင်းကြားပြီး ရှင်းမပြသော ပျက်ကွက်ကို ရှောင်ပါ"}</div>
+                            <div style={{ fontSize: "13px", fontWeight: 700, color: "var(--text)" }}>{tr({ en: "Can't make it to class?", my: "ကျောင်းမတက်နိုင်ဘူးလား?", ko: "수업에 못 오시나요?", vi: "Không thể đến lớp?" })}</div>
+                            <div style={{ fontSize: "11.5px", color: "var(--text-faint)", marginTop: "2px" }}>{tr({ en: "Let your teacher know in advance and avoid an unexplained absence", my: "ကြိုတင် အကြောင်းကြားပြီး ရှင်းမပြသော ပျက်ကွက်ကို ရှောင်ပါ", ko: "미리 알려서 무단 결석을 피하세요", vi: "Báo trước để tránh vắng mặt không rõ lý do" })}</div>
                           </div>
                           <button onClick={() => { setLeaveModal("form"); setLeaveForm({ from: new Date().toISOString().slice(0,10), to: new Date().toISOString().slice(0,10), reasonType: "medical", details: "", attachment: null }); }}
                             style={{ background: "#0F172A", color: "#fff", border: "none", borderRadius: "9px", padding: "10px 18px", fontSize: "12px", fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", marginLeft: "16px" }}>
-                            {lang === "en" ? "Request leave" : "ကြိုတင်တောင်းဆိုမည်"}
+                            {tr({ en: "Request leave", my: "ကြိုတင်တောင်းဆိုမည်", ko: "휴가 신청", vi: "Xin nghỉ" })}
                           </button>
                         </div>
 
@@ -2808,15 +2828,15 @@ export default function ClassDetail() {
                               <text x="38" y="47" textAnchor="middle" fill="rgba(255,255,255,0.7)" fontSize="7" fontFamily="Inter,sans-serif">OVERALL</text>
                             </svg>
                             <div style={{ fontSize: "11px", fontWeight: 600, color: "#fff" }}>
-                              {myAttendance.rate === null ? "—" : rate >= 85 ? (lang === "en" ? "Above 85% requirement" : "85% လိုအပ်ချက် ပြည့်") : (lang === "en" ? "Below requirement" : "လိုအပ်ချက်အောက်")}
+                              {myAttendance.rate === null ? "—" : rate >= 85 ? (tr({ en: "Above 85% requirement", my: "85% လိုအပ်ချက် ပြည့်", ko: "85% 기준 충족", vi: "Đạt yêu cầu trên 85%" })) : (tr({ en: "Below requirement", my: "လိုအပ်ချက်အောက်", ko: "기준 미달", vi: "Dưới yêu cầu" }))}
                             </div>
                           </div>
                           {/* Stat strip */}
                           <div style={{ flex: 1, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", display: "flex", alignItems: "center" }}>
                             {[
-                              { dot: "#16a34a", value: myAttendance.present, label: lang === "en" ? "Present days" : "တက်ရောက်" },
-                              { dot: "#d97706", value: myAttendance.late,    label: lang === "en" ? "Late days"    : "နောက်ကျ"   },
-                              { dot: "#dc2626", value: myAttendance.absent,  label: lang === "en" ? "Absent days"  : "မတက်"      },
+                              { dot: "#16a34a", value: myAttendance.present, label: tr({ en: "Present days", my: "တက်ရောက်", ko: "출석일", vi: "Ngày có mặt" }) },
+                              { dot: "#d97706", value: myAttendance.late,    label: tr({ en: "Late days", my: "နောက်ကျ", ko: "지각일", vi: "Ngày đi muộn" })},
+                              { dot: "#dc2626", value: myAttendance.absent,  label: tr({ en: "Absent days", my: "မတက်", ko: "결석일", vi: "Ngày vắng mặt" })},
                             ].map((s, i) => (
                               <div key={i} style={{ flex: 1, padding: "18px 20px", display: "flex", alignItems: "center", gap: "12px", borderLeft: i > 0 ? "1px solid var(--border)" : "none" }}>
                                 <span style={{ width: "9px", height: "9px", borderRadius: "50%", background: s.dot, flexShrink: 0 }} />
@@ -2861,7 +2881,7 @@ export default function ClassDetail() {
                               })}
                             </div>
                             <div style={{ display: "flex", gap: "16px", marginTop: "14px" }}>
-                              {[["#22c55e", lang === "en" ? "Present" : "တက်ရောက်"], ["#f59e0b", lang === "en" ? "Late" : "နောက်ကျ"], ["#ef4444", lang === "en" ? "Absent" : "မတက်"]].map(([c, l], i) => (
+                              {[["#22c55e", tr({ en: "Present", my: "တက်ရောက်", ko: "출석", vi: "Có mặt" })], ["#f59e0b", tr({ en: "Late", my: "နောက်ကျ", ko: "지각", vi: "Đi muộn" })], ["#ef4444", tr({ en: "Absent", my: "မတက်", ko: "결석", vi: "Vắng mặt" })]].map(([c, l], i) => (
                                 <span key={i} style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11.5px", color: "var(--text)", fontWeight: 500 }}>
                                   <span style={{ width: "13px", height: "13px", borderRadius: "4px", background: c, flexShrink: 0 }} />{l}
                                 </span>
@@ -2881,7 +2901,7 @@ export default function ClassDetail() {
                                 ))}
                                 <button onClick={() => { const r = dayRows[0]; setDisputeModal({ title: r.title, session_date: calStudentSelDate, status: r.status }); setDisputeForm({ requested: "present", reason: "" }); }}
                                   style={{ marginTop: "8px", background: "none", border: "none", padding: 0, fontSize: "10.5px", fontWeight: 600, color: "var(--primary)", cursor: "pointer" }}>
-                                  {lang === "en" ? "This looks wrong? Request a review →" : "မမှန်ဘူးလား? ပြင်ဆင်တောင်းဆိုမည် →"}
+                                  {tr({ en: "This looks wrong? Request a review →", my: "မမှန်ဘူးလား? ပြင်ဆင်တောင်းဆိုမည် →", ko: "잘못된 것 같나요? 재검토 요청하기 →", vi: "Thấy không đúng? Yêu cầu xem xét lại →" })}
                                 </button>
                               </div>
                             )}
@@ -2889,8 +2909,8 @@ export default function ClassDetail() {
 
                           {/* Recent history card */}
                           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", padding: "18px 20px" }}>
-                            <div style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text)", marginBottom: "4px" }}>{lang === "en" ? "Recent history" : "မကြာမီ မှတ်တမ်းများ"}</div>
-                            {recent.length === 0 && <div style={{ textAlign: "center", padding: "24px 0", fontSize: "11.5px", color: "var(--text-faint)" }}>{lang === "en" ? "No sessions yet" : "session မရှိသေးပါ"}</div>}
+                            <div style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text)", marginBottom: "4px" }}>{tr({ en: "Recent history", my: "မကြာမီ မှတ်တမ်းများ", ko: "최근 기록", vi: "Lịch sử gần đây" })}</div>
+                            {recent.length === 0 && <div style={{ textAlign: "center", padding: "24px 0", fontSize: "11.5px", color: "var(--text-faint)" }}>{tr({ en: "No sessions yet", my: "session မရှိသေးပါ", ko: "아직 세션이 없습니다", vi: "Chưa có buổi học nào" })}</div>}
                             {recent.map((r, i) => (
                               <div key={i} style={{ display: "flex", alignItems: "center", gap: "10px", padding: "10px 0", borderBottom: i < recent.length - 1 ? "1px solid var(--border)" : "none", cursor: "pointer" }}
                                 onClick={() => { setDisputeModal({ title: r.title, session_date: r.session_date ? r.session_date.slice(0,10) : "", status: r.status }); setDisputeForm({ requested: "present", reason: "" }); }}>
@@ -2913,28 +2933,28 @@ export default function ClassDetail() {
                           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
                             <div style={{ background: "var(--surface)", borderRadius: "16px", width: "400px", overflow: "hidden", boxShadow: "0 24px 60px rgba(15,23,42,0.2)" }}>
                               <div style={{ padding: "16px 20px 12px", borderBottom: "1px solid var(--border)" }}>
-                                <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)" }}>{lang === "en" ? "Request a review" : "ပြင်ဆင်တောင်းဆိုမည်"}</div>
+                                <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)" }}>{tr({ en: "Request a review", my: "ပြင်ဆင်တောင်းဆိုမည်", ko: "재검토 요청", vi: "Yêu cầu xem xét lại" })}</div>
                                 <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "3px" }}>{disputeModal.title}{disputeModal.session_date && ` — ${new Date(disputeModal.session_date + "T00:00:00").toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", year: "numeric" })}`}</div>
                               </div>
                               <div style={{ padding: "16px 20px" }}>
                                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "rgba(239,68,68,0.08)", borderRadius: "9px", padding: "9px 13px", marginBottom: "14px" }}>
-                                  <span style={{ fontSize: "11px", color: "var(--text-faint)" }}>{lang === "en" ? "Currently marked as" : "လက်ရှိ မှတ်တမ်း"}</span>
+                                  <span style={{ fontSize: "11px", color: "var(--text-faint)" }}>{tr({ en: "Currently marked as", my: "လက်ရှိ မှတ်တမ်း", ko: "현재 기록", vi: "Hiện đang ghi là" })}</span>
                                   <span style={{ fontSize: "10px", fontWeight: 700, padding: "3px 10px", borderRadius: "999px", background: statusBg(disputeModal.status), color: statusColor(disputeModal.status) }}>{statusLabel(disputeModal.status)}</span>
                                 </div>
-                                <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "6px", color: "var(--text-muted)" }}>{lang === "en" ? "What should this be?" : "မည်သို့ ဖြစ်သင့်သနည်း?"}</label>
+                                <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "6px", color: "var(--text-muted)" }}>{tr({ en: "What should this be?", my: "မည်သို့ ဖြစ်သင့်သနည်း?", ko: "어떻게 수정해야 하나요?", vi: "Nên là gì?" })}</label>
                                 <select value={disputeForm.requested} onChange={e => setDisputeForm(p => ({ ...p, requested: e.target.value }))}
                                   style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)", marginBottom: "12px" }}>
-                                  <option value="present">{lang === "en" ? "Present" : "တက်ရောက်"}</option>
-                                  <option value="excused">{lang === "en" ? "Excused absence" : "ခွင့်ရ မတက်ရောက်"}</option>
+                                  <option value="present">{tr({ en: "Present", my: "တက်ရောက်", ko: "출석", vi: "Có mặt" })}</option>
+                                  <option value="excused">{tr({ en: "Excused absence", my: "ခွင့်ရ မတက်ရောက်", ko: "승인된 결석", vi: "Vắng có phép" })}</option>
                                 </select>
-                                <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "6px", color: "var(--text-muted)" }}>{lang === "en" ? "Explain (visible to teacher)" : "ရှင်းပြမည် (ဆရာမြင်သည်)"}</label>
+                                <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "6px", color: "var(--text-muted)" }}>{tr({ en: "Explain (visible to teacher)", my: "ရှင်းပြမည် (ဆရာမြင်သည်)", ko: "설명 (선생님에게 표시됨)", vi: "Giải thích (giáo viên sẽ thấy)" })}</label>
                                 <textarea value={disputeForm.reason} onChange={e => setDisputeForm(p => ({ ...p, reason: e.target.value }))}
-                                  placeholder={lang === "en" ? "e.g. I was on time, roll call may have missed me" : "ဥပမာ — ကျွန်တော်/ကျွန်မ အချိန်မီ တက်ခဲ့သည်"}
+                                  placeholder={tr({ en: "e.g. I was on time, roll call may have missed me", my: "ဥပမာ — ကျွန်တော်/ကျွန်မ အချိန်မီ တက်ခဲ့သည်", ko: "예: 제시간에 왔는데 출석 체크에서 빠진 것 같아요", vi: "vd: Tôi đã đến đúng giờ, có thể bị bỏ sót khi điểm danh" })}
                                   style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)", height: "60px", resize: "none", boxSizing: "border-box" }} />
                               </div>
                               <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", padding: "14px 20px", borderTop: "1px solid var(--border)" }}>
-                                <button onClick={() => setDisputeModal(null)} style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Cancel" : "မလုပ်တော့"}</button>
-                                <button onClick={() => setDisputeModal(null)} style={{ background: "#0f172a", color: "#fff", border: "none", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Send request" : "တောင်းဆိုမည်"}</button>
+                                <button onClick={() => setDisputeModal(null)} style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{tr({ en: "Cancel", my: "မလုပ်တော့", ko: "취소", vi: "Hủy" })}</button>
+                                <button onClick={() => setDisputeModal(null)} style={{ background: "#0f172a", color: "#fff", border: "none", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{tr({ en: "Send request", my: "တောင်းဆိုမည်", ko: "요청 보내기", vi: "Gửi yêu cầu" })}</button>
                               </div>
                             </div>
                           </div>
@@ -2943,10 +2963,10 @@ export default function ClassDetail() {
                         {/* ── My leave requests history ── */}
                         {leaveHistory.length > 0 && (
                           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px", padding: "18px 20px" }}>
-                            <div style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text)", marginBottom: "4px" }}>{lang === "en" ? "My leave requests" : "ကျွန်တော်/ကျွန်မ ကြိုတင်တောင်းဆိုချက်များ"}</div>
+                            <div style={{ fontSize: "13.5px", fontWeight: 700, color: "var(--text)", marginBottom: "4px" }}>{tr({ en: "My leave requests", my: "ကျွန်တော်/ကျွန်မ ကြိုတင်တောင်းဆိုချက်များ", ko: "내 휴가 신청 내역", vi: "Đơn xin nghỉ của tôi" })}</div>
                             {leaveHistory.map((req, i) => {
                               const icons = { medical: "🩺", family: "👪", travel: "✈️", other: "📝" };
-                              const reasonLabels = { medical: lang === "en" ? "Medical" : "ကျန်းမာရေး", family: lang === "en" ? "Family event" : "မိသားစု", travel: lang === "en" ? "Travel" : "ခရီးသွား", other: lang === "en" ? "Other" : "အခြား" };
+                              const reasonLabels = { medical: tr({ en: "Medical", my: "ကျန်းမာရေး", ko: "병가", vi: "Lý do sức khỏe" }), family: tr({ en: "Family event", my: "မိသားစု", ko: "가족 행사", vi: "Việc gia đình" }), travel: tr({ en: "Travel", my: "ခရီးသွား", ko: "여행", vi: "Đi lại" }), other: tr({ en: "Other", my: "အခြား", ko: "기타", vi: "Khác" }) };
                               const rType = req.reason_type || req.reasonType || "other";
                               const fromD = req.from_date || req.from;
                               const toD = req.to_date || req.to;
@@ -2964,13 +2984,13 @@ export default function ClassDetail() {
                                     {(() => {
                                       const s = req.status || "pending";
                                       const cfg = s === "approved"
-                                        ? { bg: "rgba(34,197,94,0.12)", color: "#22c55e", label: lang === "en" ? "Approved" : "အတည်ပြု" }
+                                        ? { bg: "rgba(34,197,94,0.12)", color: "#22c55e", label: tr({ en: "Approved", my: "အတည်ပြု", ko: "승인됨", vi: "Đã duyệt" }) }
                                         : s === "rejected"
-                                        ? { bg: "rgba(239,68,68,0.1)", color: "#ef4444", label: lang === "en" ? "Rejected" : "ငြင်းပယ်" }
-                                        : { bg: "#fff3e0", color: "#b45309", label: lang === "en" ? "Pending" : "စောင့်ဆိုင်း" };
+                                        ? { bg: "rgba(239,68,68,0.1)", color: "#ef4444", label: tr({ en: "Rejected", my: "ငြင်းပယ်", ko: "거절됨", vi: "Đã từ chối" }) }
+                                        : { bg: "#fff3e0", color: "#b45309", label: tr({ en: "Pending", my: "စောင့်ဆိုင်း", ko: "대기 중", vi: "Đang chờ" }) };
                                       return <span style={{ fontSize: "10px", fontWeight: 700, padding: "4px 10px", borderRadius: "999px", background: cfg.bg, color: cfg.color }}>{cfg.label}</span>;
                                     })()}
-                                    <div style={{ fontSize: "10px", color: "var(--text-faint)", marginTop: "3px" }}>{req.created_at ? new Date(req.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : (lang === "en" ? "Sent today" : "ယနေ့ပေးပို့")}</div>
+                                    <div style={{ fontSize: "10px", color: "var(--text-faint)", marginTop: "3px" }}>{req.created_at ? new Date(req.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : (tr({ en: "Sent today", my: "ယနေ့ပေးပို့", ko: "오늘 보냄", vi: "Đã gửi hôm nay" }))}</div>
                                   </div>
                                 </div>
                               );
@@ -2983,41 +3003,41 @@ export default function ClassDetail() {
                           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
                             <div style={{ background: "var(--surface)", borderRadius: "16px", width: "420px", overflow: "hidden", boxShadow: "0 24px 60px rgba(15,23,42,0.2)" }}>
                               <div style={{ padding: "16px 20px 12px", borderBottom: "1px solid var(--border)" }}>
-                                <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)" }}>{lang === "en" ? "Request leave" : "ကြိုတင်တောင်းဆိုမည်"}</div>
-                                <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "3px" }}>{lang === "en" ? "Let your teacher know in advance" : "ဆရာ/ဆရာမကို ကြိုတင် အကြောင်းကြားပါ"}</div>
+                                <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--text)" }}>{tr({ en: "Request leave", my: "ကြိုတင်တောင်းဆိုမည်", ko: "휴가 신청", vi: "Xin nghỉ" })}</div>
+                                <div style={{ fontSize: "11px", color: "var(--text-faint)", marginTop: "3px" }}>{tr({ en: "Let your teacher know in advance", my: "ဆရာ/ဆရာမကို ကြိုတင် အကြောင်းကြားပါ", ko: "선생님께 미리 알려주세요", vi: "Hãy báo trước cho giáo viên" })}</div>
                               </div>
                               <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: "12px" }}>
                                 <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: "10px" }}>
                                   <div>
-                                    <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "From" : "မှ"}</label>
+                                    <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{tr({ en: "From", my: "မှ", ko: "부터", vi: "Từ" })}</label>
                                     <input type="date" value={leaveForm.from} onChange={e => setLeaveForm(p => ({ ...p, from: e.target.value, to: e.target.value > p.to ? e.target.value : p.to }))}
                                       style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 10px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)", boxSizing: "border-box" }} />
                                   </div>
                                   <div>
-                                    <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "To" : "အထိ"}</label>
+                                    <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{tr({ en: "To", my: "အထိ", ko: "까지", vi: "Đến" })}</label>
                                     <input type="date" value={leaveForm.to} min={leaveForm.from} onChange={e => setLeaveForm(p => ({ ...p, to: e.target.value }))}
                                       style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 10px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)", boxSizing: "border-box" }} />
                                   </div>
                                 </div>
                                 <div>
-                                  <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "Reason" : "အကြောင်းရင်း"}</label>
+                                  <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{tr({ en: "Reason", my: "အကြောင်းရင်း", ko: "사유", vi: "Lý do" })}</label>
                                   <select value={leaveForm.reasonType} onChange={e => setLeaveForm(p => ({ ...p, reasonType: e.target.value, attachment: e.target.value === "medical" ? p.attachment : null }))}
                                     style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)" }}>
-                                    <option value="medical">{lang === "en" ? "Medical" : "ကျန်းမာရေး"}</option>
-                                    <option value="family">{lang === "en" ? "Family event" : "မိသားစုကိစ္စ"}</option>
-                                    <option value="travel">{lang === "en" ? "Travel" : "ခရီးသွား"}</option>
-                                    <option value="other">{lang === "en" ? "Other" : "အခြား"}</option>
+                                    <option value="medical">{tr({ en: "Medical", my: "ကျန်းမာရေး", ko: "병가", vi: "Lý do sức khỏe" })}</option>
+                                    <option value="family">{tr({ en: "Family event", my: "မိသားစုကိစ္စ", ko: "가족 행사", vi: "Việc gia đình" })}</option>
+                                    <option value="travel">{tr({ en: "Travel", my: "ခရီးသွား", ko: "여행", vi: "Đi lại" })}</option>
+                                    <option value="other">{tr({ en: "Other", my: "အခြား", ko: "기타", vi: "Khác" })}</option>
                                   </select>
                                 </div>
                                 <div>
-                                  <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "Add details (visible to teacher)" : "အသေးစိတ် ထည့်ပါ (ဆရာမြင်မည်)"}</label>
+                                  <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{tr({ en: "Add details (visible to teacher)", my: "အသေးစိတ် ထည့်ပါ (ဆရာမြင်မည်)", ko: "세부 내용 추가 (선생님에게 표시됨)", vi: "Thêm chi tiết (giáo viên sẽ thấy)" })}</label>
                                   <textarea value={leaveForm.details} onChange={e => setLeaveForm(p => ({ ...p, details: e.target.value }))}
-                                    placeholder={lang === "en" ? "e.g. Doctor appointment at 9am" : "ဥပမာ — နံနက် ၉ နာရီ ဆေးပြမည်"}
+                                    placeholder={tr({ en: "e.g. Doctor appointment at 9am", my: "ဥပမာ — နံနက် ၉ နာရီ ဆေးပြမည်", ko: "예: 오전 9시 병원 진료", vi: "vd: Khám bệnh lúc 9 giờ sáng" })}
                                     style={{ width: "100%", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", fontSize: "12px", fontFamily: "inherit", color: "var(--text)", background: "var(--surface)", height: "60px", resize: "none", boxSizing: "border-box" }} />
                                 </div>
                                 {leaveForm.reasonType === "medical" && (
                                   <div>
-                                    <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{lang === "en" ? "Hospital note / medical certificate (optional)" : "ဆေးရုံစာ / ဆေးလက်မှတ် (ရွေးချယ်နိုင်)"}</label>
+                                    <label style={{ fontSize: "11px", fontWeight: 600, display: "block", marginBottom: "5px", color: "var(--text-muted)" }}>{tr({ en: "Hospital note / medical certificate (optional)", my: "ဆေးရုံစာ / ဆေးလက်မှတ် (ရွေးချယ်နိုင်)", ko: "진단서 / 의료 증명서 (선택 사항)", vi: "Giấy khám bệnh / giấy chứng nhận y tế (tùy chọn)" })}</label>
                                     {leaveForm.attachment ? (
                                       <div style={{ display: "flex", alignItems: "center", gap: "8px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px" }}>
                                         <Icon name="attach" size={16} alt="" />
@@ -3028,7 +3048,7 @@ export default function ClassDetail() {
                                     ) : (
                                       <label style={{ display: "flex", alignItems: "center", gap: "8px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 12px", cursor: "pointer" }}>
                                         <Icon name="attach" size={16} alt="" />
-                                        <span style={{ fontSize: "12px", color: "#1a73e8", fontWeight: 500 }}>{lang === "en" ? "Attach file" : "ဖိုင်တွဲရန်"}</span>
+                                        <span style={{ fontSize: "12px", color: "#1a73e8", fontWeight: 500 }}>{tr({ en: "Attach file", my: "ဖိုင်တွဲရန်", ko: "파일 첨부", vi: "Đính kèm tệp" })}</span>
                                         <input type="file" accept="image/*,.pdf" onChange={e => setLeaveForm(p => ({ ...p, attachment: e.target.files[0] || null }))} style={{ display: "none" }} />
                                       </label>
                                     )}
@@ -3036,9 +3056,9 @@ export default function ClassDetail() {
                                 )}
                               </div>
                               <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", padding: "14px 20px", borderTop: "1px solid var(--border)" }}>
-                                <button onClick={() => setLeaveModal(null)} style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Cancel" : "မလုပ်တော့"}</button>
+                                <button onClick={() => setLeaveModal(null)} style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{tr({ en: "Cancel", my: "မလုပ်တော့", ko: "취소", vi: "Hủy" })}</button>
                                 <button onClick={submitLeaveRequest}
-                                  style={{ background: "#0F172A", color: "#fff", border: "none", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Submit request" : "တောင်းဆိုမည်"}</button>
+                                  style={{ background: "#0F172A", color: "#fff", border: "none", borderRadius: "9px", padding: "9px 16px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>{tr({ en: "Submit request", my: "တောင်းဆိုမည်", ko: "요청 제출", vi: "Gửi yêu cầu" })}</button>
                               </div>
                             </div>
                           </div>
@@ -3049,9 +3069,9 @@ export default function ClassDetail() {
                           <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1100 }}>
                             <div style={{ background: "var(--surface)", borderRadius: "16px", width: "360px", overflow: "hidden", boxShadow: "0 24px 60px rgba(15,23,42,0.2)", padding: "34px 24px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", gap: "12px" }}>
                               <div style={{ width: "52px", height: "52px", borderRadius: "50%", background: "rgba(34,197,94,0.15)", color: "#22c55e", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "22px" }}>✓</div>
-                              <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)" }}>{lang === "en" ? "Request sent" : "တောင်းဆိုချက် ပေးပို့ပြီး"}</div>
-                              <div style={{ fontSize: "12px", color: "var(--text-faint)", maxWidth: "270px" }}>{lang === "en" ? "Your teacher will review this request. You'll be notified once it's approved or declined." : "ဆရာ/ဆရာမ စစ်ဆေးပြီး အတည်ပြုချက် သို့မဟုတ် ငြင်းပယ်ချက် ပြန်ကြားပါမည်။"}</div>
-                              <button onClick={() => setLeaveModal(null)} style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 20px", fontSize: "12px", fontWeight: 600, cursor: "pointer", marginTop: "4px" }}>{lang === "en" ? "Done" : "ပြီးပြီ"}</button>
+                              <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)" }}>{tr({ en: "Request sent", my: "တောင်းဆိုချက် ပေးပို့ပြီး", ko: "요청이 전송되었습니다", vi: "Đã gửi yêu cầu" })}</div>
+                              <div style={{ fontSize: "12px", color: "var(--text-faint)", maxWidth: "270px" }}>{tr({ en: "Your teacher will review this request. You'll be notified once it's approved or declined.", my: "ဆရာ/ဆရာမ စစ်ဆေးပြီး အတည်ပြုချက် သို့မဟုတ် ငြင်းပယ်ချက် ပြန်ကြားပါမည်။", ko: "선생님이 이 요청을 검토할 예정이에요. 승인 또는 반려되면 알려드릴게요.", vi: "Giáo viên sẽ xem xét yêu cầu này. Bạn sẽ được thông báo khi được duyệt hoặc từ chối." })}</div>
+                              <button onClick={() => setLeaveModal(null)} style={{ background: "var(--surface)", color: "var(--text-muted)", border: "1px solid var(--border)", borderRadius: "9px", padding: "9px 20px", fontSize: "12px", fontWeight: 600, cursor: "pointer", marginTop: "4px" }}>{tr({ en: "Done", my: "ပြီးပြီ", ko: "완료", vi: "Xong" })}</button>
                             </div>
                           </div>
                         )}
@@ -3066,7 +3086,7 @@ export default function ClassDetail() {
               {leaveDetailModal && (() => {
                 const req = leaveDetailModal;
                 const icons = { medical: "🩺", family: "👪", travel: "✈️", other: "📝" };
-                const reasonLabels = { medical: lang === "en" ? "Medical" : "ကျန်းမာရေး", family: lang === "en" ? "Family event" : "မိသားစု", travel: lang === "en" ? "Travel" : "ခရီးသွား", other: lang === "en" ? "Other" : "အခြား" };
+                const reasonLabels = { medical: tr({ en: "Medical", my: "ကျန်းမာရေး", ko: "병가", vi: "Lý do sức khỏe" }), family: tr({ en: "Family event", my: "မိသားစု", ko: "가족 행사", vi: "Việc gia đình" }), travel: tr({ en: "Travel", my: "ခရီးသွား", ko: "여행", vi: "Đi lại" }), other: tr({ en: "Other", my: "အခြား", ko: "기타", vi: "Khác" }) };
                 const fromD = req.from_date?.slice(0,10);
                 const toD = req.to_date?.slice(0,10);
                 const dateStr = fromD === toD
@@ -3093,25 +3113,25 @@ export default function ClassDetail() {
                       <div style={{ padding: "20px 24px", display: "flex", flexDirection: "column", gap: "14px" }}>
                         {/* Reason */}
                         <div style={{ display: "flex", justifyContent: "space-between" }}>
-                          <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{lang === "en" ? "Reason" : "အကြောင်းရင်း"}</span>
+                          <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{tr({ en: "Reason", my: "အကြောင်းရင်း", ko: "사유", vi: "Lý do" })}</span>
                           <span style={{ fontSize: "12px", color: "var(--text)", fontWeight: 600 }}>{reasonLabels[req.reason_type] || req.reason_type}</span>
                         </div>
                         {/* Date */}
                         <div style={{ display: "flex", justifyContent: "space-between" }}>
-                          <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{lang === "en" ? "Date" : "နေ့ရက်"}</span>
+                          <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{tr({ en: "Date", my: "နေ့ရက်", ko: "날짜", vi: "Ngày" })}</span>
                           <span style={{ fontSize: "12px", color: "var(--text)" }}>{dateStr}</span>
                         </div>
                         {/* Submitted */}
                         {submittedOn && (
                           <div style={{ display: "flex", justifyContent: "space-between" }}>
-                            <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{lang === "en" ? "Submitted" : "တင်သွင်းချိန်"}</span>
+                            <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{tr({ en: "Submitted", my: "တင်သွင်းချိန်", ko: "제출 시간", vi: "Thời gian gửi" })}</span>
                             <span style={{ fontSize: "12px", color: "var(--text-faint)" }}>{submittedOn}</span>
                           </div>
                         )}
                         {/* Details */}
                         {req.details && (
                           <div>
-                            <div style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600, marginBottom: "6px" }}>{lang === "en" ? "Details" : "အသေးစိတ်"}</div>
+                            <div style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600, marginBottom: "6px" }}>{tr({ en: "Details", my: "အသေးစိတ်", ko: "세부 정보", vi: "Chi tiết" })}</div>
                             <div style={{ background: "var(--surface-alt)", borderRadius: "10px", padding: "12px 14px", fontSize: "13px", color: "var(--text)", lineHeight: 1.6 }}>{req.details}</div>
                           </div>
                         )}
@@ -3121,7 +3141,7 @@ export default function ClassDetail() {
                           const isImage = /\.(png|jpe?g|gif|webp)$/i.test(req.attachment_path);
                           return (
                             <div>
-                              <div style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600, marginBottom: "8px" }}>{lang === "en" ? "Attachment" : "ပူးတွဲဖိုင်"}</div>
+                              <div style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600, marginBottom: "8px" }}>{tr({ en: "Attachment", my: "ပူးတွဲဖိုင်", ko: "첨부 파일", vi: "Tệp đính kèm" })}</div>
                               {isImage ? (
                                 <a href={url} target="_blank" rel="noreferrer">
                                   <img src={url} alt="attachment" style={{ width: "100%", maxHeight: "240px", objectFit: "contain", borderRadius: "10px", border: "1px solid var(--border)", background: "var(--surface-alt)", cursor: "pointer" }} />
@@ -3129,7 +3149,7 @@ export default function ClassDetail() {
                               ) : (
                                 <a href={url} target="_blank" rel="noreferrer" style={{ display: "flex", alignItems: "center", gap: "10px", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: "10px", padding: "12px 14px", textDecoration: "none" }}>
                                   <span style={{ fontSize: "20px" }}>📄</span>
-                                  <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--primary)" }}>{lang === "en" ? "View attached file" : "ဖိုင်ကြည့်ရန်"}</span>
+                                  <span style={{ fontSize: "12px", fontWeight: 600, color: "var(--primary)" }}>{tr({ en: "View attached file", my: "ဖိုင်ကြည့်ရန်", ko: "첨부 파일 보기", vi: "Xem tệp đính kèm" })}</span>
                                 </a>
                               )}
                             </div>
@@ -3137,11 +3157,11 @@ export default function ClassDetail() {
                         })()}
                         {/* Status badge */}
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                          <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{lang === "en" ? "Status" : "အခြေအနေ"}</span>
+                          <span style={{ fontSize: "12px", color: "var(--text-muted)", fontWeight: 600 }}>{tr({ en: "Status", my: "အခြေအနေ", ko: "상태", vi: "Trạng thái" })}</span>
                           <span style={{ fontSize: "11px", fontWeight: 700, padding: "4px 12px", borderRadius: "999px",
                             background: req.status === "approved" ? "rgba(34,197,94,0.12)" : req.status === "rejected" ? "rgba(239,68,68,0.1)" : "rgba(245,158,11,0.12)",
                             color: req.status === "approved" ? "#16a34a" : req.status === "rejected" ? "#dc2626" : "#b45309" }}>
-                            {req.status === "approved" ? (lang === "en" ? "Approved" : "အတည်ပြုပြီး") : req.status === "rejected" ? (lang === "en" ? "Rejected" : "ငြင်းပယ်ပြီး") : (lang === "en" ? "Pending" : "ဆိုင်းငံ့")}
+                            {req.status === "approved" ? (tr({ en: "Approved", my: "အတည်ပြုပြီး", ko: "승인됨", vi: "Đã duyệt" })) : req.status === "rejected" ? (tr({ en: "Rejected", my: "ငြင်းပယ်ပြီး", ko: "거절됨", vi: "Đã từ chối" })) : (tr({ en: "Pending", my: "ဆိုင်းငံ့", ko: "대기 중", vi: "Đang chờ" }))}
                           </span>
                         </div>
                       </div>
@@ -3151,18 +3171,18 @@ export default function ClassDetail() {
                         <div style={{ padding: "14px 24px", borderTop: "1px solid var(--border)", display: "flex", gap: "10px", justifyContent: "flex-end" }}>
                           <button onClick={() => { reviewLeave(req.id, "rejected"); setLeaveDetailModal(r => ({ ...r, status: "rejected" })); }}
                             style={{ background: "rgba(239,68,68,0.1)", color: "#ef4444", border: "1px solid rgba(239,68,68,0.3)", borderRadius: "10px", padding: "10px 20px", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
-                            {lang === "en" ? "Reject" : "ငြင်းပယ်မည်"}
+                            {tr({ en: "Reject", my: "ငြင်းပယ်မည်", ko: "거절", vi: "Từ chối" })}
                           </button>
                           <button onClick={() => { reviewLeave(req.id, "approved"); setLeaveDetailModal(r => ({ ...r, status: "approved" })); }}
                             style={{ background: "#16a34a", color: "#fff", border: "none", borderRadius: "10px", padding: "10px 20px", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>
-                            {lang === "en" ? "Approve" : "အတည်ပြုမည်"}
+                            {tr({ en: "Approve", my: "အတည်ပြုမည်", ko: "승인", vi: "Duyệt" })}
                           </button>
                         </div>
                       )}
                       {req.status !== "pending" && (
                         <div style={{ padding: "14px 24px", borderTop: "1px solid var(--border)", display: "flex", justifyContent: "flex-end" }}>
                           <button onClick={() => setLeaveDetailModal(null)} style={{ background: "var(--surface-alt)", color: "var(--text-muted)", border: "none", borderRadius: "10px", padding: "10px 20px", fontSize: "12px", fontWeight: 600, cursor: "pointer" }}>
-                            {lang === "en" ? "Close" : "ပိတ်မည်"}
+                            {tr({ en: "Close", my: "ပိတ်မည်", ko: "닫기", vi: "Đóng" })}
                           </button>
                         </div>
                       )}
@@ -3175,20 +3195,20 @@ export default function ClassDetail() {
               {newSessionModal && (
                 <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000 }}>
                   <div style={{ background: "var(--surface)", borderRadius: "16px", padding: "28px", width: "400px" }}>
-                    <h3 style={{ margin: "0 0 20px", fontSize: "16px", fontWeight: 700 }}>{lang === "en" ? "New Attendance Session" : "Session အသစ် ဖန်တီးမည်"}</h3>
+                    <h3 style={{ margin: "0 0 20px", fontSize: "16px", fontWeight: 700 }}>{tr({ en: "New Attendance Session", my: "Session အသစ် ဖန်တီးမည်", ko: "새 출석 세션", vi: "Buổi điểm danh mới" })}</h3>
                     <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
                       <div>
-                        <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "6px" }}>{lang === "en" ? "Title" : "ခေါင်းစဉ်"}</label>
-                        <input value={newSessionForm.title} onChange={e => setNewSessionForm(p => ({ ...p, title: e.target.value }))} placeholder={lang === "en" ? "e.g. Week 3 Class" : "ဥပမာ Week 3 သင်ကြားချိန်"} style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1.5px solid var(--border)", fontSize: "14px", boxSizing: "border-box" }} />
+                        <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "6px" }}>{tr({ en: "Title", my: "ခေါင်းစဉ်", ko: "제목", vi: "Tiêu đề" })}</label>
+                        <input value={newSessionForm.title} onChange={e => setNewSessionForm(p => ({ ...p, title: e.target.value }))} placeholder={tr({ en: "e.g. Week 3 Class", my: "ဥပမာ Week 3 သင်ကြားချိန်", ko: "예: 3주차 수업", vi: "vd: Buổi học tuần 3" })} style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1.5px solid var(--border)", fontSize: "14px", boxSizing: "border-box" }} />
                       </div>
                       <div>
-                        <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "6px" }}>{lang === "en" ? "Date" : "နေ့စွဲ"}</label>
+                        <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--text-muted)", display: "block", marginBottom: "6px" }}>{tr({ en: "Date", my: "နေ့စွဲ", ko: "날짜", vi: "Ngày" })}</label>
                         <input type="date" value={newSessionForm.session_date} onChange={e => setNewSessionForm(p => ({ ...p, session_date: e.target.value }))} style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: "1.5px solid var(--border)", fontSize: "14px", boxSizing: "border-box" }} />
                       </div>
                     </div>
                     <div style={{ display: "flex", gap: "10px", marginTop: "20px", justifyContent: "flex-end" }}>
-                      <button onClick={() => setNewSessionModal(false)} style={{ background: "var(--surface-alt)", color: "var(--text-muted)", border: "none", borderRadius: "8px", padding: "9px 18px", fontWeight: 600, cursor: "pointer" }}>{lang === "en" ? "Cancel" : "မလုပ်တော့ပါ"}</button>
-                      <button onClick={createAttendanceSession} style={{ background: "var(--primary)", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 18px", fontWeight: 700, cursor: "pointer" }}>{lang === "en" ? "Create" : "ဖန်တီးမည်"}</button>
+                      <button onClick={() => setNewSessionModal(false)} style={{ background: "var(--surface-alt)", color: "var(--text-muted)", border: "none", borderRadius: "8px", padding: "9px 18px", fontWeight: 600, cursor: "pointer" }}>{tr({ en: "Cancel", my: "မလုပ်တော့ပါ", ko: "취소", vi: "Hủy" })}</button>
+                      <button onClick={createAttendanceSession} style={{ background: "var(--primary)", color: "#fff", border: "none", borderRadius: "8px", padding: "9px 18px", fontWeight: 700, cursor: "pointer" }}>{tr({ en: "Create", my: "ဖန်တီးမည်", ko: "생성", vi: "Tạo" })}</button>
                     </div>
                   </div>
                 </div>
@@ -3222,7 +3242,7 @@ export default function ClassDetail() {
                         {activeSession.session_date
                           ? new Date(activeSession.session_date.slice(0, 10) + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", day: "numeric", month: "long", year: "numeric" })
                           : ""}
-                        {" · "}{activeSession.records?.length || 0} {lang === "en" ? "students" : "ကျောင်းသား"}
+                        {" · "}{activeSession.records?.length || 0} {tr({ en: "students", my: "ကျောင်းသား", ko: "학생", vi: "học sinh" })}
                       </div>
                     </div>
                   </div>
@@ -3230,18 +3250,18 @@ export default function ClassDetail() {
                     {isSavedSession && !attendanceModalEditMode && (
                       <button onClick={() => setAttendanceModalEditMode(true)}
                         style={{ padding: "8px 20px", borderRadius: "8px", border: "none", background: "#0B0B1E", color: "#fff", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
-                        {lang === "en" ? "Edit" : "ပြင်မည်"}
+                        {tr({ en: "Edit", my: "ပြင်မည်", ko: "수정", vi: "Sửa" })}
                       </button>
                     )}
                     {attendanceModalEditMode && (
                       <>
                         <button onClick={() => { setSessionRecords({ ...originalRecords }); setAttendanceModalEditMode(false); }}
                           style={{ padding: "8px 18px", borderRadius: "8px", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-muted)", fontSize: "13px", fontWeight: 600, cursor: "pointer" }}>
-                          {lang === "en" ? "Cancel" : "မလုပ်တော့"}
+                          {tr({ en: "Cancel", my: "မလုပ်တော့", ko: "취소", vi: "Hủy" })}
                         </button>
                         <button onClick={saveAttendance} disabled={savingAttendance}
                           style={{ padding: "8px 22px", borderRadius: "8px", border: "none", background: "var(--primary)", color: "#fff", fontSize: "13px", fontWeight: 700, cursor: savingAttendance ? "default" : "pointer" }}>
-                          {savingAttendance ? (lang === "en" ? "Saving…" : "သိမ်းနေသည်…") : lang === "en" ? "Save" : "သိမ်းမည်"}
+                          {savingAttendance ? (tr({ en: "Saving…", my: "သိမ်းနေသည်…", ko: "저장 중…", vi: "Đang lưu…" })) : tr({ en: "Save", my: "သိမ်းမည်", ko: "저장", vi: "Lưu" })}
                         </button>
                       </>
                     )}
@@ -3252,11 +3272,11 @@ export default function ClassDetail() {
                 {isSavedSession && (
                   <div style={{ padding: "10px 28px", background: attendanceModalEditMode ? "rgba(217,119,6,0.07)" : "rgba(91,95,233,0.06)", borderBottom: "1px solid var(--border)", flexShrink: 0, fontSize: "12px", fontWeight: 600, color: attendanceModalEditMode ? "#D97706" : "#5B5FE9" }}>
                     {attendanceModalEditMode
-                      ? (lang === "en" ? "✏️ Editing — changes will update the saved record" : "✏️ ပြင်နေသည် — သိမ်းမှ record ပြောင်းမည်")
-                      : (lang === "en" ? "🔒 Viewing saved record" : "🔒 မှတ်ပြီးသော record ကြည့်နေသည်")}
+                      ? (tr({ en: "✏️ Editing — changes will update the saved record", my: "✏️ ပြင်နေသည် — သိမ်းမှ record ပြောင်းမည်", ko: "✏️ 수정 중 — 저장하면 기록이 변경됩니다", vi: "✏️ Đang chỉnh sửa — thay đổi sẽ cập nhật hồ sơ đã lưu" }))
+                      : (tr({ en: "🔒 Viewing saved record", my: "🔒 မှတ်ပြီးသော record ကြည့်နေသည်", ko: "🔒 저장된 기록 보는 중", vi: "🔒 Đang xem hồ sơ đã lưu" }))}
                     {attendanceModalEditMode && changedCount > 0 && (
                       <span style={{ marginLeft: "12px", fontWeight: 400, color: "#D97706" }}>
-                        · {changedCount} {lang === "en" ? "changed" : "ပြောင်းလဲပြီ"}
+                        · {changedCount} {tr({ en: "changed", my: "ပြောင်းလဲပြီ", ko: "변경됨", vi: "đã thay đổi" })}
                       </span>
                     )}
                   </div>
@@ -3268,12 +3288,12 @@ export default function ClassDetail() {
                     <div style={{ flex: 1, maxWidth: "400px", display: "flex", alignItems: "center", gap: "8px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "10px", padding: "8px 14px" }}>
                       <span style={{ color: "var(--text-faint)" }}>🔍</span>
                       <input value={attendanceSearchQuery} onChange={e => setAttendanceSearchQuery(e.target.value)}
-                        placeholder={lang === "en" ? "Search student…" : "ကျောင်းသား ရှာပါ…"}
+                        placeholder={tr({ en: "Search student…", my: "ကျောင်းသား ရှာပါ…", ko: "학생 검색…", vi: "Tìm học sinh…" })}
                         style={{ border: "none", background: "transparent", outline: "none", fontSize: "13px", color: "var(--text)", width: "100%" }} />
                     </div>
                     <button onClick={() => { const all = {}; activeSession.records.forEach(r => { all[r.student_id] = "present"; }); setSessionRecords(all); }}
                       style={{ fontSize: "12px", fontWeight: 600, color: "#5B5FE9", background: "var(--primary-tint)", border: "none", borderRadius: "10px", padding: "10px 16px", cursor: "pointer", whiteSpace: "nowrap" }}>
-                      {lang === "en" ? "✓ Mark all present" : "✓ အားလုံး တက်ရောက်"}
+                      {tr({ en: "✓ Mark all present", my: "✓ အားလုံး တက်ရောက်", ko: "✓ 전체 출석 처리", vi: "✓ Đánh dấu tất cả có mặt" })}
                     </button>
                   </div>
                 )}
@@ -3286,8 +3306,8 @@ export default function ClassDetail() {
                         <div style={{ fontSize: "30px", marginBottom: "10px" }}>🔍</div>
                         <div style={{ fontSize: "14px", fontWeight: 600 }}>
                           {activeSession.records.length === 0
-                            ? (lang === "en" ? "No students enrolled." : "ကျောင်းသား မရှိသေးပါ")
-                            : (lang === "en" ? "No match found" : "မတွေ့ပါ")}
+                            ? (tr({ en: "No students enrolled.", my: "ကျောင်းသား မရှိသေးပါ", ko: "등록된 학생이 없습니다.", vi: "Chưa có học sinh nào." }))
+                            : (tr({ en: "No match found", my: "မတွေ့ပါ", ko: "일치하는 결과 없음", vi: "Không tìm thấy" }))}
                         </div>
                       </div>
                     ) : filteredRecords.map(r => {
@@ -3305,14 +3325,14 @@ export default function ClassDetail() {
                             <div>
                               <div style={{ display: "flex", alignItems: "center", gap: "7px" }}>
                                 <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>{r.name}</span>
-                                {isChanged && <span style={{ fontSize: "9.5px", fontWeight: 700, color: "#5B5FE9", background: "var(--primary-tint)", padding: "2px 7px", borderRadius: "999px" }}>{lang === "en" ? "Changed" : "ပြောင်းလဲ"}</span>}
+                                {isChanged && <span style={{ fontSize: "9.5px", fontWeight: 700, color: "#5B5FE9", background: "var(--primary-tint)", padding: "2px 7px", borderRadius: "999px" }}>{tr({ en: "Changed", my: "ပြောင်းလဲ", ko: "변경됨", vi: "Đã thay đổi" })}</span>}
                               </div>
                               <div style={{ fontSize: "11.5px", color: "var(--text-faint)" }}>{r.email}</div>
                             </div>
                           </div>
                           {attendanceModalEditMode ? (
                             <div style={{ display: "flex", background: "rgba(11,11,30,0.05)", borderRadius: "10px", padding: "3px", gap: "2px" }}>
-                              {[["present", lang === "en" ? "Present" : "တက်"], ["late", lang === "en" ? "Late" : "နောက်ကျ"], ["absent", lang === "en" ? "Absent" : "မတက်"]].map(([val, label]) => (
+                              {[["present", tr({ en: "Present", my: "တက်", ko: "출석", vi: "Có mặt" })], ["late", tr({ en: "Late", my: "နောက်ကျ", ko: "지각", vi: "Đi muộn" })], ["absent", tr({ en: "Absent", my: "မတက်", ko: "결석", vi: "Vắng mặt" })]].map(([val, label]) => (
                                 <button key={val} onClick={() => setSessionRecords(prev => ({ ...prev, [r.student_id]: val }))}
                                   style={{ border: "none", fontSize: "12px", fontWeight: 600, padding: "8px 16px", borderRadius: "8px", cursor: "pointer",
                                     background: st === val ? "#fff" : "transparent",
@@ -3324,7 +3344,7 @@ export default function ClassDetail() {
                             </div>
                           ) : (
                             <span style={{ fontSize: "12px", fontWeight: 700, padding: "7px 16px", borderRadius: "999px", background: statusBg[st], color: statusColors[st] }}>
-                              {st === "present" ? (lang === "en" ? "Present" : "တက်") : st === "late" ? (lang === "en" ? "Late" : "နောက်ကျ") : (lang === "en" ? "Absent" : "မတက်")}
+                              {st === "present" ? (tr({ en: "Present", my: "တက်", ko: "출석", vi: "Có mặt" })) : st === "late" ? (tr({ en: "Late", my: "နောက်ကျ", ko: "지각", vi: "Đi muộn" })) : (tr({ en: "Absent", my: "မတက်", ko: "결석", vi: "Vắng mặt" }))}
                             </span>
                           )}
                         </div>
@@ -3337,9 +3357,9 @@ export default function ClassDetail() {
                 <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, background: "var(--surface)", borderTop: "1px solid var(--border)", padding: "12px 28px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   {/* Summary dots */}
                   <div style={{ display: "flex", gap: "18px", fontSize: "12.5px", color: "var(--text-muted)" }}>
-                    <span><span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#0F9D6E", display: "inline-block", marginRight: "6px" }} />{presentCount} {lang === "en" ? "Present" : "တက်"}</span>
-                    <span><span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#D97706", display: "inline-block", marginRight: "6px" }} />{lateCount} {lang === "en" ? "Late" : "နောက်ကျ"}</span>
-                    <span><span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#E1483F", display: "inline-block", marginRight: "6px" }} />{absentCount} {lang === "en" ? "Absent" : "မတက်"}</span>
+                    <span><span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#0F9D6E", display: "inline-block", marginRight: "6px" }} />{presentCount} {tr({ en: "Present", my: "တက်", ko: "출석", vi: "Có mặt" })}</span>
+                    <span><span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#D97706", display: "inline-block", marginRight: "6px" }} />{lateCount} {tr({ en: "Late", my: "နောက်ကျ", ko: "지각", vi: "Đi muộn" })}</span>
+                    <span><span style={{ width: "7px", height: "7px", borderRadius: "50%", background: "#E1483F", display: "inline-block", marginRight: "6px" }} />{absentCount} {tr({ en: "Absent", my: "မတက်", ko: "결석", vi: "Vắng mặt" })}</span>
                   </div>
                   {/* Delete */}
                   <button onClick={async () => {
@@ -3348,7 +3368,7 @@ export default function ClassDetail() {
                     setAttendanceSearchQuery("");
                     setAttendanceModalEditMode(false);
                   }} style={{ fontSize: "12.5px", fontWeight: 600, color: "#E1483F", background: "transparent", border: "1px solid #E1483F", borderRadius: "8px", padding: "8px 16px", cursor: "pointer" }}>
-                    🗑 {lang === "en" ? "Delete session" : "Session ဖျက်မည်"}
+                    🗑 {tr({ en: "Delete session", my: "Session ဖျက်မည်", ko: "세션 삭제", vi: "Xóa buổi học" })}
                   </button>
                 </div>
               </div>
@@ -3588,7 +3608,7 @@ export default function ClassDetail() {
                 <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
                 <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
               </svg>
-              {lang === "en" ? "Rename" : "ခေါင်းစဉ်ပြင်"}
+              {tr({ en: "Rename", my: "ခေါင်းစဉ်ပြင်", ko: "이름 변경", vi: "Đổi tên" })}
             </button>
             <div style={{ height: "1px", background: "var(--border)", margin: "3px 0" }} />
             <button
@@ -3603,7 +3623,7 @@ export default function ClassDetail() {
                 <path d="M10 11v6M14 11v6"/>
                 <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
               </svg>
-              {lang === "en" ? "Delete session" : "ဖျက်မည်"}
+              {tr({ en: "Delete session", my: "ဖျက်မည်", ko: "세션 삭제", vi: "Xóa buổi học" })}
             </button>
           </div>
         </>
@@ -3648,7 +3668,7 @@ export default function ClassDetail() {
               <button onClick={() => { setInviteModal(false); setInviteMsg(null); setInviteEmail(""); }} style={{ background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
             </div>
             <div style={{ fontSize: "13px", color: "var(--text-muted)", marginBottom: "14px" }}>
-              {lang === "en" ? "Enter the student's email — they must have an account" : "ကျောင်းသားရဲ့ email ထည့်ပါ — အကောင့်ရှိပါမှ ထည့်နိုင်မည်"}
+              {tr({ en: "Enter the student's email — they must have an account", my: "ကျောင်းသားရဲ့ email ထည့်ပါ — အကောင့်ရှိပါမှ ထည့်နိုင်မည်", ko: "학생의 이메일을 입력하세요 — 계정이 있어야 합니다", vi: "Nhập email của học sinh — họ phải có tài khoản" })}
             </div>
             <input
               value={inviteEmail}
@@ -3925,7 +3945,7 @@ export default function ClassDetail() {
               placeholder="e.g. Chapter 1, Week 2, HTML Basics..."
               style={{ ...inp, width: "100%", marginBottom: "14px" }} autoFocus
               onKeyDown={e => e.key === "Enter" && saveTopic()} />
-            <div style={{ fontSize: "12px", color: "var(--text-faint)", marginBottom: "14px" }}>{lang === "en" ? "Leave blank and Save to remove the topic" : "Topic ကို ဖယ်ရှားဖို့ blank ထားပြီး Save နှိပ်ပါ"}</div>
+            <div style={{ fontSize: "12px", color: "var(--text-faint)", marginBottom: "14px" }}>{tr({ en: "Leave blank and Save to remove the topic", my: "Topic ကို ဖယ်ရှားဖို့ blank ထားပြီး Save နှိပ်ပါ", ko: "주제를 삭제하려면 비워두고 저장하세요", vi: "Để trống và Lưu để xóa chủ đề" })}</div>
             <div style={{ display: "flex", gap: "10px" }}>
               <button onClick={() => setTopicModal(null)} style={{ ...btnOutline, flex: 1 }}>Cancel</button>
               <button onClick={saveTopic} style={{ ...btnPrimary, flex: 1 }}>Save</button>
@@ -4079,7 +4099,7 @@ export default function ClassDetail() {
             {/* Intro if no history */}
             {tutorHistory.length === 0 && (
               <div style={{ background: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.2)", borderRadius: "12px", padding: "14px 16px", marginBottom: "12px", fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6 }}>
-                <strong style={{ color: "var(--text)" }}>👋 {lang === "en" ? "Hi! I'm your AI Tutor." : "မင်္ဂလာပါ! ကျွန်တော် AI ဆရာ ဖြစ်ပါတယ်။"}</strong><br />
+                <strong style={{ color: "var(--text)" }}>👋 {tr({ en: "Hi! I'm your AI Tutor.", my: "မင်္ဂလာပါ! ကျွန်တော် AI ဆရာ ဖြစ်ပါတယ်။", ko: "안녕하세요! 저는 여러분의 AI 튜터예요.", vi: "Xin chào! Tôi là Gia sư AI của bạn." })}</strong><br />
                 {lang === "en"
                   ? "I won't give you direct answers — but I'll give you hints and ask guiding questions to help you think it through. Ask me anything about the lesson or homework!"
                   : "တိုက်ရိုက် အဖြေမပေးဘူး — ဒါပေမဲ့ hint နဲ့ မေးခွန်းတွေနဲ့ သင်ကိုယ်တိုင် ရှာဖွေနိုင်အောင် ကူညီပေးမယ်။ သင်ခန်းစာ ဒါမှမဟုတ် အိမ်စာနဲ့ ပတ်သက်ပြီး ဘာမဆို မေးနိုင်တယ်!"}
@@ -4107,7 +4127,7 @@ export default function ClassDetail() {
                 <div style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
                   <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "linear-gradient(135deg,#22c55e,#16a34a)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px" }}>🎓</div>
                   <div style={{ background: "var(--surface-alt)", borderRadius: "14px", borderBottomLeftRadius: "4px", padding: "10px 14px", fontSize: "13px", color: "var(--text-faint)" }}>
-                    {lang === "en" ? "Thinking of a hint..." : "Hint ပြင်ဆင်နေသည်..."}
+                    {tr({ en: "Thinking of a hint...", my: "Hint ပြင်ဆင်နေသည်...", ko: "힌트를 생각하는 중...", vi: "Đang nghĩ gợi ý..." })}
                   </div>
                 </div>
               )}
@@ -4117,7 +4137,7 @@ export default function ClassDetail() {
             <div style={{ display: "flex", gap: "8px", alignItems: "flex-end" }}>
               <textarea value={tutorInput} onChange={e => setTutorInput(e.target.value)}
                 onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendTutorMessage(); } }}
-                placeholder={lang === "en" ? "Ask about the lesson or homework... (Enter to send)" : "သင်ခန်းစာ ဒါမှမဟုတ် အိမ်စာနဲ့ ပတ်သက်ပြီး မေးပါ..."}
+                placeholder={tr({ en: "Ask about the lesson or homework... (Enter to send)", my: "သင်ခန်းစာ ဒါမှမဟုတ် အိမ်စာနဲ့ ပတ်သက်ပြီး မေးပါ...", ko: "수업이나 숙제에 대해 질문하세요... (Enter로 전송)", vi: "Hỏi về bài học hoặc bài tập... (Nhấn Enter để gửi)" })}
                 rows={2}
                 style={{ flex: 1, border: "1.5px solid var(--border)", borderRadius: "12px", padding: "10px 14px", fontSize: "13px", color: "var(--text)", background: "var(--surface-alt)", fontFamily: "inherit", lineHeight: 1.5, resize: "none", outline: "none" }}
               />
@@ -4141,10 +4161,10 @@ export default function ClassDetail() {
                 <div style={{ fontSize: "16px", fontWeight: 700, color: "var(--text)" }}>Level Up Chat</div>
                 {levelUpLevel && <div style={{ fontSize: "11px", color: "#22c55e", fontWeight: 600 }}>
                   ● {levelUpLevel === "beginner"
-                    ? (lang === "en" ? "🌱 Beginner" : "🌱 စတင်သင်")
+                    ? tr({ en: "🌱 Beginner", my: "🌱 စတင်သင်", ko: "🌱 초급", vi: "🌱 Mới bắt đầu" })
                     : levelUpLevel === "intermediate"
-                    ? (lang === "en" ? "📘 Intermediate" : "📘 တစ်ဝက်နားလည်")
-                    : (lang === "en" ? "🔥 Advanced" : "🔥 နားလည်ပြီး")} mode
+                    ? tr({ en: "📘 Intermediate", my: "📘 တစ်ဝက်နားလည်", ko: "📘 중급", vi: "📘 Trung cấp" })
+                    : tr({ en: "🔥 Advanced", my: "🔥 နားလည်ပြီး", ko: "🔥 고급", vi: "🔥 Nâng cao" })} mode
                 </div>}
               </div>
               <button onClick={() => { setAiModal(null); setLevelUpLevel(null); }} style={{ marginLeft: "auto", background: "none", border: "none", fontSize: "20px", cursor: "pointer", color: "var(--text-faint)" }}>×</button>
@@ -4156,22 +4176,22 @@ export default function ClassDetail() {
                 <div style={{ textAlign: "center", marginBottom: "20px" }}>
                   <div style={{ fontSize: "32px", marginBottom: "10px" }}>🎯</div>
                   <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--text)", marginBottom: "6px" }}>
-                    {lang === "en" ? "How well do you know this material?" : "ဒီသင်ခန်းစာနဲ့ ပတ်သက်ပြီး ဘယ်လောက်နားလည်သလဲ?"}
+                    {tr({ en: "How well do you know this material?", my: "ဒီသင်ခန်းစာနဲ့ ပတ်သက်ပြီး ဘယ်လောက်နားလည်သလဲ?", ko: "이 자료를 얼마나 잘 알고 있나요?", vi: "Bạn hiểu tài liệu này đến mức nào?" })}
                   </div>
                   <div style={{ fontSize: "13px", color: "var(--text-muted)" }}><strong>{selectedMat?.title}</strong></div>
                 </div>
                 {[
                   { key: "beginner", icon: "🌱",
-                    label: lang === "en" ? "Just starting out" : "စတင်သင်",
-                    desc: lang === "en" ? "New to this material — need basic explanations" : "ဒီသင်ခန်းစာနဲ့ ပထမဆုံးတွေ့ဆုံနေသည်၊ အခြေခံ ရှင်းပြချက်လိုသည်",
+                    label: tr({ en: "Just starting out", my: "စတင်သင်", ko: "이제 막 시작", vi: "Mới bắt đầu" }),
+                    desc: tr({ en: "New to this material — need basic explanations", my: "ဒီသင်ခန်းစာနဲ့ ပထမဆုံးတွေ့ဆုံနေသည်၊ အခြေခံ ရှင်းပြချက်လိုသည်", ko: "이 자료는 처음이에요 — 기본 설명이 필요해요", vi: "Lần đầu tiếp xúc tài liệu này — cần giải thích cơ bản" }),
                     color: "#22c55e", bg: "rgba(34,197,94,0.12)", border: "rgba(34,197,94,0.3)" },
                   { key: "intermediate", icon: "📘",
-                    label: lang === "en" ? "Know the basics" : "တစ်ဝက်နားလည်",
-                    desc: lang === "en" ? "I know some parts but still have gaps" : "အခြေခံသိသော်လည်း အချို့နေရာများ မရှင်းသေးပါ",
+                    label: tr({ en: "Know the basics", my: "တစ်ဝက်နားလည်", ko: "기본은 알고 있음", vi: "Biết cơ bản" }),
+                    desc: tr({ en: "I know some parts but still have gaps", my: "အခြေခံသိသော်လည်း အချို့နေရာများ မရှင်းသေးပါ", ko: "일부는 알지만 아직 부족한 부분이 있어요", vi: "Tôi biết một phần nhưng vẫn còn thiếu sót" }),
                     color: "var(--primary)", bg: "var(--primary-tint)", border: "var(--border)" },
                   { key: "advanced", icon: "🔥",
-                    label: lang === "en" ? "Ready to be challenged" : "နားလည်ပြီး စစ်ချင်",
-                    desc: lang === "en" ? "I know it well — give me hard questions" : "ကောင်းစွာသိပြီး ခက်ခဲသောမေးခွန်းများ ဖြေချင်သည်",
+                    label: tr({ en: "Ready to be challenged", my: "နားလည်ပြီး စစ်ချင်", ko: "도전할 준비가 됨", vi: "Sẵn sàng thử thách" }),
+                    desc: tr({ en: "I know it well — give me hard questions", my: "ကောင်းစွာသိပြီး ခက်ခဲသောမေးခွန်းများ ဖြေချင်သည်", ko: "잘 알고 있어요 — 어려운 질문을 주세요", vi: "Tôi hiểu rõ — hãy cho tôi câu hỏi khó" }),
                     color: "#dc2626", bg: "#fff7ed", border: "#fca5a5" },
                 ].map(l => (
                   <div key={l.key} onClick={() => startLevelUpChat(l.key)}
@@ -4188,7 +4208,7 @@ export default function ClassDetail() {
                   </div>
                 ))}
                 {chatSending && <div style={{ textAlign: "center", color: "var(--text-faint)", fontSize: "13px", padding: "10px" }}>
-                  {lang === "en" ? "AI is preparing..." : "AI ပြင်ဆင်နေသည်..."}
+                  {tr({ en: "AI is preparing...", my: "AI ပြင်ဆင်နေသည်...", ko: "AI가 준비하는 중...", vi: "AI đang chuẩn bị..." })}
                 </div>}
               </div>
             ) : (
@@ -4213,7 +4233,7 @@ export default function ClassDetail() {
               {chatSending && (
                 <div style={{ display: "flex", justifyContent: "flex-start" }}>
                   <div style={{ background: "var(--surface-alt)", padding: "10px 14px", borderRadius: "14px", fontSize: "14px", color: "var(--text-faint)" }}>
-                    ⚡ {lang === "en" ? "AI is thinking..." : "AI တွေးဆနေသည်..."}
+                    ⚡ {tr({ en: "AI is thinking...", my: "AI တွေးဆနေသည်...", ko: "AI가 생각하는 중...", vi: "AI đang suy nghĩ..." })}
                   </div>
                 </div>
               )}
@@ -4224,13 +4244,13 @@ export default function ClassDetail() {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
               <span style={{ fontSize: "11px", color: "var(--text-faint)" }}>
                 {levelUpLevel === "beginner"
-                  ? (lang === "en" ? "🌱 Beginner mode" : "🌱 စတင်သင် mode")
+                  ? tr({ en: "🌱 Beginner mode", my: "🌱 စတင်သင် mode", ko: "🌱 초급 모드", vi: "🌱 Chế độ mới bắt đầu" })
                   : levelUpLevel === "intermediate"
-                  ? (lang === "en" ? "📘 Intermediate mode" : "📘 တစ်ဝက်နားလည် mode")
-                  : (lang === "en" ? "🔥 Advanced mode" : "🔥 နားလည်ပြီး mode")}
+                  ? tr({ en: "📘 Intermediate mode", my: "📘 တစ်ဝက်နားလည် mode", ko: "📘 중급 모드", vi: "📘 Chế độ trung cấp" })
+                  : tr({ en: "🔥 Advanced mode", my: "🔥 နားလည်ပြီး mode", ko: "🔥 고급 모드", vi: "🔥 Chế độ nâng cao" })}
               </span>
               <button onClick={() => { setLevelUpLevel(null); setChatHistory([]); }} style={{ background: "none", border: "none", fontSize: "11px", color: "var(--primary)", cursor: "pointer", fontWeight: 700 }}>
-                {lang === "en" ? "Change level" : "Level ပြောင်း"}
+                {tr({ en: "Change level", my: "Level ပြောင်း", ko: "레벨 변경", vi: "Đổi cấp độ" })}
               </button>
             </div>
 
@@ -4240,7 +4260,7 @@ export default function ClassDetail() {
                 value={chatInput}
                 onChange={e => setChatInput(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && !e.shiftKey && sendChat()}
-                placeholder={lang === "en" ? "Type your answer..." : "မေးခွန်းထည့်ပါ..."}
+                placeholder={tr({ en: "Type your answer...", my: "မေးခွန်းထည့်ပါ...", ko: "답변을 입력하세요...", vi: "Nhập câu trả lời của bạn..." })}
                 style={{ ...inp, flex: 1, borderRadius: "20px" }}
                 autoFocus
               />
@@ -4655,7 +4675,7 @@ export default function ClassDetail() {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
                   <div>
                     <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)", display: "inline-flex", alignItems: "center", gap: "6px" }}><Icon name="video" size={13} alt="" /> Related YouTube Videos</span>
-                    <span style={{ fontSize: "11px", color: "var(--text-faint)", marginLeft: "8px" }}>{lang === "en" ? "AI reads PDF or search by topic" : "PDF ဖတ်ပြီး AI ညွှန်းသည် / topic ရိုက်ထည့်ပြီး ရှာနိုင်သည်"}</span>
+                    <span style={{ fontSize: "11px", color: "var(--text-faint)", marginLeft: "8px" }}>{tr({ en: "AI reads PDF or search by topic", my: "PDF ဖတ်ပြီး AI ညွှန်းသည် / topic ရိုက်ထည့်ပြီး ရှာနိုင်သည်", ko: "AI가 PDF를 읽거나 주제로 검색합니다", vi: "AI đọc PDF hoặc tìm theo chủ đề" })}</span>
                   </div>
                   {uploadFile && (
                     <button
@@ -4681,20 +4701,20 @@ export default function ClassDetail() {
                     value={ytPromptQuery}
                     onChange={e => setYtPromptQuery(e.target.value)}
                     onKeyDown={e => { if (e.key === "Enter" && ytPromptQuery.trim() && !suggestingVideos) handleSuggestVideos(null, false); }}
-                    placeholder={lang === "en" ? "Search YouTube by topic (e.g. Korean grammar beginner)..." : "Topic ရိုက်ပြီး YouTube ရှာပါ (ဥပမာ English grammar A2)..."}
+                    placeholder={tr({ en: "Search YouTube by topic (e.g. Korean grammar beginner)...", my: "Topic ရိုက်ပြီး YouTube ရှာပါ (ဥပမာ English grammar A2)...", ko: "주제로 YouTube 검색 (예: 한국어 문법 초급)...", vi: "Tìm YouTube theo chủ đề (vd: ngữ pháp tiếng Hàn cơ bản)..." })}
                     style={{ flex: 1, border: "1.5px solid var(--border)", borderRadius: "10px", padding: "9px 14px", fontSize: "13px", color: "var(--text)", background: "var(--surface-alt)", outline: "none", fontFamily: "inherit" }}
                   />
                   <button
                     onClick={() => { if (ytPromptQuery.trim() && !suggestingVideos) handleSuggestVideos(null, false); }}
                     disabled={!ytPromptQuery.trim() || suggestingVideos}
                     style={{ background: !ytPromptQuery.trim() || suggestingVideos ? "var(--surface-alt)" : "var(--primary)", color: !ytPromptQuery.trim() || suggestingVideos ? "var(--text-faint)" : "#fff", border: "none", borderRadius: "10px", padding: "9px 18px", fontSize: "12px", fontWeight: 700, cursor: !ytPromptQuery.trim() || suggestingVideos ? "not-allowed" : "pointer", whiteSpace: "nowrap" }}>
-                    {suggestingVideos ? "Searching..." : lang === "en" ? "Search" : "ရှာမည်"}
+                    {suggestingVideos ? "Searching..." : tr({ en: "Search", my: "ရှာမည်", ko: "검색", vi: "Tìm kiếm" })}
                   </button>
                 </div>
 
                 {/* Language hint row */}
                 <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: (suggestedVideos.length > 0 || suggestingVideos) ? "14px" : "8px" }}>
-                  <span style={{ fontSize: "11px", color: "var(--text-faint)", flexShrink: 0 }}>{lang === "en" ? "Video language:" : "Video ဘာသာစကား:"}</span>
+                  <span style={{ fontSize: "11px", color: "var(--text-faint)", flexShrink: 0 }}>{tr({ en: "Video language:", my: "Video ဘာသာစကား:", ko: "영상 언어:", vi: "Ngôn ngữ video:" })}</span>
                   {[{ label: "ENG", value: "English" }, { label: "KOR", value: "Korean" }].map(btn => (
                     <button key={btn.value} onClick={() => setYtLanguageHint(btn.value)}
                       style={{
@@ -4756,13 +4776,23 @@ export default function ClassDetail() {
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "8px" }}>
                       <div style={{ fontSize: "11px", color: selectedVideoUrls.size > 0 ? "var(--primary)" : "var(--text-faint)", display: "flex", alignItems: "center", gap: "5px" }}>
                         {selectedVideoUrls.size > 0
-                          ? <><Icon name="checkmark" size={11} alt="" /> {lang === "en" ? `${selectedVideoUrls.size} video selected — will be added to lesson on post` : `${selectedVideoUrls.size} video ရွေးထားသည် — post လုပ်သောအခါ lesson မှာ ထည့်သွင်းမည်`}</>
-                          : (lang === "en" ? "Click a video to select — chosen ones will be added to the lesson" : "Video ကို နှိပ်ပြီး ရွေးပါ — ကြိုက်သောဟာကို lesson မှာ ထည့်နိုင်သည်")}
+                          ? <><Icon name="checkmark" size={11} alt="" /> {tr({
+                              en: `${selectedVideoUrls.size} video selected — will be added to lesson on post`,
+                              my: `${selectedVideoUrls.size} video ရွေးထားသည် — post လုပ်သောအခါ lesson မှာ ထည့်သွင်းမည်`,
+                              ko: `${selectedVideoUrls.size}개 영상 선택됨 — 게시 시 수업에 추가됩니다`,
+                              vi: `Đã chọn ${selectedVideoUrls.size} video — sẽ được thêm vào bài học khi đăng`,
+                            })}</>
+                          : tr({
+                              en: "Click a video to select — chosen ones will be added to the lesson",
+                              my: "Video ကို နှိပ်ပြီး ရွေးပါ — ကြိုက်သောဟာကို lesson မှာ ထည့်နိုင်သည်",
+                              ko: "영상을 클릭해 선택하세요 — 선택한 영상이 수업에 추가됩니다",
+                              vi: "Nhấp vào video để chọn — video đã chọn sẽ được thêm vào bài học",
+                            })}
                       </div>
                       {selectedVideoUrls.size > 0 && (
                         <button onClick={() => setSelectedVideoUrls(new Set())}
                           style={{ fontSize: "10px", color: "var(--text-faint)", background: "none", border: "none", cursor: "pointer", padding: "0" }}>
-                          {lang === "en" ? "Clear" : "ဖျက်မည်"}
+                          {tr({ en: "Clear", my: "ဖျက်မည်", ko: "지우기", vi: "Xóa" })}
                         </button>
                       )}
                     </div>
@@ -4771,7 +4801,12 @@ export default function ClassDetail() {
                 {!suggestingVideos && suggestedVideos.length === 0 && (
                   <div style={{ marginTop: "8px", fontSize: "12px", color: "var(--text-faint)", display: "flex", alignItems: "center", gap: "6px" }}>
                     <Icon name="file" size={16} alt="" />
-                    {lang === "en" ? "Upload a PDF and AI will read it to automatically suggest matching YouTube videos" : "PDF file တင်လိုက်တာနဲ့ AI က file အကြောင်းကို ဖတ်ပြီး သင်ခန်းစာနဲ့ ကိုက်ညီတဲ့ YouTube videos အလိုအလျောက် ညွှန်းပေးမည်"}
+                    {tr({
+                      en: "Upload a PDF and AI will read it to automatically suggest matching YouTube videos",
+                      my: "PDF file တင်လိုက်တာနဲ့ AI က file အကြောင်းကို ဖတ်ပြီး သင်ခန်းစာနဲ့ ကိုက်ညီတဲ့ YouTube videos အလိုအလျောက် ညွှန်းပေးမည်",
+                      ko: "PDF를 업로드하면 AI가 내용을 읽고 관련 YouTube 영상을 자동으로 추천합니다",
+                      vi: "Tải lên PDF, AI sẽ đọc nội dung và tự động đề xuất video YouTube phù hợp",
+                    })}
                   </div>
                 )}
               </div>
@@ -4781,7 +4816,7 @@ export default function ClassDetail() {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
                   <div>
                     <span style={{ fontSize: "13px", fontWeight: 700, color: "var(--text-muted)" }}>Instructions for students</span>
-                    <span style={{ fontSize: "11px", color: "var(--text-faint)", marginLeft: "8px" }}>{lang === "en" ? "AI reads the syllabus and writes for you" : "AI က သင်ရိုးကြည့်ပြီး ရေးပေးမည်"}</span>
+                    <span style={{ fontSize: "11px", color: "var(--text-faint)", marginLeft: "8px" }}>{tr({ en: "AI reads the syllabus and writes for you", my: "AI က သင်ရိုးကြည့်ပြီး ရေးပေးမည်", ko: "AI가 강의 계획서를 읽고 작성해 드립니다", vi: "AI sẽ đọc giáo trình và soạn giúp bạn" })}</span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                     <div style={{ display: "flex", borderRadius: "20px", overflow: "hidden", border: "1px solid var(--border)" }}>
@@ -4798,7 +4833,7 @@ export default function ClassDetail() {
                     <button
                       onClick={handleGenerateInstructions}
                       disabled={generatingInstructions || !uploadFile}
-                      title={!uploadFile ? (lang === "en" ? "Upload a PDF first" : "PDF တင်မှ အသုံးပြုနိုင်မည်") : ""}
+                      title={!uploadFile ? tr({ en: "Upload a PDF first", my: "PDF တင်မှ အသုံးပြုနိုင်မည်", ko: "먼저 PDF를 업로드하세요", vi: "Vui lòng tải PDF lên trước" }) : ""}
                       style={{ display: "flex", alignItems: "center", gap: "6px", background: generatingInstructions ? "var(--surface-alt)" : !uploadFile ? "var(--surface-alt)" : "var(--primary-tint)", color: !uploadFile ? "var(--text-faint)" : "var(--primary)", border: `1px solid ${!uploadFile ? "var(--border)" : "var(--primary-tint)"}`, borderRadius: "20px", padding: "5px 14px", fontSize: "12px", fontWeight: 700, cursor: (generatingInstructions || !uploadFile) ? "not-allowed" : "pointer", opacity: !uploadFile ? 0.6 : 1 }}>
                       {generatingInstructions ? (
                         <><Icon name="hourglass" size={14} alt="" /> Generating...</>

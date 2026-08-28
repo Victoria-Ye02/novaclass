@@ -33,6 +33,7 @@ router.post("/materials/generate-instructions", auth, aiUpload.single("file"), c
 router.post("/materials/suggest-youtube",       auth, aiUpload.single("file"), ctrl.suggestYoutubeForMaterial);
 router.post("/classes/:id/materials",       auth, upload.materialUpload, ctrl.uploadMaterial);
 router.get("/materials/:materialId/summary", auth, ctrl.getSummary);
+router.get("/materials/:materialId/chat-history", auth, ctrl.getChatHistory);
 router.post("/materials/:materialId/ai",    auth, ctrl.materialAI);
 router.post("/tts",                         auth, ctrl.textToSpeech);
 router.get("/materials/:materialId/highlights", auth, highlights.getHighlights);

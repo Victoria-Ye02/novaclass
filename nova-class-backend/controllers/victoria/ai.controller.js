@@ -1,5 +1,6 @@
 const { completeText } = require("../../services/ai/groqText");
 const { translateText } = require("../../services/ai/translation");
+const { getSignedUrl } = require("../../services/ai/elevenLabs");
 
 // POST /api/ai/summarize  { text }
 exports.summarize = async (req, res) => {
@@ -68,9 +69,27 @@ exports.translate = async (req, res) => {
     });
     res.json({ translation });
   } catch (err) {
-    const invalidInput = /text is required|targetLanguage must be my or en/.test(err.message);
+    const invalidInput = /text is required|targetLanguage must be my, en, ko, or vi/.test(err.message);
     res.status(invalidInput ? 400 : 502).json({
       error: invalidInput ? err.message : "Translation is temporarily unavailable",
     });
+  }
+};
+
+// GET /api/ai/voice-signed-url — short-lived signed WebSocket URL for the
+// K.MATE Conversational AI agent. Replaces the drop-in <elevenlabs-convai>
+// widget: with a custom @elevenlabs/client integration, "End call" is code
+// this app owns and can guarantee actually stops the audio, instead of
+// trusting a third-party widget's internal cleanup. ELEVENLABS_API_KEY never
+// reaches the browser — only this one-time signed URL does.
+exports.voiceSignedUrl = async (req, res) => {
+  const agentId = process.env.ELEVENLABS_AGENT_ID;
+  if (!agentId) return res.status(503).json({ error: "Voice agent is not configured" });
+
+  try {
+    const signedUrl = await getSignedUrl(agentId);
+    res.json({ signedUrl });
+  } catch {
+    res.status(502).json({ error: "Voice agent is temporarily unavailable" });
   }
 };

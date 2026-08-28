@@ -3,11 +3,14 @@ const OpenAI = require("openai");
 
 require("dotenv").config();
 
-// Text completion goes through OpenRouter (Groq's own chat models were
-// retired from this account — only reasoning models remain there, and those
-// return empty `content` on the app's short max_tokens budgets). Whisper
-// transcription stays on Groq directly; OpenRouter doesn't offer it.
-const TEXT_MODEL = "z-ai/glm-5.2";
+// Text completion goes through OpenRouter. Gemini 2.5 Flash: measured ~1.4s
+// per reply against ~5s for the previous z-ai/glm-5.2 (a reasoning model that
+// was slow and needed reasoning explicitly disabled), with equal-or-better
+// Burmese/Korean quality. The whole voice loop's latency (STT → LLM → TTS) was
+// dominated by this call, so the model choice is the single biggest speed
+// lever. Whisper transcription stays on Groq directly; OpenRouter doesn't
+// offer it.
+const TEXT_MODEL = "google/gemini-2.5-flash";
 let textClient = new OpenAI({ apiKey: process.env.OPENROUTER_API_KEY, baseURL: "https://openrouter.ai/api/v1" });
 let audioClient = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
@@ -16,18 +19,19 @@ async function completeText({ messages, maxTokens = 1024, responseFormat }) {
     model: TEXT_MODEL,
     messages,
     max_tokens: maxTokens,
-    // z-ai/glm-5.2 is also a reasoning model — without this it spends the
-    // whole max_tokens budget on internal reasoning and content comes back empty.
-    reasoning: { enabled: false },
     ...(responseFormat ? { response_format: responseFormat } : {}),
   });
 }
 
-async function transcribeAudio({ file, responseFormat = "text" }) {
+async function transcribeAudio({ file, responseFormat = "text", language }) {
   return audioClient.audio.transcriptions.create({
     file,
     model: "whisper-large-v3",
     response_format: responseFormat,
+    // Whisper auto-detects language when this is omitted, but for some
+    // languages (Burmese notably) it mis-detects a related script and returns
+    // gibberish. Passing an ISO-639-1 code forces the right language.
+    ...(language ? { language } : {}),
   });
 }
 

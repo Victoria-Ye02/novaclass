@@ -398,21 +398,21 @@ export default function Dashboard() {
                       onMouseEnter={() => isTeaching && setHoveredDay(dateStr)}
                       onMouseLeave={() => setHoveredDay(null)}
                     >
-                      <span style={{ fontSize: "12px", fontWeight: isToday ? 700 : 500 }}>{day}</span>
-
-                      {/* Event dots */}
-                      {dayEvents.length > 0 && (
-                        <div style={{ display: "flex", gap: "2px", flexWrap: "wrap", justifyContent: "center", marginTop: "2px" }}>
-                          {dayEvents.slice(0, 3).map(ev => (
-                            <span
-                              key={ev.id}
-                              title={ev.title}
-                              style={{ width: "5px", height: "5px", borderRadius: "50%", background: ev.color, flexShrink: 0, cursor: "pointer" }}
-                              onClick={e => { e.stopPropagation(); if (isTeaching) handleDeleteEvent(ev.id); }}
-                            />
-                          ))}
-                        </div>
-                      )}
+                      {/* Day number — ringed in the event's color when this date has an event */}
+                      <span
+                        title={dayEvents.length > 0 ? dayEvents.map(ev => ev.title).join(", ") : undefined}
+                        onClick={e => { if (dayEvents.length > 0 && isTeaching) { e.stopPropagation(); handleDeleteEvent(dayEvents[0].id); } }}
+                        style={{
+                          fontSize: "12px", fontWeight: isToday ? 700 : 500,
+                          boxSizing: "border-box",
+                          ...(dayEvents.length > 0 ? {
+                            width: "20px", height: "20px", borderRadius: "50%",
+                            border: `2px solid ${dayEvents[0].color}`,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            cursor: isTeaching ? "pointer" : "default",
+                          } : {}),
+                        }}
+                      >{day}</span>
 
                       {/* Teacher: + button on hover */}
                       {isTeaching && isHovered && (

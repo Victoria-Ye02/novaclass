@@ -3,6 +3,8 @@ const MAX_CHARS_PER_REQUEST = 5000;
 const TARGET_LANGUAGES = {
   my: "Burmese (Myanmar)",
   en: "English",
+  ko: "Korean",
+  vi: "Vietnamese",
 };
 
 function splitText(text) {
@@ -23,7 +25,7 @@ function splitText(text) {
 async function translateText({ text, targetLanguage, completeText }) {
   if (!text || !text.trim()) throw new Error("text is required");
   if (!TARGET_LANGUAGES[targetLanguage]) {
-    throw new Error("targetLanguage must be my or en");
+    throw new Error("targetLanguage must be my, en, ko, or vi");
   }
   if (typeof completeText !== "function") throw new Error("translation service is unavailable");
 

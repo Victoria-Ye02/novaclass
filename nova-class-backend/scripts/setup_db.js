@@ -97,6 +97,25 @@ async function setup() {
     )
   `);
 
+  // Unlike material_chat_cache above (a shared answer cache keyed by
+  // question text, no user), this is each student's own running
+  // conversation with the lesson assistant — scoped per (user, material) so
+  // it can be reloaded and continued next time they open the same lesson,
+  // instead of resetting to the greeting every time the panel remounts.
+  await conn.query(`
+    CREATE TABLE IF NOT EXISTS material_chat_messages (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      material_id INT NOT NULL,
+      user_id INT NOT NULL,
+      role ENUM('user','assistant') NOT NULL,
+      content TEXT NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (material_id) REFERENCES materials(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      INDEX idx_material_user (material_id, user_id, created_at)
+    )
+  `);
+
   await conn.query(`
     CREATE TABLE IF NOT EXISTS youtube_suggest_cache (
       id INT AUTO_INCREMENT PRIMARY KEY,

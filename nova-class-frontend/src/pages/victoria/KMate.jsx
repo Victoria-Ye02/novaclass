@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { Conversation } from "@elevenlabs/client";
 import Sidebar from "../../components/Sidebar";
 import Icon from "../../components/Icon";
 import API from "../../services/api";
@@ -45,11 +46,126 @@ export default function KMate() {
   const [input, setInput]   = useState("");
   const [loading, setLoading] = useState(false);
   const [quizMode, setQuizMode] = useState(false);
+  // Own client integration (@elevenlabs/client) instead of the drop-in
+  // <elevenlabs-convai> widget — the widget doesn't reliably stop its
+  // already-buffered audio the instant its own "End call" is pressed, and
+  // there's no way to fix that from outside a black-box embed. Owning the
+  // Conversation object means endSession() is code this app controls.
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState("disconnected"); // disconnected | connecting | connected | disconnecting
+  const [voiceMode, setVoiceMode] = useState(null); // null | "listening" | "speaking"
+  const [voiceError, setVoiceError] = useState(null);
+  const conversationRef = useRef(null);
+  // startVoiceCall's mic-permission + signed-url + SDK-negotiation chain can
+  // easily take a couple of seconds — long enough that a student who taps
+  // "End call" while it's still connecting hits this before
+  // conversationRef.current is ever set. Without this flag that click is a
+  // silent no-op: the session finishes connecting moments later with no UI
+  // left on screen to stop it, and it just talks with nobody able to end it.
+  const endRequestedRef = useRef(false);
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachFile, setAttachFile] = useState(null); // { file, type }
   const bottomRef = useRef();
   const fileRef = useRef();
   const pendingTypeRef = useRef("image");
+
+  // The conversation must never survive the component that owns it — leaving
+  // a page with the call still open would otherwise keep the mic and audio
+  // running with no UI left to end it from.
+  useEffect(() => {
+    return () => {
+      document.querySelectorAll("audio").forEach(el => { try { el.pause(); el.muted = true; } catch { /* best-effort */ } });
+      conversationRef.current?.endSession();
+    };
+  }, []);
+
+  // A reply that was already in flight server-side when "End call" was
+  // pressed can still land and call .play() on the SDK's <audio> element a
+  // moment later — after our one-shot pause/mute above already ran and found
+  // nothing playing yet. This global backstop catches that: for as long as
+  // end-call intent is set, silence any media element the instant it tries
+  // to start, no matter when that happens.
+  useEffect(() => {
+    const blockPlaybackWhileEnding = (event) => {
+      if (endRequestedRef.current && event.target instanceof HTMLMediaElement) {
+        event.target.pause();
+        event.target.muted = true;
+      }
+    };
+    document.addEventListener("play", blockPlaybackWhileEnding, true);
+    return () => document.removeEventListener("play", blockPlaybackWhileEnding, true);
+  }, []);
+
+  async function startVoiceCall() {
+    setVoiceOpen(true);
+    setVoiceError(null);
+    setVoiceStatus("connecting");
+    endRequestedRef.current = false;
+    try {
+      await navigator.mediaDevices.getUserMedia({ audio: true });
+      const { data } = await API.get("/ai/voice-signed-url");
+      const conversation = await Conversation.startSession({
+        signedUrl: data.signedUrl,
+        onStatusChange: ({ status }) => setVoiceStatus(status),
+        onModeChange: ({ mode }) => setVoiceMode(mode),
+        onDisconnect: () => { conversationRef.current = null; setVoiceMode(null); },
+        onError: (message) => setVoiceError(typeof message === "string" ? message : "Something went wrong."),
+      });
+      if (endRequestedRef.current) {
+        // "End call" was already pressed while this was still connecting —
+        // don't hand the caller a session with no UI left to stop it.
+        document.querySelectorAll("audio").forEach(el => { try { el.pause(); el.muted = true; } catch { /* best-effort */ } });
+        await conversation.endSession();
+        return;
+      }
+      conversationRef.current = conversation;
+    } catch {
+      setVoiceError("Couldn't start the call — check microphone permission and try again.");
+      setVoiceStatus("disconnected");
+    }
+  }
+
+  // The SDK plays its TTS audio through an <audio> element it injects
+  // directly onto document.body (see @elevenlabs/client's MediaDeviceOutput),
+  // outside of React and outside our control. Its own endSession() teardown
+  // closes that element's AudioContext asynchronously and can throw partway
+  // through (mic-context close, then audio-context close, unguarded) —
+  // leaving the element playing even after our UI has already reset. Pausing
+  // the element directly is synchronous and doesn't depend on that teardown
+  // chain succeeding, so it's the one thing that reliably guarantees silence
+  // the instant "End call" is pressed.
+  function silenceInjectedVoiceAudio() {
+    document.querySelectorAll("audio").forEach(el => {
+      try {
+        el.pause();
+        el.muted = true;
+        el.srcObject = null;
+      } catch { /* best-effort */ }
+    });
+  }
+
+  async function endVoiceCall() {
+    endRequestedRef.current = true;
+    silenceInjectedVoiceAudio();
+    // Also ask the SDK itself to go quiet, before the (async) session
+    // teardown below finishes — belt and braces alongside the DOM-level cut
+    // above.
+    try { conversationRef.current?.setVolume({ volume: 0 }); } catch { /* not connected yet */ }
+    setVoiceOpen(false);
+    setVoiceStatus("disconnected");
+    setVoiceMode(null);
+    const conversation = conversationRef.current;
+    conversationRef.current = null;
+    try {
+      await conversation?.endSession();
+    } catch (err) {
+      // The SDK's own teardown (mic context close -> audio context close)
+      // can throw partway through and leave the audio context/output open
+      // and playing even though our UI has already reset above — surface it
+      // instead of losing it as a silent unhandled rejection.
+      console.error("[voice] endSession threw — audio may still be playing:", err);
+    }
+  }
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
@@ -121,11 +237,50 @@ export default function KMate() {
             <h2 style={s.title}><Icon name="bot" size={22} style={{ marginRight: "6px" }} />K_MATE</h2>
             <p style={s.sub}>TOPIK II AI Tutor — Ask anything in any language</p>
           </div>
-          <button style={s.quizToggleBtn} onClick={() => setQuizMode(!quizMode)}>
-            <Icon name={quizMode ? "chat" : "clipboard"} size={14} style={{ marginRight: "4px" }} />
-            {quizMode ? "Back to Chat" : "Practice Quiz"}
-          </button>
+          <div style={{ display: "flex", gap: "8px" }}>
+            {!voiceOpen && (
+              <button style={s.quizToggleBtn} onClick={startVoiceCall}>
+                <Icon name="microphone" size={14} style={{ marginRight: "4px" }} />
+                Talk to Nova
+              </button>
+            )}
+            <button style={s.quizToggleBtn} onClick={() => setQuizMode(!quizMode)}>
+              <Icon name={quizMode ? "chat" : "clipboard"} size={14} style={{ marginRight: "4px" }} />
+              {quizMode ? "Back to Chat" : "Practice Quiz"}
+            </button>
+          </div>
         </div>
+
+        {voiceOpen && (
+          <div style={s.voicePanel}>
+            <div style={{ position: "relative", width: "72px", height: "72px" }}>
+              <div
+                style={{
+                  ...s.voiceOrb,
+                  ...(voiceStatus === "connecting" ? s.voiceOrbConnecting : {}),
+                  ...(voiceMode === "listening" ? s.voiceOrbListening : {}),
+                  ...(voiceMode === "speaking" ? s.voiceOrbSpeaking : {}),
+                }}
+              >
+                <Icon name="microphone" size={26} alt="" style={{ filter: "brightness(0) invert(1)" }} />
+              </div>
+            </div>
+            <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-muted)" }}>
+              {voiceStatus === "connecting" ? "Connecting…"
+                : voiceError ? voiceError
+                : voiceMode === "speaking" ? "Nova is speaking…"
+                : voiceMode === "listening" ? "Listening…"
+                : "Connected"}
+            </div>
+            <button
+              type="button"
+              onClick={endVoiceCall}
+              style={{ display: "flex", alignItems: "center", gap: "6px", background: "var(--danger, #ef4444)", color: "#fff", border: "none", borderRadius: "20px", padding: "8px 18px", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}
+            >
+              <Icon name="multiply" size={12} alt="" style={{ filter: "brightness(0) invert(1)" }} /> End call
+            </button>
+          </div>
+        )}
 
         {quizMode ? <QuizMode /> : (
           <>
@@ -347,6 +502,33 @@ const s = {
   quizToggleBtn: {
     background: "var(--primary)", color: "#fff", padding: "10px 20px",
     borderRadius: "10px", fontSize: "14px", fontWeight: 600, border: "none",
+  },
+  voicePanel: {
+    display: "flex", flexDirection: "column", alignItems: "center", gap: "10px",
+    background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "16px",
+    padding: "20px", marginBottom: "16px",
+  },
+  // Reuses the wobbling-blob keyframes already defined in index.css for the
+  // lesson viewer's own voice orb, so the two voice surfaces in the app move
+  // the same way even though they're built on different SDKs underneath.
+  voiceOrb: {
+    width: "72px", height: "72px",
+    borderRadius: "42% 58% 65% 35% / 45% 45% 55% 55%",
+    background: "linear-gradient(135deg, var(--primary-light), var(--primary), var(--primary-dark), var(--primary))",
+    backgroundSize: "300% 300%",
+    boxShadow: "0 8px 22px rgba(59, 55, 204, 0.35)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    animation: "voiceOrbWobble 7s ease-in-out infinite, voiceGradientShift 6s ease infinite",
+  },
+  voiceOrbConnecting: {
+    animation: "voiceOrbWobble 2s ease-in-out infinite, voiceGradientShift 2.6s ease infinite",
+    opacity: 0.85,
+  },
+  voiceOrbListening: {
+    animation: "voiceOrbWobble 3.2s ease-in-out infinite, voiceGradientShift 4s ease infinite, voiceListenPulse 1.6s ease-in-out infinite",
+  },
+  voiceOrbSpeaking: {
+    animation: "voiceOrbWobble 1.1s ease-in-out infinite, voiceGradientShift 1.4s ease infinite",
   },
   chatBox: {
     flex: 1, overflowY: "auto", background: "var(--surface)", borderRadius: "16px",

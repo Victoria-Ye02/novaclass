@@ -2,6 +2,7 @@ const pool = require("../../config/db");
 const { completeText } = require("../../services/ai/groqText");
 const { ocrPdfPageText } = require("../../services/ai/pdfVision");
 const { textToSpeech: elevenLabsTextToSpeech } = require("../../services/ai/elevenLabs");
+const { textToSpeech: burmeseTextToSpeech } = require("../../services/ai/burmeseTts");
 const pdfParse = require("pdf-parse");
 const fs = require("fs");
 const path = require("path");
@@ -20,7 +21,7 @@ const RAG_URL = process.env.RAG_URL || "http://localhost:8000";
 // land at the exact same suspiciously-round number.
 function naturalCacheDelay() {
   if (process.env.NODE_ENV === "test") return Promise.resolve();
-  return new Promise(resolve => setTimeout(resolve, 3500 + Math.random() * 1500));
+  return new Promise(resolve => setTimeout(resolve, 1500 + Math.random() * 1500));
 }
 
 async function ragIngest(filePath, materialId, filename) {
@@ -1036,10 +1037,10 @@ exports.materialAI = async (req, res) => {
     if (mats.length === 0) return res.status(404).json({ error: "Material not found" });
     const mat = mats[0];
 
-    // Same across the whole handler: Settings only offers "en"/"my" as app
-    // language (see Settings.jsx), so anything else collapses to English
-    // rather than silently caching under an arbitrary lang value.
-    const materialAiLang = req.body.lang === "my" ? "my" : "en";
+    // Same across the whole handler: collapse to one of the app's supported
+    // languages (see Settings.jsx) rather than silently caching under an
+    // arbitrary lang value.
+    const materialAiLang = ["my", "ko", "vi"].includes(req.body.lang) ? req.body.lang : "en";
 
     // Summary/quiz/highlights are pure functions of the material's own
     // content in a given language — the same for every student who opens it
@@ -1106,7 +1107,7 @@ exports.materialAI = async (req, res) => {
     ].filter(Boolean).join("\n\n");
 
     if (action === "chat" && req.body.mode === "assistant") {
-      const { lang, currentPage, totalPages } = req.body;
+      const { lang, currentPage, totalPages, voice } = req.body;
 
       // The student picks whatever language they type in, question by
       // question — it does not follow the Settings display language. The
@@ -1119,7 +1120,9 @@ exports.materialAI = async (req, res) => {
       // found to make the model imitate that language's example wording —
       // e.g. the scope-refusal example below — even when the student's
       // question was in a different language entirely.
-      const langInstruction = `Detect the language the student's latest question (the final "user" message) is written in, and reply in that exact same language — regardless of what language this system prompt, the document, or earlier messages in the conversation are in. Keep technical/domain terms in their original language (e.g. English or Korean) when there's no natural equivalent, but write the surrounding explanation in the detected language. This applies to every part of your reply, including if you have to say you can't answer something — that refusal must also be in the detected language, not translated from an English example.`;
+      const langInstruction = `Detect the language the student's latest question (the final "user" message) is written in, and reply in that exact same language — regardless of what language this system prompt, the document, or earlier messages in the conversation are in. This matters most, not least, for short low-signal messages like a bare greeting ("Hello", "Hi", "ok") — a one-word English greeting means detect English and reply in English, even if the material below is written entirely in another language (e.g. a Korean-language lesson document). Never let the document's own language pull your reply toward it; only the student's actual words decide the reply language. Keep technical/domain terms in their original language (e.g. English or Korean) when there's no natural equivalent, but write the surrounding explanation in the detected language. This applies to every part of your reply, including if you have to say you can't answer something — that refusal must also be in the detected language, not translated from an English example.
+
+Exception: if the student explicitly asks you to switch languages ("can we talk in Burmese?", "explain that in Vietnamese", "answer in Korean from now on") — even though that request itself is written in whatever language they typed it in — comply immediately and reply in the language they asked for, not the language their request happened to be written in. Keep replying in that requested language for the rest of the conversation unless they ask to switch again or clearly go back to typing/speaking in a different one.`;
 
       const pageContext = currentPage && totalPages
         ? `The student is currently viewing page ${currentPage} of ${totalPages}.`
@@ -1165,9 +1168,22 @@ exports.materialAI = async (req, res) => {
 
       const sparseWarning = pageSpecificWarning || documentWideSparseWarning;
 
-      const scopeInstruction = `You only discuss this lesson's material. If the student asks something unrelated to this document (general chit-chat, other subjects, unrelated topics), politely say (in the detected language, not literally translated from this English sentence) that you can only help with this lesson's content and ask what they'd like to know about it — do not answer the unrelated question.`;
+      const scopeInstruction = `You only discuss this lesson's material. If the student asks something unrelated to this document (general chit-chat, other subjects, unrelated topics), politely say (in the detected language, not literally translated from this English sentence) that you can only help with this lesson's content and ask what they'd like to know about it — do not answer the unrelated question. A request about *how you talk to them* — asking you to reply in a different language, to explain something in their language, to speak more simply, etc. — is not an unrelated topic and must never trigger that refusal; just comply and keep discussing the lesson in the language they asked for.`;
 
-      const systemContent = `You are a helpful AI study assistant for this lesson material. ${langInstruction} ${scopeInstruction}
+      // Voice replies get read aloud through TTS immediately after — the same
+      // multi-paragraph length that's fine to read on screen makes a spoken
+      // reply feel like it rambles on forever and pushes up latency (more
+      // tokens to generate, then synthesize, before the student hears anything).
+      const voiceInstruction = voice
+        ? `This reply will be read aloud by text-to-speech, not displayed as text — keep it to 1-3 short spoken sentences, like a quick verbal answer, not a written explanation. No lists, headings, markdown, or asterisks. If the full answer genuinely needs more than that, give the short version and end by asking if they want more detail, rather than saying it all at once.`
+        : "";
+
+      // A warm tutor persona rather than a flat "assistant" — explains instead
+      // of reciting, encourages, checks understanding, and offers practice.
+      // The voice/scope/honesty rules below still bound how it behaves.
+      const tutorPersona = `You are Nova, a warm and patient study tutor for this lesson's material. Be encouraging and never condescending — normalize confusion ("that part trips a lot of people up", not "that's easy"). Don't just repeat the material back: explain it, and reach for a short, concrete example or analogy when the student seems stuck on something. After explaining anything non-trivial, check in with a brief question ("does that make sense so far?") instead of lecturing on and on. If the student seems to want practice, offer one quick question drawn from this lesson and give warm, specific feedback on their answer — encouraging if they're wrong, brief praise if right, and always explain the correct answer either way.`;
+
+      const systemContent = `${tutorPersona} ${langInstruction} ${scopeInstruction} ${voiceInstruction}
 ${pageContext}${currentPageBlock}
 
 Material content (full document):
@@ -1182,7 +1198,12 @@ Answer the student's question directly and naturally. When asked about the curre
         ...(history || []).map(h => ({ role: h.role === "assistant" ? "assistant" : "user", content: h.content })),
         { role: "user", content: message },
       ];
-      const completion = await completeText({ messages: msgs, maxTokens: 600 });
+      // 150 was too tight for non-Latin scripts — Korean/Burmese need
+      // noticeably more tokens per sentence than English in this tokenizer,
+      // so a "1-3 short sentences" reply in those languages was getting cut
+      // off mid-word rather than actually finishing. 300 covers that same
+      // short reply comfortably in every supported language.
+      const completion = await completeText({ messages: msgs, maxTokens: voice ? 300 : 600 });
       const reply = completion.choices[0].message.content;
 
       if (chatCacheKey) {
@@ -1192,6 +1213,11 @@ Answer the student's question directly and naturally. When asked about the curre
           [req.params.materialId, chatCacheKey, message, reply, lang || "en"]
         ).catch(err => console.warn("[Chat cache] write failed:", err.message));
       }
+
+      pool.query(
+        "INSERT INTO material_chat_messages (material_id, user_id, role, content) VALUES (?, ?, 'user', ?), (?, ?, 'assistant', ?)",
+        [req.params.materialId, req.user.id, message, req.params.materialId, req.user.id, reply]
+      ).catch(err => console.warn("[Chat history] write failed:", err.message));
 
       return res.json({ reply });
     }
@@ -1307,9 +1333,10 @@ ${context}
     // not stuck needing a second AI/translator just to understand the
     // first one's explanation — every human-readable field below must
     // actually be written in it, not just the source material's language.
-    const materialAiLangInstruction = materialAiLang === "my"
-      ? `Write every explanation, example, and description in Burmese (Myanmar language) — the student reads Burmese, not the material's own language. A technical term itself may stay in its original language (Korean/English) when there's no natural Burmese equivalent, but the surrounding explanation must be Burmese.`
-      : `Write every explanation, example, and description in English.`;
+    const MATERIAL_AI_LANG_NAMES = { my: "Burmese (Myanmar language)", ko: "Korean", vi: "Vietnamese", en: "English" };
+    const materialAiLangInstruction = materialAiLang === "en"
+      ? `Write every explanation, example, and description in English.`
+      : `Write every explanation, example, and description in ${MATERIAL_AI_LANG_NAMES[materialAiLang]} — the student reads ${MATERIAL_AI_LANG_NAMES[materialAiLang]}, not the material's own language. A technical term itself may stay in its original language (Korean/English) when there's no natural equivalent, but the surrounding explanation must be ${MATERIAL_AI_LANG_NAMES[materialAiLang]}.`;
 
     let systemPrompt = "";
     let userPrompt = "";
@@ -1393,6 +1420,26 @@ exports.getSummary = async (req, res) => {
     );
     if (summaries.length === 0) return res.status(404).json({ error: "No summary available" });
     res.json(summaries[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// GET /api/classroom/materials/:materialId/chat-history — this student's own
+// prior conversation with the lesson assistant, so reopening the same lesson
+// continues it instead of resetting to the greeting every time.
+exports.getChatHistory = async (req, res) => {
+  try {
+    const [materials] = await pool.query("SELECT class_id FROM materials WHERE id = ?", [req.params.materialId]);
+    if (materials.length === 0) return res.status(404).json({ error: "Material not found" });
+    const access = await checkAccess(materials[0].class_id, req.user.id);
+    if (access.error) return res.status(access.status).json({ error: access.error });
+
+    const [rows] = await pool.query(
+      "SELECT role, content FROM material_chat_messages WHERE material_id = ? AND user_id = ? ORDER BY id ASC",
+      [req.params.materialId, req.user.id]
+    );
+    res.json({ messages: rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1805,15 +1852,26 @@ exports.deleteMaterialComment = async (req, res) => {
   }
 };
 
+// Myanmar Unicode block (U+1000–U+109F) — presence of any character in it
+// means the reply is Burmese, which ElevenLabs can't pronounce (it has no
+// Burmese voice and returns mispronounced audio rather than an error).
+const BURMESE_SCRIPT_RE = /[က-႟]/;
+
 // POST /api/classroom/tts  { text }
-// Speaks AI Chat replies aloud in voice mode with a natural ElevenLabs voice
-// instead of the browser's built-in (robotic) speech synthesis.
+// Speaks AI Chat replies aloud in voice mode with a natural voice instead of
+// the browser's built-in (robotic) speech synthesis. Burmese goes to the
+// Burmese TTS service (Azure's my-MM-NilarNeural, via Microsoft Edge's free
+// Read Aloud endpoint — ElevenLabs has no Burmese voice); every other language
+// goes to ElevenLabs.
 exports.textToSpeech = async (req, res) => {
   const text = (req.body.text || "").trim();
   if (!text) return res.status(400).json({ error: "text is required" });
 
+  const isBurmese = BURMESE_SCRIPT_RE.test(text);
   try {
-    const audio = await elevenLabsTextToSpeech(text.slice(0, 5000));
+    const audio = isBurmese
+      ? await burmeseTextToSpeech(text.slice(0, 5000))
+      : await elevenLabsTextToSpeech(text.slice(0, 5000));
     res.set("Content-Type", "audio/mpeg");
     res.send(audio);
   } catch (err) {

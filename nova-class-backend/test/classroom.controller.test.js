@@ -10,8 +10,9 @@ const controllerPath = require.resolve("../controllers/victoria/classroom.contro
 const groqTextPath = require.resolve("../services/ai/groqText");
 const pdfVisionPath = require.resolve("../services/ai/pdfVision");
 const elevenLabsPath = require.resolve("../services/ai/elevenLabs");
+const burmeseTtsPath = require.resolve("../services/ai/burmeseTts");
 
-function loadController(t, { completeText, ocrPdfPageText, elevenLabsTextToSpeech } = {}) {
+function loadController(t, { completeText, ocrPdfPageText, elevenLabsTextToSpeech, burmeseTextToSpeech } = {}) {
   const originalGroqText = require.cache[groqTextPath];
   require.cache[groqTextPath] = {
     id: groqTextPath,
@@ -43,6 +44,16 @@ function loadController(t, { completeText, ocrPdfPageText, elevenLabsTextToSpeec
     },
   };
 
+  const originalBurmeseTts = require.cache[burmeseTtsPath];
+  require.cache[burmeseTtsPath] = {
+    id: burmeseTtsPath,
+    filename: burmeseTtsPath,
+    loaded: true,
+    exports: {
+      textToSpeech: burmeseTextToSpeech || (async () => { throw new Error("Unexpected burmese textToSpeech call"); }),
+    },
+  };
+
   delete require.cache[controllerPath];
 
   const controller = require(controllerPath);
@@ -54,6 +65,8 @@ function loadController(t, { completeText, ocrPdfPageText, elevenLabsTextToSpeec
     else delete require.cache[pdfVisionPath];
     if (originalElevenLabs) require.cache[elevenLabsPath] = originalElevenLabs;
     else delete require.cache[elevenLabsPath];
+    if (originalBurmeseTts) require.cache[burmeseTtsPath] = originalBurmeseTts;
+    else delete require.cache[burmeseTtsPath];
   });
   return controller;
 }
@@ -748,6 +761,41 @@ test("textToSpeech reports 503 with a clear message when ElevenLabs isn't config
 
   assert.equal(res.statusCode, 503);
   assert.equal(res.body.code, "ELEVENLABS_NOT_CONFIGURED");
+});
+
+test("textToSpeech routes Burmese text to the Burmese TTS service, not ElevenLabs (which has no Burmese voice)", async (t) => {
+  let burmeseText;
+  const controller = loadController(t, {
+    burmeseTextToSpeech: async (text) => {
+      burmeseText = text;
+      return Buffer.from("burmese-mp3-bytes");
+    },
+    // Left as the default throwing stub — reaching ElevenLabs for Burmese
+    // would be the bug this routing exists to prevent.
+  });
+
+  const { req, res } = httpDouble({ body: { text: "မင်္ဂလာပါ၊ ဒီသင်ခန်းစာက အရမ်းကောင်းတယ်။" } });
+  await controller.textToSpeech(req, res);
+
+  assert.equal(burmeseText, "မင်္ဂလာပါ၊ ဒီသင်ခန်းစာက အရမ်းကောင်းတယ်။");
+  assert.equal(res.headers["Content-Type"], "audio/mpeg");
+  assert.equal(res.body.toString(), "burmese-mp3-bytes");
+});
+
+test("textToSpeech reports 502 when the Burmese TTS service fails", async (t) => {
+  const controller = loadController(t, {
+    burmeseTextToSpeech: async () => {
+      const error = new Error("Edge TTS request failed: socket hang up");
+      error.code = "BURMESE_TTS_REQUEST_FAILED";
+      throw error;
+    },
+  });
+
+  const { req, res } = httpDouble({ body: { text: "ဟလို" } });
+  await controller.textToSpeech(req, res);
+
+  assert.equal(res.statusCode, 502);
+  assert.equal(res.body.code, "BURMESE_TTS_REQUEST_FAILED");
 });
 
 test("listUpcomingDeadlines returns undue assignments across every class this user teaches or is enrolled in, soonest first", async (t) => {

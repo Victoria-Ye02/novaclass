@@ -3,7 +3,7 @@ const router = express.Router();
 const multer = require("multer");
 const path = require("path");
 const auth = require("../../middleware/auth.middleware");
-const { analyzeFile } = require("../../controllers/victoria/multimodal.controller");
+const { analyzeFile, transcribe } = require("../../controllers/victoria/multimodal.controller");
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, "uploads/"),
@@ -19,5 +19,6 @@ const upload = multer({
 });
 
 router.post("/analyze", auth, upload.single("file"), analyzeFile);
+router.post("/transcribe", auth, upload.single("audio"), transcribe);
 
 module.exports = router;

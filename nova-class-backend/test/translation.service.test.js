@@ -35,13 +35,43 @@ test("splits long selected text and preserves translation order", async () => {
   assert.ok(requests.every(request => request.messages[1].content.length <= 5000));
 });
 
+test("translates selected text into Korean", async () => {
+  let request;
+  const translation = await translateText({
+    text: "understand",
+    targetLanguage: "ko",
+    completeText: async value => {
+      request = value;
+      return { choices: [{ message: { content: "이해하다" } }] };
+    },
+  });
+
+  assert.equal(translation, "이해하다");
+  assert.match(request.messages[0].content, /Korean/);
+});
+
+test("translates selected text into Vietnamese", async () => {
+  let request;
+  const translation = await translateText({
+    text: "understand",
+    targetLanguage: "vi",
+    completeText: async value => {
+      request = value;
+      return { choices: [{ message: { content: "hiểu" } }] };
+    },
+  });
+
+  assert.equal(translation, "hiểu");
+  assert.match(request.messages[0].content, /Vietnamese/);
+});
+
 test("rejects empty selected text and an unsupported target language", async () => {
   await assert.rejects(
     () => translateText({ text: "", targetLanguage: "my" }),
     /text is required/
   );
   await assert.rejects(
-    () => translateText({ text: "hello", targetLanguage: "ko" }),
-    /targetLanguage must be my or en/
+    () => translateText({ text: "hello", targetLanguage: "fr" }),
+    /targetLanguage must be my, en, ko, or vi/
   );
 });

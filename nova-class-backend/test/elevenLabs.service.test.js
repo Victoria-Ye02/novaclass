@@ -80,3 +80,97 @@ test("textToSpeech throws a coded error on a non-OK response", async () => {
     },
   );
 });
+
+test("speechToText posts the audio to Scribe with the API key and returns the transcript", async () => {
+  process.env.ELEVENLABS_API_KEY = "test-key";
+
+  let capturedUrl, capturedOptions;
+  global.fetch = async (url, options) => {
+    capturedUrl = url;
+    capturedOptions = options;
+    return { ok: true, json: async () => ({ text: "မင်္ဂလာပါ", language_code: "mya" }) };
+  };
+
+  const text = await service.speechToText(Buffer.from("audio-bytes"));
+
+  assert.equal(capturedUrl, "https://api.elevenlabs.io/v1/speech-to-text");
+  assert.equal(capturedOptions.headers["xi-api-key"], "test-key");
+  assert.ok(capturedOptions.body instanceof FormData);
+  assert.equal(capturedOptions.body.get("model_id"), "scribe_v1");
+  assert.equal(text, "မင်္ဂလာပါ");
+});
+
+test("speechToText throws a coded error without calling fetch when unconfigured", async () => {
+  delete process.env.ELEVENLABS_API_KEY;
+  global.fetch = async () => { throw new Error("fetch should not be called"); };
+
+  await assert.rejects(
+    () => service.speechToText(Buffer.from("audio-bytes")),
+    (err) => {
+      assert.equal(err.code, "ELEVENLABS_NOT_CONFIGURED");
+      return true;
+    },
+  );
+});
+
+test("speechToText throws a coded error on a non-OK response", async () => {
+  process.env.ELEVENLABS_API_KEY = "test-key";
+  global.fetch = async () => ({ ok: false, status: 401, text: async () => "missing permission speech_to_text" });
+
+  await assert.rejects(
+    () => service.speechToText(Buffer.from("audio-bytes")),
+    (err) => {
+      assert.equal(err.code, "ELEVENLABS_REQUEST_FAILED");
+      assert.match(err.message, /401/);
+      return true;
+    },
+  );
+});
+
+// A real client-side integration (@elevenlabs/client) replacing the drop-in
+// <elevenlabs-convai> widget needs this to authenticate a session without
+// ever exposing ELEVENLABS_API_KEY to the browser — the backend fetches a
+// short-lived signed WebSocket URL and hands only that to the frontend.
+test("getSignedUrl requests a signed URL for the given agent with the API key header", async () => {
+  process.env.ELEVENLABS_API_KEY = "test-key";
+
+  let capturedUrl, capturedOptions;
+  global.fetch = async (url, options) => {
+    capturedUrl = url;
+    capturedOptions = options;
+    return { ok: true, json: async () => ({ signed_url: "wss://api.elevenlabs.io/v1/convai/conversation?token=abc" }) };
+  };
+
+  const signedUrl = await service.getSignedUrl("agent_123");
+
+  assert.equal(capturedUrl, "https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id=agent_123");
+  assert.equal(capturedOptions.headers["xi-api-key"], "test-key");
+  assert.equal(signedUrl, "wss://api.elevenlabs.io/v1/convai/conversation?token=abc");
+});
+
+test("getSignedUrl throws a coded error without calling fetch when unconfigured", async () => {
+  delete process.env.ELEVENLABS_API_KEY;
+  global.fetch = async () => { throw new Error("fetch should not be called"); };
+
+  await assert.rejects(
+    () => service.getSignedUrl("agent_123"),
+    (err) => {
+      assert.equal(err.code, "ELEVENLABS_NOT_CONFIGURED");
+      return true;
+    },
+  );
+});
+
+test("getSignedUrl throws a coded error on a non-OK response", async () => {
+  process.env.ELEVENLABS_API_KEY = "test-key";
+  global.fetch = async () => ({ ok: false, status: 404, text: async () => "Agent not found" });
+
+  await assert.rejects(
+    () => service.getSignedUrl("agent_123"),
+    (err) => {
+      assert.equal(err.code, "ELEVENLABS_REQUEST_FAILED");
+      assert.match(err.message, /404/);
+      return true;
+    },
+  );
+});

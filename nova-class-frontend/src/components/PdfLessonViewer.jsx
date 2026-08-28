@@ -64,6 +64,7 @@ export default function PdfLessonViewer({
   const [translation, setTranslation] = useState(null); // null | { loading, text, error }
   const [activateHighlightId, setActivateHighlightId] = useState(null);
   const { lang } = useLang();
+  const viewerRootRef = useRef(null);
   const pageSurfaceRef = useRef(null);
   const wheelCooldownRef = useRef(false);
 
@@ -171,15 +172,19 @@ export default function PdfLessonViewer({
   }, [changeZoom, currentPage, goToPage, resetZoom, savedPagesOpen]);
 
   // Trackpad two-finger swipes turn pages. Without this, a horizontal swipe
-  // over the page falls straight through to the browser's native
-  // swipe-to-go-back/forward gesture instead — every attempted page turn
-  // silently pops a real history entry, so by the time the reader actually
-  // means to go back, history has already been walked back several steps
-  // and "back" appears to jump far past the classroom page it should land on.
+  // falls straight through to the browser's native swipe-to-go-back/forward
+  // gesture instead — every attempted page turn silently pops a real history
+  // entry, so by the time the reader actually means to go back, history has
+  // already been walked back several steps and "back" appears to jump far
+  // past the classroom page it should land on.
+  // Listens on the whole viewer (toolbar + thumbnail rail + page surface),
+  // not just the page surface: a swipe with the cursor over the sidebar or
+  // toolbar is just as capable of triggering that native gesture, and used
+  // to slip through unblocked.
   // { passive: false } is required for preventDefault() to actually suppress
   // that native gesture (React's own onWheel prop can't opt out of passive).
   useEffect(() => {
-    const el = pageSurfaceRef.current;
+    const el = viewerRootRef.current;
     if (!el) return;
 
     function onWheel(event) {
@@ -245,7 +250,7 @@ export default function PdfLessonViewer({
   }
 
   return (
-    <section className="pdf-lesson-viewer" aria-label={`PDF viewer: ${title}`}>
+    <section ref={viewerRootRef} className="pdf-lesson-viewer" aria-label={`PDF viewer: ${title}`}>
       <div className="pdf-viewer-toolbar" onClick={(event) => event.stopPropagation()}>
         <button
           type="button"

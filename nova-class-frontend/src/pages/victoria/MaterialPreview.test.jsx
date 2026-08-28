@@ -13,6 +13,7 @@ const { selectedLanguage, currentParams } = vi.hoisted(() => ({
 vi.mock("react-router-dom", () => ({
   useNavigate: () => navigate,
   useParams: () => currentParams,
+  useSearchParams: () => [new URLSearchParams()],
 }));
 
 vi.mock("../../LanguageContext", () => ({
@@ -265,32 +266,104 @@ describe("MaterialPreview PDF integration", () => {
   });
 
   describe("AI Chat voice mode", () => {
-    // A minimal fake of the browser SpeechRecognition API. Real instances are
-    // event-driven (onresult/onerror/onend callbacks fired by the browser as
-    // the user speaks); this lets tests drive that lifecycle by hand.
-    class FakeSpeechRecognition {
-      constructor() {
-        FakeSpeechRecognition.instances.push(this);
-        this.lang = "";
-        this.interimResults = false;
-        this.onresult = null;
-        this.onerror = null;
-        this.onend = null;
-      }
-      start() {}
-      stop() { this.onend?.(); }
-    }
-    FakeSpeechRecognition.instances = [];
+    // Voice input records raw audio (MediaRecorder) and transcribes it with
+    // Whisper server-side, rather than using the browser's own
+    // SpeechRecognition — so these fakes stand in for the Web Audio /
+    // MediaRecorder pipeline instead of a recognition API. The component's
+    // own voice-activity loop polls the fake analyser on each
+    // requestAnimationFrame tick and compares against Date.now(), so tests
+    // drive it by advancing a fake clock and firing queued rAF callbacks by
+    // hand — mirroring VOICE_MIN_SPEECH_MS / VOICE_SILENCE_TIMEOUT_MS from
+    // MaterialPreview.jsx.
+    const MIN_SPEECH_MS = 500;
+    const SILENCE_TIMEOUT_MS = 900;
 
-    function speechResult(transcript, { isFinal = true } = {}) {
-      const alt = { transcript };
-      const result = Object.assign([alt], { isFinal });
-      return { resultIndex: 0, results: [result] };
+    class FakeAnalyserNode {
+      constructor() { this.fftSize = 512; this.volume = 0; }
+      getByteTimeDomainData(data) {
+        const deviation = Math.min(127, Math.round(this.volume * 128));
+        for (let i = 0; i < data.length; i++) data[i] = 128 + (i % 2 === 0 ? deviation : -deviation);
+      }
+    }
+
+    class FakeAudioContext {
+      constructor() {
+        this.analyser = new FakeAnalyserNode();
+        FakeAudioContext.instances.push(this);
+      }
+      createMediaStreamSource() { return { connect: () => {} }; }
+      createAnalyser() { return this.analyser; }
+      close() { return Promise.resolve(); }
+    }
+    FakeAudioContext.instances = [];
+
+    class FakeMediaRecorder {
+      constructor(stream) {
+        this.stream = stream;
+        this.state = "inactive";
+        this.mimeType = "audio/webm";
+        this.ondataavailable = null;
+        this.onstop = null;
+        FakeMediaRecorder.instances.push(this);
+      }
+      start() { this.state = "recording"; }
+      stop() {
+        if (this.state === "inactive") return;
+        this.state = "inactive";
+        this.ondataavailable?.({ data: new Blob(["audio"], { type: this.mimeType }) });
+        this.onstop?.();
+      }
+    }
+    FakeMediaRecorder.instances = [];
+
+    function fakeMicStream() {
+      return { getTracks: () => [{ stop: vi.fn() }] };
+    }
+
+    let systemNow;
+    let rafCallbacks;
+
+    function tickVad() {
+      const callbacks = rafCallbacks;
+      rafCallbacks = [];
+      callbacks.forEach(cb => cb());
+    }
+
+    function advance(ms) { systemNow += ms; }
+
+    function setVolume(level) {
+      FakeAudioContext.instances[FakeAudioContext.instances.length - 1].analyser.volume = level;
+    }
+
+    // Drives a full listening turn from silence, through enough sustained
+    // "speech" to count as a real answer, back to silence past the timeout —
+    // the same three-tick shape the component's own loop needs to notice
+    // speech started, confirm it lasted, then notice it stopped.
+    async function completeListeningTurn() {
+      setVolume(0.5);
+      advance(50);
+      tickVad();
+      advance(MIN_SPEECH_MS + 100);
+      tickVad();
+      setVolume(0);
+      advance(SILENCE_TIMEOUT_MS + 100);
+      tickVad();
     }
 
     beforeEach(() => {
-      FakeSpeechRecognition.instances.length = 0;
-      vi.stubGlobal("SpeechRecognition", FakeSpeechRecognition);
+      FakeAudioContext.instances.length = 0;
+      FakeMediaRecorder.instances.length = 0;
+      systemNow = 1_000_000;
+      rafCallbacks = [];
+      vi.spyOn(Date, "now").mockImplementation(() => systemNow);
+      vi.stubGlobal("requestAnimationFrame", (cb) => { rafCallbacks.push(cb); return rafCallbacks.length; });
+      vi.stubGlobal("cancelAnimationFrame", () => {});
+      vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+      vi.stubGlobal("AudioContext", FakeAudioContext);
+      Object.defineProperty(window.navigator, "mediaDevices", {
+        value: { getUserMedia: vi.fn().mockResolvedValue(fakeMicStream()) },
+        configurable: true,
+      });
       vi.stubGlobal("SpeechSynthesisUtterance", function (text) { this.text = text; });
       vi.stubGlobal("speechSynthesis", { speak: vi.fn(), cancel: vi.fn() });
     });
@@ -301,14 +374,12 @@ describe("MaterialPreview PDF integration", () => {
       fireEvent.click(screen.getByLabelText("Open AI chat"));
       await screen.findByPlaceholderText("Ask about this lesson…");
       fireEvent.click(screen.getByLabelText("Start voice chat"));
+      await screen.findByText("Listening…");
     }
 
-    it("hides the microphone button when the browser has no SpeechRecognition support", async () => {
-      vi.unstubAllGlobals();
-      vi.stubGlobal("localStorage", {
-        getItem: vi.fn((key) => key === "nova_token" ? "test-token" : null),
-        setItem: vi.fn(), clear: vi.fn(),
-      });
+    it("hides the microphone button when the browser has no voice input support", async () => {
+      Object.defineProperty(window.navigator, "mediaDevices", { value: undefined, configurable: true });
+      vi.stubGlobal("MediaRecorder", undefined);
       render(<MaterialPreview />);
       await screen.findByTestId("controlled-pdf-viewer");
       fireEvent.click(screen.getByLabelText("Open AI chat"));
@@ -317,23 +388,27 @@ describe("MaterialPreview PDF integration", () => {
       expect(screen.queryByLabelText("Start voice chat")).toBeNull();
     });
 
-    it("opens the voice overlay and starts listening as soon as the mic button is tapped", async () => {
+    it("opens the voice overlay and starts recording as soon as the mic button is tapped", async () => {
       await openChatAndVoiceMode();
 
-      expect(screen.getByText("Listening…")).toBeTruthy();
-      expect(FakeSpeechRecognition.instances).toHaveLength(1);
+      expect(FakeMediaRecorder.instances).toHaveLength(1);
+      expect(FakeMediaRecorder.instances[0].state).toBe("recording");
     });
 
-    it("sends the final transcript to the assistant-mode AI endpoint and speaks the reply", async () => {
-      API.post.mockResolvedValueOnce({ data: { reply: "The mitochondria is the powerhouse of the cell." } });
+    it("transcribes the recording with Whisper, sends it to the assistant-mode AI endpoint, and speaks the reply", async () => {
+      API.post.mockImplementation((url) => {
+        if (url === "/multimodal/transcribe") return Promise.resolve({ data: { text: "what is the mitochondria" } });
+        if (url === "/classroom/materials/9/ai") return Promise.resolve({ data: { reply: "The mitochondria is the powerhouse of the cell." } });
+        return Promise.reject(new Error(`Unexpected POST ${url}`));
+      });
       await openChatAndVoiceMode();
-      const recognition = FakeSpeechRecognition.instances[0];
 
-      recognition.onresult(speechResult("what is the mitochondria"));
+      await completeListeningTurn();
 
+      await waitFor(() => expect(API.post).toHaveBeenCalledWith("/multimodal/transcribe", expect.any(FormData)));
       await waitFor(() => expect(API.post).toHaveBeenCalledWith(
         "/classroom/materials/9/ai",
-        expect.objectContaining({ mode: "assistant", message: "what is the mitochondria" }),
+        expect.objectContaining({ mode: "assistant", message: "what is the mitochondria", voice: true }),
       ));
       // Appears twice: once in the chat log behind the overlay, once as the
       // voice mode's on-screen caption of what the AI is saying.
@@ -341,27 +416,110 @@ describe("MaterialPreview PDF integration", () => {
         screen.getAllByText("The mitochondria is the powerhouse of the cell.").length
       ).toBeGreaterThanOrEqual(2));
       expect(screen.getByText("You: what is the mitochondria")).toBeTruthy();
-      expect(speechSynthesis.speak).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(speechSynthesis.speak).toHaveBeenCalledTimes(1));
       expect(screen.getByText("Speaking…")).toBeTruthy();
     });
 
-    it("returns to the ready state to talk again once speech finishes", async () => {
-      API.post.mockResolvedValueOnce({ data: { reply: "Answer." } });
+    it("cuts Nova off and starts capturing the student's question as soon as they start talking over her — no tap needed", async () => {
+      API.post.mockImplementation((url) => {
+        if (url === "/multimodal/transcribe") return Promise.resolve({ data: { text: "first question" } });
+        if (url === "/classroom/materials/9/ai") return Promise.resolve({ data: { reply: "First answer." } });
+        return Promise.reject(new Error(`Unexpected POST ${url}`));
+      });
       await openChatAndVoiceMode();
-      const recognition = FakeSpeechRecognition.instances[0];
-      recognition.onresult(speechResult("a question"));
+      await completeListeningTurn();
+      await waitFor(() => expect(speechSynthesis.speak).toHaveBeenCalledTimes(1));
+      expect(screen.getByText("Speaking…")).toBeTruthy();
+
+      // speak() starts a second recording segment purely to watch for a
+      // barge-in — not a fresh one the student had to ask for by tapping.
+      expect(FakeMediaRecorder.instances).toHaveLength(2);
+
+      // The student starts talking over Nova.
+      setVolume(0.5);
+      advance(50);
+      tickVad();
+
+      expect(speechSynthesis.cancel).toHaveBeenCalled();
+      expect(await screen.findByText("Listening…")).toBeTruthy();
+      // Continues the very same recording — interrupting doesn't spin up a
+      // third instance.
+      expect(FakeMediaRecorder.instances).toHaveLength(2);
+
+      // The same recording captures the rest of what they actually meant to
+      // say, exactly like a normal turn would.
+      API.post.mockImplementation((url) => {
+        if (url === "/multimodal/transcribe") return Promise.resolve({ data: { text: "wait actually never mind" } });
+        if (url === "/classroom/materials/9/ai") return Promise.resolve({ data: { reply: "Second answer." } });
+        return Promise.reject(new Error(`Unexpected POST ${url}`));
+      });
+      advance(MIN_SPEECH_MS + 100);
+      tickVad();
+      setVolume(0);
+      advance(SILENCE_TIMEOUT_MS + 100);
+      tickVad();
+
+      await waitFor(() => expect(API.post).toHaveBeenCalledWith(
+        "/classroom/materials/9/ai",
+        expect.objectContaining({ message: "wait actually never mind" }),
+      ));
+    });
+
+    it("automatically starts listening again once speech finishes, without needing another tap", async () => {
+      API.post.mockImplementation((url) => {
+        if (url === "/multimodal/transcribe") return Promise.resolve({ data: { text: "a question" } });
+        if (url === "/classroom/materials/9/ai") return Promise.resolve({ data: { reply: "Answer." } });
+        return Promise.reject(new Error(`Unexpected POST ${url}`));
+      });
+      await openChatAndVoiceMode();
+      await completeListeningTurn();
       await waitFor(() => expect(speechSynthesis.speak).toHaveBeenCalledTimes(1));
 
       const utterance = speechSynthesis.speak.mock.calls[0][0];
       utterance.onend();
 
-      expect(await screen.findByText("Tap to talk")).toBeTruthy();
+      expect(await screen.findByText("Listening…")).toBeTruthy();
+      // [0] the initial listening segment, [1] speak()'s barge-in watcher —
+      // reused in place as the next listening turn rather than a fresh
+      // third recorder.
+      expect(FakeMediaRecorder.instances).toHaveLength(2);
     });
 
-    it("stops recognition and cancels speech when voice mode is closed", async () => {
+    it("keeps listening (rather than going silent) when a recording ends with no speech captured", async () => {
       await openChatAndVoiceMode();
-      const recognition = FakeSpeechRecognition.instances[0];
-      const stopSpy = vi.spyOn(recognition, "stop");
+      const recorder = FakeMediaRecorder.instances[0];
+
+      recorder.stop(); // e.g. the max-turn safety cap, or any stop with nothing said
+
+      expect(await screen.findByText("Listening…")).toBeTruthy();
+      expect(FakeMediaRecorder.instances).toHaveLength(2);
+    });
+
+    it("returns to the ready state once speech finishes if voice mode was closed in the meantime", async () => {
+      API.post.mockImplementation((url) => {
+        if (url === "/multimodal/transcribe") return Promise.resolve({ data: { text: "a question" } });
+        if (url === "/classroom/materials/9/ai") return Promise.resolve({ data: { reply: "Answer." } });
+        return Promise.reject(new Error(`Unexpected POST ${url}`));
+      });
+      await openChatAndVoiceMode();
+      await completeListeningTurn();
+      await waitFor(() => expect(speechSynthesis.speak).toHaveBeenCalledTimes(1));
+      const utterance = speechSynthesis.speak.mock.calls[0][0];
+
+      fireEvent.click(screen.getByLabelText("Close voice chat"));
+      utterance.onend();
+
+      expect(screen.queryByText("Listening…")).toBeNull();
+      // [0] the initial listening segment, [1] the barge-in watcher from
+      // speak() — closing already stopped it; onend firing afterward
+      // shouldn't start a third.
+      expect(FakeMediaRecorder.instances).toHaveLength(2);
+    });
+
+    it("stops recording and cancels speech when voice mode is closed", async () => {
+      await openChatAndVoiceMode();
+      const recorder = FakeMediaRecorder.instances[0];
+      const stopSpy = vi.spyOn(recorder, "stop");
 
       fireEvent.click(screen.getByLabelText("Close voice chat"));
 
@@ -372,8 +530,8 @@ describe("MaterialPreview PDF integration", () => {
 
     it("also closes voice mode from the prominent End Voice Chat button", async () => {
       await openChatAndVoiceMode();
-      const recognition = FakeSpeechRecognition.instances[0];
-      const stopSpy = vi.spyOn(recognition, "stop");
+      const recorder = FakeMediaRecorder.instances[0];
+      const stopSpy = vi.spyOn(recorder, "stop");
 
       fireEvent.click(screen.getByText("End Voice Chat"));
 

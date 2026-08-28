@@ -38,4 +38,57 @@ async function textToSpeech(text, voiceId) {
   return Buffer.from(arrayBuffer);
 }
 
-module.exports = { textToSpeech, DEFAULT_VOICE_ID };
+// Short-lived (15 min) signed WebSocket URL for a Conversational AI agent —
+// lets the frontend's @elevenlabs/client SDK authenticate a real-time voice
+// session directly, without ever handing it ELEVENLABS_API_KEY. The
+// resulting session itself isn't time-limited by this URL's expiry; it only
+// needs to be valid at the moment the connection is opened.
+async function getSignedUrl(agentId) {
+  assertConfigured();
+  const res = await fetch(
+    `${ELEVENLABS_API_URL}/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(agentId)}`,
+    { headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY }, signal: AbortSignal.timeout(10000) }
+  );
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    const error = new Error(`ElevenLabs signed-url request failed: ${res.status} ${detail}`.slice(0, 300));
+    error.code = "ELEVENLABS_REQUEST_FAILED";
+    throw error;
+  }
+
+  const data = await res.json();
+  return data.signed_url;
+}
+
+// Speech-to-Text via the Scribe model. Used specifically for Burmese voice
+// input: Groq's whisper-large-v3 can't transcribe Burmese at all (it returns
+// script gibberish), whereas Scribe transcribes it accurately and auto-detects
+// the language. `audio` is a Buffer of the recorded clip; languageCode (an
+// ISO-639-3 code like "mya") is optional — Scribe auto-detects well without it.
+async function speechToText(audio, { filename = "audio.webm", languageCode } = {}) {
+  assertConfigured();
+  const form = new FormData();
+  form.append("file", new Blob([audio]), filename);
+  form.append("model_id", "scribe_v1");
+  if (languageCode) form.append("language_code", languageCode);
+
+  const res = await fetch(`${ELEVENLABS_API_URL}/speech-to-text`, {
+    method: "POST",
+    headers: { "xi-api-key": process.env.ELEVENLABS_API_KEY },
+    body: form,
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    const error = new Error(`ElevenLabs speech-to-text request failed: ${res.status} ${detail}`.slice(0, 300));
+    error.code = "ELEVENLABS_REQUEST_FAILED";
+    throw error;
+  }
+
+  const data = await res.json();
+  return (data.text || "").trim();
+}
+
+module.exports = { textToSpeech, getSignedUrl, speechToText, DEFAULT_VOICE_ID };

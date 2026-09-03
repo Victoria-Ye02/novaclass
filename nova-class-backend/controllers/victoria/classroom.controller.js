@@ -1026,6 +1026,11 @@ exports.uploadMaterial = async (req, res) => {
 // POST /api/classroom/materials/:materialId/ai
 exports.materialAI = async (req, res) => {
   const { action, message, history } = req.body;
+  const isTeacherMode = action === "chat" && req.body.mode === "teacher";
+  const allowedTeachingIntents = new Set(["start", "continue", "simplify", "check", "answer"]);
+  const teachingIntent = allowedTeachingIntents.has(req.body.teachingIntent)
+    ? req.body.teachingIntent
+    : "answer";
   try {
     const [mats] = await pool.query(
       `SELECT m.title, m.instructions, m.text_content, m.file_path,
@@ -1106,7 +1111,7 @@ exports.materialAI = async (req, res) => {
       fullText ? `Content:\n${fullText}` : null,
     ].filter(Boolean).join("\n\n");
 
-    if (action === "chat" && req.body.mode === "assistant") {
+    if (action === "chat" && (req.body.mode === "assistant" || isTeacherMode)) {
       const { lang, currentPage, totalPages, voice } = req.body;
 
       // The student picks whatever language they type in, question by
@@ -1120,9 +1125,15 @@ exports.materialAI = async (req, res) => {
       // found to make the model imitate that language's example wording —
       // e.g. the scope-refusal example below — even when the student's
       // question was in a different language entirely.
-      const langInstruction = `Detect the language the student's latest question (the final "user" message) is written in, and reply in that exact same language — regardless of what language this system prompt, the document, or earlier messages in the conversation are in. This matters most, not least, for short low-signal messages like a bare greeting ("Hello", "Hi", "ok") — a one-word English greeting means detect English and reply in English, even if the material below is written entirely in another language (e.g. a Korean-language lesson document). Never let the document's own language pull your reply toward it; only the student's actual words decide the reply language. Keep technical/domain terms in their original language (e.g. English or Korean) when there's no natural equivalent, but write the surrounding explanation in the detected language. This applies to every part of your reply, including if you have to say you can't answer something — that refusal must also be in the detected language, not translated from an English example.
+      const assistantLanguageInstruction = `Detect the language the student's latest question (the final "user" message) is written in, and reply in that exact same language — regardless of what language this system prompt, the document, or earlier messages in the conversation are in. This matters most, not least, for short low-signal messages like a bare greeting ("Hello", "Hi", "ok") — a one-word English greeting means detect English and reply in English, even if the material below is written entirely in another language (e.g. a Korean-language lesson document). Never let the document's own language pull your reply toward it; only the student's actual words decide the reply language. Keep technical/domain terms in their original language (e.g. English or Korean) when there's no natural equivalent, but write the surrounding explanation in the detected language. This applies to every part of your reply, including if you have to say you can't answer something — that refusal must also be in the detected language, not translated from an English example.
 
 Exception: if the student explicitly asks you to switch languages ("can we talk in Burmese?", "explain that in Vietnamese", "answer in Korean from now on") — even though that request itself is written in whatever language they typed it in — comply immediately and reply in the language they asked for, not the language their request happened to be written in. Keep replying in that requested language for the rest of the conversation unless they ask to switch again or clearly go back to typing/speaking in a different one.`;
+
+      const teacherLanguageNames = { my: "Burmese (Myanmar language)", ko: "Korean", vi: "Vietnamese", en: "English" };
+      const teacherLanguage = teacherLanguageNames[lang] || "English";
+      const langInstruction = isTeacherMode
+        ? `Teach in ${teacherLanguage}, the student's selected learning language. Keep technical terms from the material where useful, but make every explanation, example, and question understandable in ${teacherLanguage}.`
+        : assistantLanguageInstruction;
 
       const pageContext = currentPage && totalPages
         ? `The student is currently viewing page ${currentPage} of ${totalPages}.`
@@ -1181,9 +1192,20 @@ Exception: if the student explicitly asks you to switch languages ("can we talk 
       // A warm tutor persona rather than a flat "assistant" — explains instead
       // of reciting, encourages, checks understanding, and offers practice.
       // The voice/scope/honesty rules below still bound how it behaves.
-      const tutorPersona = `You are Nova, a warm and patient study tutor for this lesson's material. Be encouraging and never condescending — normalize confusion ("that part trips a lot of people up", not "that's easy"). Don't just repeat the material back: explain it, and reach for a short, concrete example or analogy when the student seems stuck on something. After explaining anything non-trivial, check in with a brief question ("does that make sense so far?") instead of lecturing on and on. If the student seems to want practice, offer one quick question drawn from this lesson and give warm, specific feedback on their answer — encouraging if they're wrong, brief praise if right, and always explain the correct answer either way.`;
+      const tutorPersona = isTeacherMode
+        ? `You are Professor Nova, an expert, warm, and patient teacher leading this exact lesson. You do not wait passively for questions and you never sound like a generic chatbot. Teach with confident professor energy: make the concept clear, connect it to an example, then check understanding. Be encouraging but never childish or condescending. Stay grounded in the material and make uncertainty explicit rather than inventing facts.`
+        : `You are Nova, a warm and patient study tutor for this lesson's material. Be encouraging and never condescending — normalize confusion ("that part trips a lot of people up", not "that's easy"). Don't just repeat the material back: explain it, and reach for a short, concrete example or analogy when the student seems stuck on something. After explaining anything non-trivial, check in with a brief question ("does that make sense so far?") instead of lecturing on and on. If the student seems to want practice, offer one quick question drawn from this lesson and give warm, specific feedback on their answer — encouraging if they're wrong, brief praise if right, and always explain the correct answer either way.`;
+
+      const teachingInstruction = !isTeacherMode ? "" : {
+        start: `Teaching intent: START. Open the lesson proactively. Give a one-sentence learning goal, explain one key concept from the current page in a short paragraph, give one concrete example or analogy, then ask exactly one brief check-understanding question. Do not ask what the student wants to do.`,
+        continue: `Teaching intent: CONTINUE. Continue the lesson from the last concept or current page. Introduce one next logical concept, explain why it matters, give a concrete example, then ask exactly one brief check-understanding question.`,
+        simplify: `Teaching intent: SIMPLIFY. Re-explain the current concept with simpler words and one different everyday analogy. Do not introduce a new topic. End with one brief check-understanding question.`,
+        check: `Teaching intent: CHECK. Ask exactly one short question that tests the concept currently being taught. Do not answer the question yet and do not introduce a new concept.`,
+        answer: `Teaching intent: ANSWER. Treat the student's latest message as a response or question inside the active lesson. First give supportive feedback. If there is a misunderstanding, correct the misunderstanding clearly and explain why; if it is correct, reinforce the precise idea. Then choose one next teaching step: either a short follow-up explanation or one brief question.`,
+      }[teachingIntent];
 
       const systemContent = `${tutorPersona} ${langInstruction} ${scopeInstruction} ${voiceInstruction}
+${teachingInstruction}
 ${pageContext}${currentPageBlock}
 
 Material content (full document):
@@ -1373,7 +1395,7 @@ Material: ${context.slice(0, 6000)}`;
 - Hard: an edge case, a common student misconception about this material, or a "which of these is NOT true" style question.
 Each wrong option should be a plausible mistake a real student would make, not a random distractor. In the explanation, say why the correct answer is right AND briefly why the most tempting wrong option is wrong.
 
-${materialAiLangInstruction} (keep the "A. "/"B. "/"C. "/"D. " option prefixes and the "answer" and "difficulty" values in English exactly as specified — only "question", the text after each option's letter prefix, and "explanation" follow the language instruction.)
+${materialAiLangInstruction} (keep the "A. "/"B. "/"C. "/"D. " option prefixes and the "answer" and "difficulty" values in English exactly as specified — only "question", the text after each option's letter prefix, and "explanation" follow the language instruction.) This applies even when the material itself is in a different language than the student reads (e.g. a Korean-language course syllabus) — do not copy the material's own sentences into "question" or the options verbatim in their original language just because they state an exact fact or exact course title; translate or paraphrase them into the target language like everything else. Only a single untranslatable technical term may stay in its original language, never a full clause or sentence.
 
 Return JSON: {"data":[{"question":"...","options":["A. ...","B. ...","C. ...","D. ..."],"answer":"A","explanation":"why correct is right, and why the closest wrong option is wrong","difficulty":"easy|medium|hard"}]}
 

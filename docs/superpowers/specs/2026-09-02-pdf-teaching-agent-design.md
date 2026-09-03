@@ -2,22 +2,22 @@
 
 ## Goal
 
-Turn the PDF-side AI from a reactive chat box into **Nova Teacher**, a lesson-scoped teaching agent. A student deliberately starts a lesson, then Nova explains the open PDF step-by-step, checks understanding, adapts after the student's answer, and remembers the lesson session when the PDF is reopened.
+Turn the PDF-side AI from a reactive chat box into **Nova Teacher**, a lesson-scoped teaching agent. Nova begins teaching automatically as soon as a student opens the material — no button, no waiting to be asked — then explains the open PDF step-by-step, checks understanding, adapts after the student's answer, and remembers the lesson session when the PDF is reopened.
 
 ## Product behavior
 
 ### Starting a lesson
 
-The existing collapsed chat handle becomes a clear **Nova Teacher** entry point. Opening it shows a short explanation and a primary **Start learning with Nova Teacher** button. Nova does not start talking simply because a PDF was opened; the student starts the session intentionally.
+Nova Teacher starts itself: as soon as the material's chat history has loaded, the panel sends a `start` (or, if a prior session exists for this material, `continue`) teaching request automatically — the student never has to ask to be taught. The chat handle still opens/collapses the panel as before, but that's purely a visibility toggle now; it does not gate whether the lesson has started.
 
-Pressing Start sends a `teaching_start` request with the material, current PDF page, total pages, UI language, and prior conversation. The agent responds in the student's current interface language with a compact first teaching turn:
+This request carries the material, current PDF page, total pages, UI language, and prior conversation. The agent responds in the student's current interface language with a compact first teaching turn:
 
 1. The learning goal for the current page/topic.
 2. One short explanation grounded in the material.
 3. One concrete example or analogy where useful.
 4. One short comprehension question.
 
-If an existing teaching conversation is restored for this material, the panel presents **Resume lesson** instead. It does not repeat the greeting or erase progress.
+If an existing teaching conversation is restored for this material, the auto-triggered request uses `continue` instead of `start`, so Nova picks up from where the student left off rather than repeating the greeting or erasing progress.
 
 ### Teaching turns
 

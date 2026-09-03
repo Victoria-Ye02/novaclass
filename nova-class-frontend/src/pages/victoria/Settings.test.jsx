@@ -73,7 +73,7 @@ describe("Settings profile + account", () => {
     API.delete.mockResolvedValueOnce({ data: { success: true } });
 
     render(<Settings />);
-    fireEvent.click(screen.getByText("Delete Account"));
+    fireEvent.click(screen.getByText("deleteAccountBtn"));
 
     await vi.waitFor(() => expect(API.delete).toHaveBeenCalledWith("/auth/me"));
     expect(confirm).toHaveBeenCalled();
@@ -85,7 +85,7 @@ describe("Settings profile + account", () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
 
     render(<Settings />);
-    fireEvent.click(screen.getByText("Delete Account"));
+    fireEvent.click(screen.getByText("deleteAccountBtn"));
 
     expect(API.delete).not.toHaveBeenCalled();
   });
@@ -96,7 +96,7 @@ describe("Settings profile + account", () => {
     });
 
     render(<Settings />);
-    fireEvent.click(screen.getByText("Delete Account"));
+    fireEvent.click(screen.getByText("deleteAccountBtn"));
 
     expect(await screen.findByText(/Cannot delete an account that owns classes/)).toBeTruthy();
     expect(navigate).not.toHaveBeenCalled();

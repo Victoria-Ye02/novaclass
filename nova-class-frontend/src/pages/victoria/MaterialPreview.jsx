@@ -58,18 +58,19 @@ const VOICE_MAX_TURN_MS = 20000;
 // talking". Tuned for a typical laptop mic in a normal room; a very noisy
 // room may need this raised to avoid false triggers.
 const VOICE_RMS_THRESHOLD = 0.02;
-function AIChatPanel({ materialId, currentPage, totalPages }) {
+function AIChatPanel({ materialId, currentPage, totalPages, panelVisible }) {
   const { lang } = useLang();
   const [messages, setMessages] = useState([
     {
       role: "assistant",
       text: lang === "my"
-        ? "👋 မင်္ဂလာပါ! ကျွန်ုပ်က သင့်ရဲ့ AI study assistant ပါ။ ဒီသင်ခန်းစာနဲ့ ပတ်သက်ပြီး ဘာမဆို မေးနိုင်ပါတယ်။"
-        : "👋 Hello! I'm your AI study assistant. Ask me anything about this lesson.",
+        ? "👋 မင်္ဂလာပါ။ ကျွန်ုပ်က ဒီသင်ခန်းစာကို ဦးဆောင်သင်ပေးမယ့် Professor Nova ပါ။"
+        : "👋 Hello. I'm Professor Nova, ready to guide you through this lesson.",
     },
   ]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [lessonStarted, setLessonStarted] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState("ready");
   const [voiceQuestion, setVoiceQuestion] = useState("");
@@ -119,6 +120,15 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
   useEffect(() => { voiceStatusRef.current = voiceStatus; }, [voiceStatus]);
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
+  // The lesson auto-starts from a mount-only effect (see below) whose
+  // sendMessage call was created at that mount's render — without this ref,
+  // it would permanently use whatever page the student was on at that
+  // instant, ignoring a page turn that lands (as it usually does) before the
+  // chat-history fetch resolves.
+  const currentPageRef = useRef(currentPage);
+  currentPageRef.current = currentPage;
+  const totalPagesRef = useRef(totalPages);
+  totalPagesRef.current = totalPages;
   const speechSupported = getVoiceInputSupport();
 
   useEffect(() => {
@@ -127,17 +137,33 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
 
   // AIChatPanel is remounted with key={materialId} (see MaterialPreview)
   // whenever the student switches lessons, so a plain mount-only effect here
-  // already loads the right lesson's history without needing materialId as
-  // a dependency. Replaces the default greeting only if there's a saved
-  // conversation to resume — an empty/failed fetch just leaves it as-is.
+  // already loads the right lesson's history and starts (or resumes) Nova
+  // Teacher automatically, without needing materialId as a dependency or a
+  // "Start learning" button — the student never has to ask to be taught.
+  // messagesRef is set directly (not left to the next render) so the
+  // sendMessage call immediately below sees the restored history instead of
+  // a stale empty array.
   useEffect(() => {
     let active = true;
-    API.get(`/classroom/materials/${materialId}/chat-history`)
-      .then(({ data }) => {
-        if (!active || !data.messages?.length) return;
-        setMessages(data.messages.map(m => ({ role: m.role, text: m.content })));
-      })
-      .catch(() => {});
+    (async () => {
+      let hasSaved = false;
+      try {
+        const { data } = await API.get(`/classroom/materials/${materialId}/chat-history`);
+        if (!active) return;
+        if (data.messages?.length) {
+          hasSaved = true;
+          const restored = data.messages.map(m => ({ role: m.role, text: m.content }));
+          setMessages(restored);
+          messagesRef.current = restored;
+        }
+      } catch { /* fall through to a fresh start */ }
+      if (!active) return;
+      setLessonStarted(true);
+      await sendMessage(
+        hasSaved ? "Resume this lesson from where we stopped." : "Start this lesson as my professor.",
+        { teachingIntent: hasSaved ? "continue" : "start" },
+      );
+    })();
     return () => { active = false; };
   }, [materialId]);
 
@@ -151,6 +177,18 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
       stopAllVoiceOutput();
     };
   }, []);
+
+  // AIChatPanel never unmounts when the chat sidebar is collapsed — the
+  // parent only slides it out of view with CSS (chatSlideContent) — so an
+  // open voice session would otherwise keep listening and replying
+  // indefinitely in the background, invisible, after the student closes the
+  // sidebar by its handle instead of the voice panel's own End Voice Chat/X
+  // button. Collapsing the sidebar must end any active voice session too.
+  const wasPanelVisibleRef = useRef(panelVisible);
+  useEffect(() => {
+    if (wasPanelVisibleRef.current && !panelVisible) closeVoiceMode();
+    wasPanelVisibleRef.current = panelVisible;
+  }, [panelVisible]);
 
   async function ensureMic() {
     if (micStreamRef.current) return micStreamRef.current;
@@ -202,7 +240,7 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
   // Shared by the text input's Send button and voice mode, so a spoken
   // question gets the exact same assistant-mode request and history as a
   // typed one. Returns the reply text so voice mode knows what to speak.
-  async function sendMessage(text, { voice = false } = {}) {
+  async function sendMessage(text, { voice = false, teachingIntent = null } = {}) {
     if (!text || sending) return null;
     setMessages(prev => [...prev, { role: "user", text }]);
     setSending(true);
@@ -213,11 +251,12 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
         .map(m => ({ role: m.role === "assistant" ? "assistant" : "user", content: m.text }));
       const { data } = await API.post(`/classroom/materials/${materialId}/ai`, {
         action: "chat",
-        mode: "assistant",
+        mode: teachingIntent || lessonStarted ? "teacher" : "assistant",
+        ...(teachingIntent || lessonStarted ? { teachingIntent: teachingIntent || "answer" } : {}),
         message: text,
         history,
-        currentPage,
-        totalPages,
+        currentPage: currentPageRef.current,
+        totalPages: totalPagesRef.current,
         lang,
         voice,
       });
@@ -232,9 +271,21 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
 
   async function send() {
     const text = input.trim();
-    if (!text || sending) return;
+    if (!text || sending || !lessonStarted) return;
     setInput("");
-    await sendMessage(text);
+    await sendMessage(text, { teachingIntent: "answer" });
+  }
+
+  async function continueLesson() {
+    await sendMessage("Continue the lesson with the next important concept.", { teachingIntent: "continue" });
+  }
+
+  async function simplifyLesson() {
+    await sendMessage("Please explain the current concept more simply.", { teachingIntent: "simplify" });
+  }
+
+  async function checkUnderstanding() {
+    await sendMessage("Check my understanding with one question.", { teachingIntent: "check" });
   }
 
   function openVoiceMode() {
@@ -480,11 +531,17 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
     <div style={chatPanel}>
       <div style={chatHeader}>
         <span style={{ display: "flex", alignItems: "center", gap: "7px", fontSize: "14px", fontWeight: 700, color: "var(--text)" }}>
-          <Icon name="chat" size={16} alt="" /> AI Chat
+          <Icon name="chat" size={16} alt="" /> Nova Teacher
         </span>
-        <span style={{ fontSize: "11px", color: "#22c55e", fontWeight: 600 }}>● ACTIVE</span>
+        <span style={{ fontSize: "11px", color: "#22c55e", fontWeight: 600 }}>{lessonStarted ? "● TEACHING" : "● READY"}</span>
       </div>
       <div style={chatMessages}>
+        {!lessonStarted && (
+          <div style={teacherStartCard}>
+            <strong>Professor-led lesson</strong>
+            <span>Nova is preparing your lesson — she'll explain this PDF step by step, use examples, and check your understanding.</span>
+          </div>
+        )}
         {messages.map((m, i) => (
           <div key={i} style={m.role === "user" ? userBubbleWrap : aiBubbleWrap}>
             <div style={m.role === "user" ? userBubble : aiBubble}>{m.text}</div>
@@ -495,23 +552,30 @@ function AIChatPanel({ materialId, currentPage, totalPages }) {
             <div style={{ ...aiBubble, color: "var(--text-faint)", fontStyle: "italic" }}>Thinking…</div>
           </div>
         )}
+        {lessonStarted && (
+          <div style={teacherActions} aria-label="Nova Teacher lesson actions">
+            <button type="button" style={teacherActionButton} onClick={continueLesson} disabled={sending}>Continue lesson</button>
+            <button type="button" style={teacherActionButton} onClick={simplifyLesson} disabled={sending}>Explain simply</button>
+            <button type="button" style={teacherActionButton} onClick={checkUnderstanding} disabled={sending}>Check my understanding</button>
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
       <div style={chatInputRow}>
         <input
           style={chatInput}
-          placeholder="Ask about this lesson…"
+          placeholder={lessonStarted ? "Ask Professor Nova about this lesson…" : "Start the lesson to learn with Nova Teacher…"}
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key === "Enter" && !e.shiftKey && send()}
-          disabled={sending}
+          disabled={sending || !lessonStarted}
         />
         {speechSupported && (
-          <button type="button" style={micBtn} onClick={openVoiceMode} aria-label="Start voice chat">
+          <button type="button" style={micBtn} onClick={openVoiceMode} aria-label="Start voice chat" disabled={!lessonStarted}>
             <Icon name="microphone" size={16} alt="" />
           </button>
         )}
-        <button style={sendBtn} onClick={send} disabled={sending || !input.trim()} aria-label="Send message">
+        <button style={sendBtn} onClick={send} disabled={sending || !lessonStarted || !input.trim()} aria-label="Send message">
           <Icon name="sent" size={16} alt="" style={{ filter: "brightness(0) invert(1)" }} />
         </button>
       </div>
@@ -872,6 +936,7 @@ export default function MaterialPreview({ isOverlay = false }) {
                 materialId={materialId}
                 currentPage={pdfPageState.currentPage}
                 totalPages={pdfPageState.totalPages}
+                panelVisible={splitChat}
               />
             </div>
           </div>
@@ -1053,6 +1118,19 @@ const chatHeader = {
 const chatMessages = {
   flex: 1, minHeight: 0, overflowY: "auto", padding: "12px 14px",
   display: "flex", flexDirection: "column", gap: "10px",
+};
+
+const teacherStartCard = {
+  display: "flex", flexDirection: "column", gap: "8px", padding: "14px",
+  borderRadius: "12px", background: "linear-gradient(135deg, #EEF2FF, #F8FAFF)",
+  border: "1px solid #C7D2FE", color: "#312E81", fontSize: "13px", lineHeight: 1.45,
+};
+
+const teacherActions = { display: "flex", flexWrap: "wrap", gap: "7px", marginTop: "2px" };
+
+const teacherActionButton = {
+  background: "#EEF2FF", color: "#4338CA", border: "1px solid #C7D2FE", borderRadius: "999px",
+  padding: "7px 10px", fontSize: "11px", fontWeight: 700, cursor: "pointer",
 };
 
 const aiBubbleWrap = { display: "flex", justifyContent: "flex-start" };

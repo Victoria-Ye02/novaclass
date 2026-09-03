@@ -20,7 +20,6 @@ export default function Settings() {
   const [deleting, setDeleting] = useState(false);
   const { lang, changeLang, t } = useLang();
   const { theme, toggleTheme } = useTheme();
-  const my = lang === "my";
   const navigate = useNavigate();
 
   async function save() {
@@ -32,16 +31,12 @@ export default function Settings() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
-      setError(apiErrorText(err, my ? "သိမ်းဆည်း၍ မရပါ" : "Couldn't save changes"));
+      setError(apiErrorText(err, t("couldntSave")));
     }
   }
 
   async function deleteAccount() {
-    const confirmed = window.confirm(
-      my
-        ? "အကောင့်ကို အပြီးတိုင် ဖျက်ပစ်မှာ သေချာပါသလား? ဒါကို ပြန်ပြင်လို့ မရပါ။"
-        : "Are you sure you want to permanently delete your account? This cannot be undone.",
-    );
+    const confirmed = window.confirm(t("confirmDeleteAccount"));
     if (!confirmed) return;
 
     setError(""); setDeleting(true);
@@ -53,7 +48,7 @@ export default function Settings() {
       localStorage.removeItem("nova_email");
       navigate("/login");
     } catch (err) {
-      setError(apiErrorText(err, my ? "အကောင့် ဖျက်၍ မရပါ" : "Couldn't delete account"));
+      setError(apiErrorText(err, t("couldntDeleteAccount")));
       setDeleting(false);
     }
   }
@@ -65,7 +60,7 @@ export default function Settings() {
         <div style={s.topbar}>
           <div>
             <h2 style={s.title}>⚙️ {t("settingsTitle")}</h2>
-            <p style={s.sub}>{my ? "အကောင့်နှင့် ဦးစားပေးများ စီမံပါ" : "Manage your account and preferences"}</p>
+            <p style={s.sub}>{t("manageAccountPrefs")}</p>
           </div>
         </div>
 
@@ -81,7 +76,7 @@ export default function Settings() {
               </div>
             </div>
             <div style={s.field}>
-              <label style={s.label}>{my ? "ပြသမည့် အမည်" : "Display Name"}</label>
+              <label style={s.label}>{t("displayName")}</label>
               <input style={s.inp} value={name} onChange={e => setName(e.target.value)} />
             </div>
             <div style={s.field}>
@@ -118,8 +113,8 @@ export default function Settings() {
 
             <div style={{ ...s.toggleRow, marginTop: "20px" }}>
               <div>
-                <div style={s.toggleLabel}>{my ? "အသိပေးချက်" : "Notifications"}</div>
-                <div style={s.toggleSub}>{my ? "စစ်ဆေးမှုများ အတွက် သတိပေးချက်" : "Get alerts for upcoming exams"}</div>
+                <div style={s.toggleLabel}>{t("notifications")}</div>
+                <div style={s.toggleSub}>{t("notificationsDesc")}</div>
               </div>
               <div style={{ ...s.toggle, background: notif ? "var(--primary)" : "var(--border)" }}
                 onClick={() => setNotif(!notif)}>
@@ -130,14 +125,14 @@ export default function Settings() {
 
           {/* Appearance */}
           <div style={s.card}>
-            <h3 style={s.cardTitle}>🎨 {my ? "အသွင်အပြင်" : "Appearance"}</h3>
+            <h3 style={s.cardTitle}>🎨 {t("appearance")}</h3>
             <p style={{ fontSize: "13px", color: "var(--text-muted)", marginBottom: "16px" }}>
-              {my ? "အလင်းရောင် သို့မဟုတ် အမှောင် mode ရွေးချယ်ပါ" : "Choose a light or dark theme"}
+              {t("appearanceDesc")}
             </p>
             <div style={s.langRow}>
               {[
-                { code: "light", icon: "☀️", label: my ? "အလင်း" : "Light" },
-                { code: "dark", icon: "🌙", label: my ? "အမှောင်" : "Dark" },
+                { code: "light", icon: "☀️", label: t("light") },
+                { code: "dark", icon: "🌙", label: t("dark") },
               ].map(o => (
                 <div key={o.code}
                   onClick={() => { if (theme !== o.code) toggleTheme(); }}
@@ -172,17 +167,17 @@ export default function Settings() {
           <div style={s.card}>
             <h3 style={s.cardTitle}>🔐 {t("account")}</h3>
             <div style={s.field}>
-              <label style={s.label}>{my ? "လက်ရှိ စကားဝှက်" : "Current Password"}</label>
+              <label style={s.label}>{t("currentPassword")}</label>
               <input style={s.inp} type="password" placeholder="••••••••" />
             </div>
             <div style={s.field}>
-              <label style={s.label}>{my ? "စကားဝှက် အသစ်" : "New Password"}</label>
+              <label style={s.label}>{t("newPassword")}</label>
               <input style={s.inp} type="password" placeholder="••••••••" />
             </div>
             <div style={s.dangerZone}>
-              <div style={s.dangerTitle}>⚠️ {my ? "အန္တရာယ်ဇုန်" : "Danger Zone"}</div>
+              <div style={s.dangerTitle}>⚠️ {t("dangerZone")}</div>
               <button style={s.dangerBtn} onClick={deleteAccount} disabled={deleting}>
-                {deleting ? (my ? "ဖျက်နေသည်..." : "Deleting...") : (my ? "အကောင့် ဖျက်မည်" : "Delete Account")}
+                {deleting ? t("deletingAccount") : t("deleteAccountBtn")}
               </button>
             </div>
           </div>
@@ -190,7 +185,7 @@ export default function Settings() {
 
         <div style={s.saveRow}>
           {error && <span style={s.errorMsg}>⚠️ {error}</span>}
-          {saved && <span style={s.savedMsg}>✅ {my ? "သိမ်းဆည်းပြီး!" : "Settings saved!"}</span>}
+          {saved && <span style={s.savedMsg}>✅ {t("settingsSaved")}</span>}
           <button style={s.saveBtn} onClick={save}>{t("saveChanges")}</button>
         </div>
       </main>

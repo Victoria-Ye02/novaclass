@@ -5,6 +5,7 @@ const service = require("../services/ai/elevenLabs");
 const originalFetch = global.fetch;
 const originalApiKey = process.env.ELEVENLABS_API_KEY;
 const originalVoiceId = process.env.ELEVENLABS_VOICE_ID;
+const originalTtsModelId = process.env.ELEVENLABS_TTS_MODEL_ID;
 
 test.afterEach(() => {
   global.fetch = originalFetch;
@@ -12,6 +13,8 @@ test.afterEach(() => {
   else process.env.ELEVENLABS_API_KEY = originalApiKey;
   if (originalVoiceId === undefined) delete process.env.ELEVENLABS_VOICE_ID;
   else process.env.ELEVENLABS_VOICE_ID = originalVoiceId;
+  if (originalTtsModelId === undefined) delete process.env.ELEVENLABS_TTS_MODEL_ID;
+  else process.env.ELEVENLABS_TTS_MODEL_ID = originalTtsModelId;
 });
 
 test("textToSpeech posts to the default voice with the API key header and returns audio bytes", async () => {
@@ -30,7 +33,7 @@ test("textToSpeech posts to the default voice with the API key header and return
 
   const audio = await service.textToSpeech("Hello there");
 
-  assert.equal(capturedUrl, "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM");
+  assert.equal(capturedUrl, "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM?optimize_streaming_latency=3");
   assert.equal(capturedOptions.headers["xi-api-key"], "test-key");
   assert.equal(JSON.parse(capturedOptions.body).text, "Hello there");
   assert.ok(Buffer.isBuffer(audio));
@@ -48,10 +51,42 @@ test("textToSpeech uses ELEVENLABS_VOICE_ID when set, overridable per call", asy
   };
 
   await service.textToSpeech("hi");
-  assert.match(capturedUrl, /\/env-voice-id$/);
+  assert.match(capturedUrl, /\/env-voice-id\?optimize_streaming_latency=3$/);
 
   await service.textToSpeech("hi", "explicit-voice-id");
-  assert.match(capturedUrl, /\/explicit-voice-id$/);
+  assert.match(capturedUrl, /\/explicit-voice-id\?optimize_streaming_latency=3$/);
+});
+
+test("textToSpeech defaults to ElevenLabs Flash with latency optimization", async () => {
+  process.env.ELEVENLABS_API_KEY = "test-key";
+  delete process.env.ELEVENLABS_TTS_MODEL_ID;
+
+  let capturedUrl, capturedOptions;
+  global.fetch = async (url, options) => {
+    capturedUrl = url;
+    capturedOptions = options;
+    return { ok: true, arrayBuffer: async () => new ArrayBuffer(0) };
+  };
+
+  await service.textToSpeech("Teach me about databases");
+
+  assert.match(capturedUrl, /optimize_streaming_latency=3/);
+  assert.equal(JSON.parse(capturedOptions.body).model_id, "eleven_flash_v2_5");
+});
+
+test("textToSpeech honors ELEVENLABS_TTS_MODEL_ID for quality-first playback", async () => {
+  process.env.ELEVENLABS_API_KEY = "test-key";
+  process.env.ELEVENLABS_TTS_MODEL_ID = "eleven_turbo_v2_5";
+
+  let capturedOptions;
+  global.fetch = async (_url, options) => {
+    capturedOptions = options;
+    return { ok: true, arrayBuffer: async () => new ArrayBuffer(0) };
+  };
+
+  await service.textToSpeech("Teach me about databases");
+
+  assert.equal(JSON.parse(capturedOptions.body).model_id, "eleven_turbo_v2_5");
 });
 
 test("textToSpeech throws a coded error without calling fetch when unconfigured", async () => {

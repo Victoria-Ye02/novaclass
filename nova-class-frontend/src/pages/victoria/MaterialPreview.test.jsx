@@ -174,30 +174,76 @@ describe("MaterialPreview PDF integration", () => {
     expect(preparePdf).toHaveBeenCalledWith({ numPages: 3, getPage: expect.any(Function) });
   });
 
-  it("sends the current page to the AI chat in assistant mode, not the quiz-tutor level", async () => {
-    API.post.mockResolvedValue({ data: { reply: "Sure, here's page 2." } });
+  it("sends the student's current page on every teacher request, including after they turn a page mid-lesson", async () => {
+    API.post
+      .mockResolvedValueOnce({ data: { reply: "Sure, here's page 1." } })
+      .mockResolvedValueOnce({ data: { reply: "Now on page 2." } });
     render(<MaterialPreview />);
     await screen.findByTestId("controlled-pdf-viewer");
+    fireEvent.click(screen.getByLabelText("Open AI chat"));
+    await screen.findByText("Sure, here's page 1.");
+    const [, startBody] = API.post.mock.calls[0];
+    expect(startBody.level).toBeUndefined();
 
     fireEvent.click(screen.getByRole("button", { name: "Trigger page change" }));
-    fireEvent.click(screen.getByLabelText("Open AI chat"));
+    fireEvent.click(screen.getByRole("button", { name: "Continue lesson" }));
 
-    const input = await screen.findByPlaceholderText("Ask about this lesson…");
-    fireEvent.change(input, { target: { value: "explain this page" } });
-    fireEvent.click(screen.getByLabelText("Send message"));
+    await waitFor(() => expect(API.post).toHaveBeenLastCalledWith(
+      "/classroom/materials/9/ai",
+      expect.objectContaining({ mode: "teacher", teachingIntent: "continue", currentPage: 2, totalPages: 41 })
+    ));
+  });
+
+  it("starts Nova Teacher automatically as soon as the material loads, without waiting for the chat panel to be opened", async () => {
+    API.post.mockResolvedValue({ data: { reply: "Today we will learn about databases." } });
+    render(<MaterialPreview />);
+    await screen.findByTestId("controlled-pdf-viewer");
 
     await waitFor(() => expect(API.post).toHaveBeenCalledWith(
       "/classroom/materials/9/ai",
       expect.objectContaining({
         action: "chat",
-        mode: "assistant",
-        message: "explain this page",
-        currentPage: 2,
-        totalPages: 41,
+        mode: "teacher",
+        teachingIntent: "start",
+        currentPage: 1,
       })
     ));
-    const [, body] = API.post.mock.calls[0];
-    expect(body.level).toBeUndefined();
+  });
+
+  it("continues a Nova Teacher lesson from the quick action", async () => {
+    API.post
+      .mockResolvedValueOnce({ data: { reply: "A database stores organized data." } })
+      .mockResolvedValueOnce({ data: { reply: "Now let's learn about tables." } });
+    render(<MaterialPreview />);
+    await screen.findByTestId("controlled-pdf-viewer");
+
+    fireEvent.click(screen.getByLabelText("Open AI chat"));
+    await screen.findByText("A database stores organized data.");
+    fireEvent.click(screen.getByRole("button", { name: "Continue lesson" }));
+
+    await waitFor(() => expect(API.post).toHaveBeenLastCalledWith(
+      "/classroom/materials/9/ai",
+      expect.objectContaining({ mode: "teacher", teachingIntent: "continue" })
+    ));
+    await screen.findByText("Now let's learn about tables.");
+  });
+
+  it("resumes (rather than restarts) a lesson this material already has saved history for", async () => {
+    API.get.mockImplementation((url) => {
+      if (url.includes("chat-history")) {
+        return Promise.resolve({ data: { messages: [{ role: "assistant", content: "We learned about primary keys." }] } });
+      }
+      return Promise.resolve({ data: pdfMaterial() });
+    });
+    API.post.mockResolvedValue({ data: { reply: "Welcome back — let's continue." } });
+    render(<MaterialPreview />);
+    await screen.findByTestId("controlled-pdf-viewer");
+
+    await waitFor(() => expect(API.post).toHaveBeenCalledWith(
+      "/classroom/materials/9/ai",
+      expect.objectContaining({ mode: "teacher", teachingIntent: "continue" })
+    ));
+    expect(await screen.findByText("We learned about primary keys.")).toBeTruthy();
   });
 
   it("sends the Settings-selected language to the AI chat instead of always English", async () => {
@@ -206,11 +252,6 @@ describe("MaterialPreview PDF integration", () => {
       API.post.mockResolvedValue({ data: { reply: "မိုက်တိုကွန်ဒရီယာ..." } });
       render(<MaterialPreview />);
       await screen.findByTestId("controlled-pdf-viewer");
-
-      fireEvent.click(screen.getByLabelText("Open AI chat"));
-      const input = await screen.findByPlaceholderText("Ask about this lesson…");
-      fireEvent.change(input, { target: { value: "explain this page" } });
-      fireEvent.click(screen.getByLabelText("Send message"));
 
       await waitFor(() => expect(API.post).toHaveBeenCalledWith(
         "/classroom/materials/9/ai",
@@ -228,9 +269,6 @@ describe("MaterialPreview PDF integration", () => {
     await screen.findByTestId("controlled-pdf-viewer");
 
     fireEvent.click(screen.getByLabelText("Open AI chat"));
-    const input = await screen.findByPlaceholderText("Ask about this lesson…");
-    fireEvent.change(input, { target: { value: "explain this lesson" } });
-    fireEvent.click(screen.getByLabelText("Send message"));
 
     await screen.findByText("This lesson covers the POS system's Java/JDBC implementation.");
 
@@ -242,8 +280,7 @@ describe("MaterialPreview PDF integration", () => {
     await screen.findByTestId("controlled-pdf-viewer");
 
     expect(screen.queryByText("This lesson covers the POS system's Java/JDBC implementation.")).toBeNull();
-    expect(screen.queryByText("explain this lesson")).toBeNull();
-    expect(screen.getByText("👋 Hello! I'm your AI study assistant. Ask me anything about this lesson.")).toBeTruthy();
+    expect(screen.getByText("👋 Hello. I'm Professor Nova, ready to guide you through this lesson.")).toBeTruthy();
   });
 
   it("passes a referentially stable onPageChange callback across re-renders (regression: an inline callback here previously caused an infinite render loop)", async () => {
@@ -372,7 +409,10 @@ describe("MaterialPreview PDF integration", () => {
       render(<MaterialPreview />);
       await screen.findByTestId("controlled-pdf-viewer");
       fireEvent.click(screen.getByLabelText("Open AI chat"));
-      await screen.findByPlaceholderText("Ask about this lesson…");
+      await waitFor(() => expect(API.post).toHaveBeenCalledWith(
+        "/classroom/materials/9/ai",
+        expect.objectContaining({ mode: "teacher", teachingIntent: "start" }),
+      ));
       fireEvent.click(screen.getByLabelText("Start voice chat"));
       await screen.findByText("Listening…");
     }
@@ -383,7 +423,10 @@ describe("MaterialPreview PDF integration", () => {
       render(<MaterialPreview />);
       await screen.findByTestId("controlled-pdf-viewer");
       fireEvent.click(screen.getByLabelText("Open AI chat"));
-      await screen.findByPlaceholderText("Ask about this lesson…");
+      await waitFor(() => expect(API.post).toHaveBeenCalledWith(
+        "/classroom/materials/9/ai",
+        expect.objectContaining({ mode: "teacher", teachingIntent: "start" }),
+      ));
 
       expect(screen.queryByLabelText("Start voice chat")).toBeNull();
     });
@@ -395,7 +438,7 @@ describe("MaterialPreview PDF integration", () => {
       expect(FakeMediaRecorder.instances[0].state).toBe("recording");
     });
 
-    it("transcribes the recording with Whisper, sends it to the assistant-mode AI endpoint, and speaks the reply", async () => {
+    it("transcribes the recording, sends it to Nova Teacher, and speaks the reply", async () => {
       API.post.mockImplementation((url) => {
         if (url === "/multimodal/transcribe") return Promise.resolve({ data: { text: "what is the mitochondria" } });
         if (url === "/classroom/materials/9/ai") return Promise.resolve({ data: { reply: "The mitochondria is the powerhouse of the cell." } });
@@ -408,7 +451,7 @@ describe("MaterialPreview PDF integration", () => {
       await waitFor(() => expect(API.post).toHaveBeenCalledWith("/multimodal/transcribe", expect.any(FormData)));
       await waitFor(() => expect(API.post).toHaveBeenCalledWith(
         "/classroom/materials/9/ai",
-        expect.objectContaining({ mode: "assistant", message: "what is the mitochondria", voice: true }),
+        expect.objectContaining({ mode: "teacher", teachingIntent: "answer", message: "what is the mitochondria", voice: true }),
       ));
       // Appears twice: once in the chat log behind the overlay, once as the
       // voice mode's on-screen caption of what the AI is saying.
@@ -537,6 +580,21 @@ describe("MaterialPreview PDF integration", () => {
 
       expect(stopSpy).toHaveBeenCalled();
       expect(screen.queryByText("Listening…")).toBeNull();
+    });
+
+    // AIChatPanel never unmounts when the sidebar is collapsed — it only
+    // slides out of view with CSS — so a voice session left open would
+    // otherwise keep listening and replying indefinitely in the background,
+    // invisible, once the student collapses the sidebar by its handle
+    // instead of using the voice panel's own End Voice Chat/X button.
+    it("also stops the mic when the chat sidebar itself is collapsed, not just via the voice panel's own close button", async () => {
+      await openChatAndVoiceMode();
+      const recorder = FakeMediaRecorder.instances[0];
+      const stopSpy = vi.spyOn(recorder, "stop");
+
+      fireEvent.click(screen.getByLabelText("Close AI chat"));
+
+      expect(stopSpy).toHaveBeenCalled();
     });
   });
 });

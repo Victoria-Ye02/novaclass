@@ -102,6 +102,86 @@ test.afterEach(() => {
   global.fetch = originalFetch;
 });
 
+test("teacher-mode chat grounds Nova in the current PDF page and starts a professor-led lesson", async (t) => {
+  global.fetch = async () => { throw new Error("RAG unavailable in test"); };
+  pool.query = async (sql) => {
+    if (sql.includes("FROM materials")) {
+      return [[{
+        title: "Database Lesson",
+        instructions: null,
+        text_content: "\f<<PAGE 1>>\fIntroduction\n\n\f<<PAGE 2>>\fA primary key uniquely identifies every row in a table.",
+        summary_paragraph: null,
+        summary_detailed: null,
+      }]];
+    }
+    if (sql.includes("material_chat_cache")) throw new Error("Teacher mode must not use generic chat cache");
+    return [[]];
+  };
+
+  let capturedMessages;
+  const controller = loadController(t, {
+    completeText: async (request) => {
+      capturedMessages = request.messages;
+      return { choices: [{ message: { content: "Let's begin." } }] };
+    },
+  });
+
+  const { req, res } = httpDouble({
+    params: { materialId: "9" },
+    body: {
+      action: "chat", mode: "teacher", teachingIntent: "start",
+      message: "Start this lesson as my professor.", history: [],
+      currentPage: 2, totalPages: 2, lang: "en",
+    },
+  });
+
+  await controller.materialAI(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.reply, "Let's begin.");
+  const systemMessage = capturedMessages.find((m) => m.role === "system").content;
+  assert.match(systemMessage, /A primary key uniquely identifies every row/i);
+  assert.match(systemMessage, /learning goal/i);
+  assert.match(systemMessage, /example/i);
+  assert.match(systemMessage, /check.*understanding/i);
+  assert.doesNotMatch(systemMessage, /Level Up AI Study Tutor/i);
+});
+
+test("teacher-mode answer asks Nova to give supportive feedback before the next teaching step", async (t) => {
+  global.fetch = async () => { throw new Error("RAG unavailable in test"); };
+  pool.query = async (sql) => {
+    if (sql.includes("FROM materials")) {
+      return [[{ title: "Database Lesson", instructions: null, text_content: "A primary key is unique.", summary_paragraph: null, summary_detailed: null }]];
+    }
+    return [[]];
+  };
+
+  let capturedMessages;
+  const controller = loadController(t, {
+    completeText: async (request) => {
+      capturedMessages = request.messages;
+      return { choices: [{ message: { content: "Good thinking." } }] };
+    },
+  });
+
+  const { req, res } = httpDouble({
+    params: { materialId: "9" },
+    body: {
+      action: "chat", mode: "teacher", teachingIntent: "answer", message: "It identifies a row.",
+      history: [{ role: "assistant", content: "Quick check: what does a primary key do?" }],
+      currentPage: 1, totalPages: 1, lang: "en",
+    },
+  });
+
+  await controller.materialAI(req, res);
+
+  assert.equal(res.statusCode, 200);
+  const systemMessage = capturedMessages.find((m) => m.role === "system").content;
+  assert.match(systemMessage, /supportive feedback/i);
+  assert.match(systemMessage, /correct.*misunderstanding/i);
+  assert.match(systemMessage, /next teaching step/i);
+});
+
 test("assistant-mode chat sends a plain-assistant system prompt with the current page, not the quiz-tutor prompt", async (t) => {
   global.fetch = async () => { throw new Error("RAG unavailable in test"); };
   pool.query = async (sql) => {

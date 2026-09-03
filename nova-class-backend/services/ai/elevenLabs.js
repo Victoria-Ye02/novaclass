@@ -1,6 +1,10 @@
 const ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1";
 // "Rachel" — ElevenLabs' original default premade voice, stable across accounts.
 const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+// Flash prioritizes time-to-first-audio, which is the right default for a live
+// teaching conversation. A demo can still select a quality-first model (such
+// as eleven_multilingual_v2) with ELEVENLABS_TTS_MODEL_ID.
+const DEFAULT_TTS_MODEL_ID = "eleven_flash_v2_5";
 
 function assertConfigured() {
   if (process.env.ELEVENLABS_API_KEY) return;
@@ -11,7 +15,9 @@ function assertConfigured() {
 
 async function textToSpeech(text, voiceId) {
   assertConfigured();
-  const res = await fetch(`${ELEVENLABS_API_URL}/text-to-speech/${voiceId || process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID}`, {
+  const activeVoiceId = voiceId || process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID;
+  const modelId = process.env.ELEVENLABS_TTS_MODEL_ID || DEFAULT_TTS_MODEL_ID;
+  const res = await fetch(`${ELEVENLABS_API_URL}/text-to-speech/${activeVoiceId}?optimize_streaming_latency=3`, {
     method: "POST",
     headers: {
       "xi-api-key": process.env.ELEVENLABS_API_KEY,
@@ -20,8 +26,7 @@ async function textToSpeech(text, voiceId) {
     },
     body: JSON.stringify({
       text,
-      // Multilingual model: this app's lessons and chat span English, Korean, and Myanmar.
-      model_id: "eleven_multilingual_v2",
+      model_id: modelId,
       voice_settings: { stability: 0.5, similarity_boost: 0.75 },
     }),
     signal: AbortSignal.timeout(20000),
@@ -91,4 +96,4 @@ async function speechToText(audio, { filename = "audio.webm", languageCode } = {
   return (data.text || "").trim();
 }
 
-module.exports = { textToSpeech, getSignedUrl, speechToText, DEFAULT_VOICE_ID };
+module.exports = { textToSpeech, getSignedUrl, speechToText, DEFAULT_VOICE_ID, DEFAULT_TTS_MODEL_ID };

@@ -174,12 +174,48 @@ const BURMESE_SCRIPT_RE = /[က-႟]/;
 // verbose_json reports auto-detection as (e.g. "korean", not "ko").
 const OTHER_SUPPORTED_WHISPER_LANGUAGES = new Set(["english", "korean", "vietnamese"]);
 
+// Whisper's no_speech_prob isn't fully reliable — on real noise-only clips it
+// still sometimes scores a confidently-worded hallucination as "speech"
+// (well-documented Whisper failure mode: it invents a small set of stock
+// filler phrases for silence/background noise instead of returning nothing).
+// A second, cheap net: reject a segment whose *entire* trimmed text is one of
+// these known fillers, in any of the app's supported languages, even if
+// no_speech_prob let it through. Matched on the full segment only (not a
+// substring) so a real sentence that happens to contain "thank you" is never
+// dropped.
+const SILENCE_HALLUCINATION_PHRASES = new Set([
+  "thank you", "thank you.", "thanks for watching", "thanks for watching.",
+  "thank you for watching", "thank you for watching.", "please subscribe",
+  "please subscribe.", "bye", "bye.", "bye bye", "bye bye.", "you", "you.",
+  "i'm sorry", "i'm sorry.", "okay", "okay.", "ok", "ok.",
+  "감사합니다", "구독", "구독해주세요", "네", "시청해주셔서 감사합니다",
+  "xin chào", "cảm ơn", "cảm ơn các bạn đã xem",
+]);
+
+// Whisper's training data included audio-event annotations (closed-caption
+// style tags), so on real non-speech audio it sometimes literally transcribes
+// the *label* instead of returning nothing — "[background noise]", "(music)",
+// "[silence]", etc. A segment that, once brackets/parens are stripped, has no
+// letters left (or is one of a few known bare labels) is a tag, not a
+// transcript, regardless of language or no_speech_prob.
+const NON_SPEECH_TAG_RE = /^[\[(][^\])]*[\])]$/;
+const BARE_TAG_WORDS = new Set(["music", "silence", "noise", "background noise", "applause", "laughter", "inaudible"]);
+
+function isNonSpeechTag(text) {
+  if (NON_SPEECH_TAG_RE.test(text)) return true;
+  const stripped = text.replace(/^[\[(]|[\])]$/g, "").trim().toLowerCase();
+  return BARE_TAG_WORDS.has(stripped);
+}
+
 function confidentText(transcription) {
   const segments = Array.isArray(transcription?.segments) ? transcription.segments : [];
   return segments
     .filter(segment => {
       const isSpeech = (segment.no_speech_prob ?? 0) < NO_SPEECH_PROB_THRESHOLD;
-      return isSpeech || BURMESE_SCRIPT_RE.test(segment.text || "");
+      const text = (segment.text || "").trim();
+      if (SILENCE_HALLUCINATION_PHRASES.has(text.toLowerCase())) return false;
+      if (isNonSpeechTag(text)) return false;
+      return isSpeech || BURMESE_SCRIPT_RE.test(text);
     })
     .map(segment => segment.text.trim())
     .join(" ")

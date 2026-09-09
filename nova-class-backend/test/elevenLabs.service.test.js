@@ -33,7 +33,7 @@ test("textToSpeech posts to the default voice with the API key header and return
 
   const audio = await service.textToSpeech("Hello there");
 
-  assert.equal(capturedUrl, "https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM?optimize_streaming_latency=3");
+  assert.equal(capturedUrl, "https://api.elevenlabs.io/v1/text-to-speech/xyE2KXhy5mfTGV7xRXpD?optimize_streaming_latency=3");
   assert.equal(capturedOptions.headers["xi-api-key"], "test-key");
   assert.equal(JSON.parse(capturedOptions.body).text, "Hello there");
   assert.ok(Buffer.isBuffer(audio));
@@ -57,7 +57,7 @@ test("textToSpeech uses ELEVENLABS_VOICE_ID when set, overridable per call", asy
   assert.match(capturedUrl, /\/explicit-voice-id\?optimize_streaming_latency=3$/);
 });
 
-test("textToSpeech defaults to ElevenLabs Flash with latency optimization", async () => {
+test("textToSpeech defaults to ElevenLabs Turbo with latency optimization", async () => {
   process.env.ELEVENLABS_API_KEY = "test-key";
   delete process.env.ELEVENLABS_TTS_MODEL_ID;
 
@@ -71,12 +71,12 @@ test("textToSpeech defaults to ElevenLabs Flash with latency optimization", asyn
   await service.textToSpeech("Teach me about databases");
 
   assert.match(capturedUrl, /optimize_streaming_latency=3/);
-  assert.equal(JSON.parse(capturedOptions.body).model_id, "eleven_flash_v2_5");
+  assert.equal(JSON.parse(capturedOptions.body).model_id, "eleven_turbo_v2_5");
 });
 
 test("textToSpeech honors ELEVENLABS_TTS_MODEL_ID for quality-first playback", async () => {
   process.env.ELEVENLABS_API_KEY = "test-key";
-  process.env.ELEVENLABS_TTS_MODEL_ID = "eleven_turbo_v2_5";
+  process.env.ELEVENLABS_TTS_MODEL_ID = "eleven_multilingual_v2";
 
   let capturedOptions;
   global.fetch = async (_url, options) => {
@@ -86,7 +86,7 @@ test("textToSpeech honors ELEVENLABS_TTS_MODEL_ID for quality-first playback", a
 
   await service.textToSpeech("Teach me about databases");
 
-  assert.equal(JSON.parse(capturedOptions.body).model_id, "eleven_turbo_v2_5");
+  assert.equal(JSON.parse(capturedOptions.body).model_id, "eleven_multilingual_v2");
 });
 
 test("textToSpeech throws a coded error without calling fetch when unconfigured", async () => {

@@ -1147,6 +1147,14 @@ export default function ClassDetail() {
         const { data: matData } = await API.post(`/classroom/classes/${id}/materials`, fd, {
           headers: { "Content-Type": "multipart/form-data" },
         });
+        // Upload itself succeeded, but text extraction may not have (a
+        // scanned/image-only PDF, or a non-PDF file) — the teacher needs to
+        // know now, not discover it later when AI Study Mentor or Voice
+        // Teaching quietly has nothing real to work from and starts guessing
+        // from just the title.
+        if (matData.warning) {
+          alert(`⚠️ ${matData.warning}\n\nAI Study Mentor and Voice Teaching need readable text from the file to work correctly for this lesson.`);
+        }
         // Optionally create a linked assignment in the same action
         if (linkedAssign && linkedAssign.title.trim()) {
           const afd = new FormData();

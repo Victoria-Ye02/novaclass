@@ -1129,10 +1129,49 @@ exports.materialAI = async (req, res) => {
 
 Exception: if the student explicitly asks you to switch languages ("can we talk in Burmese?", "explain that in Vietnamese", "answer in Korean from now on") — even though that request itself is written in whatever language they typed it in — comply immediately and reply in the language they asked for, not the language their request happened to be written in. Keep replying in that requested language for the rest of the conversation unless they ask to switch again or clearly go back to typing/speaking in a different one.`;
 
-      const teacherLanguageNames = { my: "Burmese (Myanmar language)", ko: "Korean", vi: "Vietnamese", en: "English" };
-      const teacherLanguage = teacherLanguageNames[lang] || "English";
+      // Teacher mode used to just teach in the Settings display language for
+      // the whole lesson. Now: the lesson *opens* in Korean — like a
+      // professor beginning class in the language of instruction — and once
+      // the student actually says something of their own (not one of the
+      // fixed lesson-control prompts below, which are UI-triggered, not
+      // student speech), Nova detects that message's language and follows it
+      // from then on, the same dynamic detection assistant mode already does.
+      // Which past messages are the student's own words vs. a UI-triggered
+      // lesson-control prompt ("Start this lesson...", "Continue the
+      // lesson...", etc. — see continueLesson/simplifyLesson/
+      // checkUnderstanding/continueLessonAloud on the frontend) is known for
+      // certain server-side (teachingIntent "answer" = genuine; the frontend
+      // always sets one of the other fixed intents for its own triggers) —
+      // far more reliable than asking the model to pattern-match message text
+      // against a list itself. Live-tested: when the model had to find and
+      // judge this on its own, it caught an obviously different script
+      // (Burmese) but kept answering in Korean after a student switched to
+      // English or Vietnamese. Isolating the *exact* most recent genuine
+      // student text and asking the model only to detect that one string's
+      // language fixed it — a single clean detection task instead of a
+      // search-and-judge one, and it naturally persists turn to turn since
+      // the same most-recent genuine message keeps winning until a newer one
+      // replaces it.
+      const FIXED_LESSON_CONTROL_PROMPTS = new Set([
+        "Start this lesson as my professor.",
+        "Resume this lesson from where we stopped.",
+        "Continue the lesson with the next important concept.",
+        "Please explain the current concept more simply.",
+        "Check my understanding with one question.",
+      ]);
+      const genuineStudentMessages = (history || [])
+        .filter(h => h.role === "user" && !FIXED_LESSON_CONTROL_PROMPTS.has((h.content || "").trim()))
+        .map(h => h.content);
+      if (teachingIntent === "answer" && message && !FIXED_LESSON_CONTROL_PROMPTS.has(message.trim())) {
+        genuineStudentMessages.push(message);
+      }
+      const latestGenuineStudentMessage = genuineStudentMessages[genuineStudentMessages.length - 1] || null;
+
+      const teacherLanguageInstruction = latestGenuineStudentMessage
+        ? `The most recent thing the student said in their own words, verbatim, was: "${latestGenuineStudentMessage.replace(/"/g, '\\"')}" — detect what language that exact text is written in, and reply in that same language for this turn, regardless of what language anything else in this conversation (your own past replies, the document, earlier turns) is in. Keep technical/domain terms in their original language (English/Korean) when there's no natural equivalent, but the surrounding explanation must follow this rule.`
+        : `Teach in Korean (한국어), the way a professor opens a lecture in the language of instruction — the student hasn't written anything in their own words yet.`;
       const langInstruction = isTeacherMode
-        ? `Teach in ${teacherLanguage}, the student's selected learning language. Keep technical terms from the material where useful, but make every explanation, example, and question understandable in ${teacherLanguage}.`
+        ? teacherLanguageInstruction
         : assistantLanguageInstruction;
 
       const pageContext = currentPage && totalPages
@@ -1177,7 +1216,16 @@ Exception: if the student explicitly asks you to switch languages ("can we talk 
         ? `Only ${extractedLength} characters of text could be extracted from this ${totalPages}-page document in total — most pages, likely including the current one, are image-based slides with no extractable text. You do NOT have reliable access to specific page content. If asked about "this page" or details you cannot verify in the Material content below, honestly say you can't read that page's content because it appears to be an image-based slide, instead of guessing or inventing details.`
         : "";
 
-      const sparseWarning = pageSpecificWarning || documentWideSparseWarning;
+      // Nothing extracted at all (not even a sparse amount) — the title is
+      // all that's left, and teaching confidently from a title alone is
+      // exactly how a Korean-vocabulary lesson once got taught as a JDBC
+      // course. Overrides the page-level warnings below: there's no document
+      // to be sparse or full about, only a title.
+      const noContentWarning = !fullText?.trim()
+        ? `CRITICAL: no readable text could be extracted from this lesson's file at all (the "Material content" section below is empty) — you only have the title "${mat.title}" and possibly teacher instructions, nothing else. Do NOT invent, assume, or teach any specific facts, terms, or examples based on what the title sounds like it might be about. Instead, tell the student honestly (in the detected/target language) that this lesson's file isn't readable yet and they should let their teacher know, and do not proceed with teaching until real content is available.`
+        : "";
+
+      const sparseWarning = noContentWarning || pageSpecificWarning || documentWideSparseWarning;
 
       const scopeInstruction = `You only discuss this lesson's material. If the student asks something unrelated to this document (general chit-chat, other subjects, unrelated topics), politely say (in the detected language, not literally translated from this English sentence) that you can only help with this lesson's content and ask what they'd like to know about it — do not answer the unrelated question. A request about *how you talk to them* — asking you to reply in a different language, to explain something in their language, to speak more simply, etc. — is not an unrelated topic and must never trigger that refusal; just comply and keep discussing the lesson in the language they asked for.`;
 
@@ -1192,19 +1240,34 @@ Exception: if the student explicitly asks you to switch languages ("can we talk 
       // A warm tutor persona rather than a flat "assistant" — explains instead
       // of reciting, encourages, checks understanding, and offers practice.
       // The voice/scope/honesty rules below still bound how it behaves.
+      // Speaking register matters as much as wording, especially in Korean:
+      // the model's default is a stiff, ceremonious formal register (합쇼체 —
+      // "-습니다"/"-십니까") that reads as a customer-service script, not a
+      // real teacher talking to their own students. A slightly closer, warm
+      // 해요체 register (still respectful, not banmal/casual speech to a
+      // stranger) sounds like an actual person. This applies in whichever
+      // language the reply ends up in, not just Korean — the same "stop
+      // sounding like a formal announcement" note holds in English, Burmese,
+      // or Vietnamese too.
+      const naturalToneInstruction = `Speak like a real teacher actually talks to their own students face to face, not like a formal announcement or a customer-service script. In Korean specifically, use warm 해요체 (e.g. "-예요"/"-해요"/"-볼까요") rather than the stiffer 합쇼체 ("-습니다"/"-십니까") — respectful, but the way a approachable professor actually talks in class, not a ceremony. Use natural fillers and rhythm a person would actually use ("음", "자", "그럼") instead of every sentence being a complete, polished statement. Skip stock throat-clearing openers like "훌륭한 지적이에요!" before every single reply — vary how you react, and sometimes just get straight to the point the way a person would.`;
+
       const tutorPersona = isTeacherMode
-        ? `You are Professor Nova, an expert, warm, and patient teacher leading this exact lesson. You do not wait passively for questions and you never sound like a generic chatbot. Teach with confident professor energy: make the concept clear, connect it to an example, then check understanding. Be encouraging but never childish or condescending. Stay grounded in the material and make uncertainty explicit rather than inventing facts.`
-        : `You are Nova, a warm and patient study tutor for this lesson's material. Be encouraging and never condescending — normalize confusion ("that part trips a lot of people up", not "that's easy"). Don't just repeat the material back: explain it, and reach for a short, concrete example or analogy when the student seems stuck on something. After explaining anything non-trivial, check in with a brief question ("does that make sense so far?") instead of lecturing on and on. If the student seems to want practice, offer one quick question drawn from this lesson and give warm, specific feedback on their answer — encouraging if they're wrong, brief praise if right, and always explain the correct answer either way.`;
+        ? `You are Professor Nova, an expert, warm, and patient teacher leading this exact lesson — never break character into a generic passive Q&A assistant, no matter what the student says or asks. You do not wait passively for questions. Teach with confident professor energy: make the concept clear, connect it to an example, then check understanding. Be encouraging but never childish or condescending. Stay grounded in the material and make uncertainty explicit rather than inventing facts. If the student says something vague like "I don't know" / "몰라요" / not sure what confused them — do NOT just ask them to specify which part was hard (that hands control back to a confused student instead of leading). Instead, take the initiative yourself: pick the most likely sticking point in what you just explained, re-explain that specific piece a different way (a simpler analogy or a concrete example), THEN ask a small check-understanding question — the way an actual professor would, not a support-ticket bot waiting for more detail. ${naturalToneInstruction}`
+        : `You are Nova, a warm and patient study tutor for this lesson's material. Be encouraging and never condescending — normalize confusion ("that part trips a lot of people up", not "that's easy"). Don't just repeat the material back: explain it, and reach for a short, concrete example or analogy when the student seems stuck on something. After explaining anything non-trivial, check in with a brief question ("does that make sense so far?") instead of lecturing on and on. If the student seems to want practice, offer one quick question drawn from this lesson and give warm, specific feedback on their answer — encouraging if they're wrong, brief praise if right, and always explain the correct answer either way. ${naturalToneInstruction}`;
 
       const teachingInstruction = !isTeacherMode ? "" : {
         start: `Teaching intent: START. Open the lesson proactively. Give a one-sentence learning goal, explain one key concept from the current page in a short paragraph, give one concrete example or analogy, then ask exactly one brief check-understanding question. Do not ask what the student wants to do.`,
         continue: `Teaching intent: CONTINUE. Continue the lesson from the last concept or current page. Introduce one next logical concept, explain why it matters, give a concrete example, then ask exactly one brief check-understanding question.`,
         simplify: `Teaching intent: SIMPLIFY. Re-explain the current concept with simpler words and one different everyday analogy. Do not introduce a new topic. End with one brief check-understanding question.`,
         check: `Teaching intent: CHECK. Ask exactly one short question that tests the concept currently being taught. Do not answer the question yet and do not introduce a new concept.`,
-        answer: `Teaching intent: ANSWER. Treat the student's latest message as a response or question inside the active lesson. First give supportive feedback. If there is a misunderstanding, correct the misunderstanding clearly and explain why; if it is correct, reinforce the precise idea. Then choose one next teaching step: either a short follow-up explanation or one brief question.`,
+        answer: `Teaching intent: ANSWER. Treat the student's latest message as a response or question inside the active lesson. Write this entire reply in the language identified by the REPLY LANGUAGE instruction — not the material's own language — even though you are drawing on and reinforcing an idea from the (Korean-language) material. First give supportive feedback. If there is a misunderstanding, correct the misunderstanding clearly and explain why; if it is correct, reinforce the precise idea. Then choose one next teaching step: either a short follow-up explanation or one brief question.`,
       }[teachingIntent];
 
-      const systemContent = `${tutorPersona} ${langInstruction} ${scopeInstruction} ${voiceInstruction}
+      const systemContent = `### REPLY LANGUAGE (highest priority — follow this over everything below, including the language of the material content)
+${langInstruction}
+### END REPLY LANGUAGE
+
+${tutorPersona} ${scopeInstruction} ${voiceInstruction}
 ${teachingInstruction}
 ${pageContext}${currentPageBlock}
 
@@ -1213,7 +1276,10 @@ ${context}
 
 ${sparseWarning}
 
-Answer the student's question directly and naturally. When asked about the current page, prioritize the "Current page" content above — it's the exact text of that page. Only state facts that are actually supported by the content above — never invent page numbers, headings, or details you cannot verify.`;
+Answer the student's question directly and naturally. When asked about the current page, prioritize the "Current page" content above — it's the exact text of that page. Only state facts that are actually supported by the content above — never invent page numbers, headings, or details you cannot verify.
+
+### REPLY LANGUAGE REMINDER (this is your last instruction before you write the reply — it overrides everything above, including the Korean material content)
+${langInstruction}`;
 
       const msgs = [
         { role: "system", content: systemContent },
@@ -1226,7 +1292,47 @@ Answer the student's question directly and naturally. When asked about the curre
       // off mid-word rather than actually finishing. 300 covers that same
       // short reply comfortably in every supported language.
       const completion = await completeText({ messages: msgs, maxTokens: voice ? 300 : 600 });
-      const reply = completion.choices[0].message.content;
+      let reply = completion.choices[0].message.content;
+
+      // Live-tested: even given the exact same forceful, isolated language
+      // instruction above, this model (google/gemini-2.5-flash) sometimes
+      // stays in Korean after a genuine student switch anyway — same prompt,
+      // same input, inconsistent result from one call to the next. Not fixable
+      // by rewording the instruction (tried several variants; all showed the
+      // same intermittent failure). So: verify deterministically instead of
+      // trusting the model followed the rule. Target language is decided from
+      // the student's own message script — not asked of the model — and if
+      // the reply still came back full of Hangul when it shouldn't have, one
+      // fast dedicated translation call (a much simpler task than "notice and
+      // switch mid-lecture") corrects it before the student ever sees/hears it.
+      // Not gated to teachingIntent "answer" specifically — once the student
+      // has genuinely spoken in some language, every later turn (including a
+      // proactive "continue"/"simplify"/"check" the student didn't ask for)
+      // must keep following it, or the lesson reverts to Korean the instant
+      // the student goes quiet for a moment, which would feel broken.
+      if (isTeacherMode && latestGenuineStudentMessage) {
+        const HANGUL_RE = /[가-힣]/g;
+        const targetLang = BURMESE_SCRIPT_RE.test(latestGenuineStudentMessage) ? "my"
+          : HANGUL_RE.test(latestGenuineStudentMessage) ? "ko"
+          : /[àáạảãăằắặẳẵâầấậẩẫèéẹẻẽêềếệểễìíịỉĩòóọỏõôồốộổỗơờớợởỡùúụủũưừứựửữỳýỵỷỹđ]/i.test(latestGenuineStudentMessage) ? "vi"
+          : "en";
+        const replyHangulCount = (reply.match(HANGUL_RE) || []).length;
+        if (targetLang !== "ko" && replyHangulCount > 10) {
+          try {
+            const fixLangName = { my: "Burmese (Myanmar language)", vi: "Vietnamese", en: "English" }[targetLang];
+            const translation = await completeText({
+              messages: [
+                { role: "system", content: `Translate the following teacher's reply into ${fixLangName}. Keep any technical/domain terms (Java, JDBC, SQL, code snippets, etc.) as-is where a natural equivalent doesn't exist. Return ONLY the translated text, nothing else — no preamble, no quotes around it.` },
+                { role: "user", content: reply },
+              ],
+              maxTokens: voice ? 300 : 600,
+            });
+            reply = translation.choices[0].message.content;
+          } catch (translateErr) {
+            console.warn("[Teacher mode language fix] translation fallback failed:", translateErr.message);
+          }
+        }
+      }
 
       if (chatCacheKey) {
         pool.query(
@@ -1246,9 +1352,13 @@ Answer the student's question directly and naturally. When asked about the curre
 
     if (action === "chat") {
       const { level, lang } = req.body;
-      const isEn = lang === "en";
-
-      const levelGuide = isEn ? {
+      // System prompt is authored in English throughout (it's instructions to
+      // the model, never shown to the student) — only langInstruction decides
+      // what language the actual reply comes back in. This keeps the prompt a
+      // single source of truth across all four app languages instead of a
+      // hand-duplicated template per language (see the same reasoning at the
+      // assistantLanguageInstruction comment above).
+      const levelGuide = {
         beginner: {
           style: `The student is just starting to learn this material. Be patient and encouraging — the goal right now is building confidence, not testing limits.`,
           qStyle: `Ask simple, fundamental questions (e.g. define a term, what is X)`,
@@ -1273,40 +1383,15 @@ Answer the student's question directly and naturally. When asked about the curre
           wrong: `❌ Not quite —`,
           summary: `Excellent! Here's a summary of the topics we explored:`,
         },
-      } : {
-        beginner: {
-          style: `ကျောင်းသားသည် ဤသင်ခန်းစာကို ယခုမှ စတင်သင်ကြားနေသူဖြစ်သည်။ စိတ်ရှည်ပြီး အားပေးဆက်ဆံပါ — အခုအဓိကရည်ရွယ်ချက်က confidence တည်ဆောက်ဖို့ဖြစ်သည်၊ စမ်းသပ်ဖို့မဟုတ်ပါ။`,
-          qStyle: `အလွယ်ဆုံး အခြေခံမေးခွန်းများ မေးပါ (ဥပမာ - အဓိပ္ပာယ်ဖွင့်ဆို၊ ဘာလဲ ဆိုတာမျိုး)`,
-          explain: `မှားရင် ဒဏ်မပေးဘဲ ပြင်ပြောပါ — beginner တွေ ဒီနေရာမှာ ဘယ်လိုမှားတတ်လဲဆိုတာကို အမည်တပ်ပြီး ရှင်းပြပါ၊ နမူနာ ၁-၂ ခု ပေးပါ။`,
-          correct: `✅ မှန်ပါတယ်!`,
-          wrong: `❌ မဟုတ်သေးပါ —`,
-          summary: `ကောင်းပါတယ်! ဒါကို အကျဉ်းချုပ်ပြမည်:`,
-        },
-        intermediate: {
-          style: `ကျောင်းသားသည် အခြေခံသိသော်လည်း အချို့ concept များ မရှင်းသေးပါ။ comfort zone အနည်းငယ် ကျော်ပြီး မေးပါ — target ကတော့ ဒီ gap အတိအကျကို ပိတ်ဖို့ဖြစ်ပါတယ်။`,
-          qStyle: `application-based မေးခွန်းများ မေးပါ (ဘယ်နေရာသုံးသလဲ၊ ဘာကြောင့်သုံးသလဲ မျိုး)`,
-          explain: `မှားရင် ဘာနဲ့ရောထွေးနေလဲဆိုတာ အမည်တပ်ပြီး ခွဲခြားရှင်းပြပါ၊ မှန်ကန်တဲ့အဖြေကိုပဲ ပြောပြီး မရပ်ပါနဲ့။`,
-          correct: `✅ မှန်ပါတယ်!`,
-          wrong: `❌ မဟုတ်သေးပါ —`,
-          summary: `ကောင်းတယ်! ဒါကို အကျဉ်းချုပ်ပြမည်:`,
-        },
-        advanced: {
-          style: `ကျောင်းသားသည် သင်ခန်းစာကို ကောင်းစွာ သိသည်ဟု ယူဆသည်။ peer တစ်ယောက်လို ဆက်ဆံပါ — target ကတော့ edge case နဲ့ exam-trap ပုံစံမေးခွန်းတွေကို စမ်းသပ်ဖို့ဖြစ်ပါတယ်။`,
-          qStyle: `ခက်ခဲသောမေးခွန်းများ မေးပါ (edge case၊ compare/contrast၊ problem-solving၊ "ဘယ်ဟာက မှားလဲ" ပုံစံ trap များ)`,
-          explain: `မှားရင် ဖြေချက်ကိုပဲ မပြင်ဘဲ — ဒီ trap က ဘာကြောင့် စွဲဆောင်နိုင်ခဲ့လဲဆိုတာ ရှင်းပြပြီး၊ deeper explanation နဲ့ ပိုခက်သောအသွင် ဆက်ရှင်းပြပါ။`,
-          correct: `✅ မှန်ပါတယ်!`,
-          wrong: `❌ မဟုတ်သေးပါ —`,
-          summary: `အလွန်ကောင်းတယ်! ဒါကို အကျဉ်းချုပ်ပြမည်:`,
-        },
       };
 
       const lg = levelGuide[level] || levelGuide.intermediate;
-      const langInstruction = isEn
+      const levelUpLangNames = { my: "Burmese (Myanmar language)", ko: "Korean", vi: "Vietnamese", en: "English" };
+      const langInstruction = lang === "en"
         ? `Respond in English only. For technical terms, use English as-is.`
-        : `မြန်မာဘာသာ ဖြင့်သာ ဖြေဆိုပါ။ Technical term များကို English ဖြင့် ထားပါ၊ ရှင်းပြချက်ကို မြန်မာ ဖြင့် ပေးပါ။`;
+        : `Respond only in ${levelUpLangNames[lang] || "English"} — the student reads that language, not English. Technical terms may stay in their original language (English/Korean) when there's no natural equivalent, but every surrounding explanation must be in ${levelUpLangNames[lang] || "English"}.`;
 
-      const systemContent = isEn
-        ? `You are a Level Up AI Study Tutor. ${langInstruction}
+      const systemContent = `You are a Level Up AI Study Tutor. ${langInstruction}
 
 Student profile: ${lg.style}
 
@@ -1321,23 +1406,7 @@ ${context}
 3. After evaluating, immediately ask the next question
 4. After 5 questions, give a summary: "${lg.summary}"
 
-**Important:** Don't wait for the student to ask — take initiative and ask questions yourself.`
-        : `သင်သည် Level Up AI Study Tutor ဖြစ်သည်။ ${langInstruction}
-
-ကျောင်းသား profile: ${lg.style}
-
-သင်ခန်းစာ အကြောင်းအရာ:
-${context}
-
-**လုပ်ဆောင်ပုံ (ဤ format ကို တိတိကျကျ လိုက်နာပါ):**
-1. မေးခွန်းတစ်ခု မေးပါ — ${lg.qStyle}
-2. ကျောင်းသားဖြေသောအခါ:
-   - မှန်ရင်: "${lg.correct}" ပြောပြီး ၁-၂ ကြောင်း ဖြည့်ပေးပါ
-   - မှားရင်: "${lg.wrong}" ${lg.explain}
-3. ဖြေဆိုချက်ကို အကဲဖြတ်ပြီးနောက် နောက်မေးခွန်း ချက်ချင်း မေးပါ
-4. မေးခွန်း ၅ ခုပြီးရင် "${lg.summary}" ဆိုပြီး အကျဉ်းချုပ်ပေးပါ
-
-**အရေးကြီး:** ကျောင်းသား မမေးမီ AI ကိုယ်တိုင် initiative ယူပြီး မေးပါ။`;
+**Important:** Don't wait for the student to ask — take initiative and ask questions yourself.`;
 
       const msgs = [
         { role: "system", content: systemContent },
@@ -1359,6 +1428,28 @@ ${context}
     const materialAiLangInstruction = materialAiLang === "en"
       ? `Write every explanation, example, and description in English.`
       : `Write every explanation, example, and description in ${MATERIAL_AI_LANG_NAMES[materialAiLang]} — the student reads ${MATERIAL_AI_LANG_NAMES[materialAiLang]}, not the material's own language. A technical term itself may stay in its original language (Korean/English) when there's no natural equivalent, but the surrounding explanation must be ${MATERIAL_AI_LANG_NAMES[materialAiLang]}.`;
+
+    // No RAG chunks, no extracted text, no prior summary — the model has
+    // nothing but a title and would otherwise confidently invent content for
+    // it (the exact failure mode that made a Korean-vocabulary lesson quiz
+    // students on JDBC, because that's what its title happened to suggest).
+    // Say so honestly instead of generating anything, and don't cache this —
+    // a later fix to the file's extraction should be picked up immediately,
+    // not stuck behind a stale "no content" cache entry.
+    if (["summary", "quiz", "highlights"].includes(action) && !fullText?.trim()) {
+      const noContentMessage = {
+        en: "This lesson's file couldn't be read yet (it may be a scanned/image-only PDF, or extraction failed). Ask your teacher to check the upload — AI tools need readable text to work on this material.",
+        my: "ဒီသင်ခန်းစာရဲ့ file ကို မဖတ်နိုင်သေးပါ (scanned PDF ဖြစ်နေနိုင်သည် သို့မဟုတ် extraction မအောင်မြင်ပါ)။ ဆရာ/ဆရာမကို upload ပြန်စစ်ပေးဖို့ ပြောပါ — AI tool များ အလုပ်လုပ်ရန် ဖတ်နိုင်သော text လိုအပ်ပါသည်။",
+        ko: "이 수업 자료의 파일을 아직 읽을 수 없습니다 (스캔된 이미지 PDF이거나 텍스트 추출에 실패했을 수 있습니다). 선생님께 업로드를 확인해 달라고 요청하세요 — AI 도구가 작동하려면 읽을 수 있는 텍스트가 필요합니다.",
+        vi: "Không thể đọc tệp của bài học này (có thể là PDF dạng ảnh quét, hoặc trích xuất văn bản đã thất bại). Hãy nhờ giáo viên kiểm tra lại tệp đã tải lên — các công cụ AI cần văn bản có thể đọc được để hoạt động.",
+      }[materialAiLang] || "This lesson's file couldn't be read yet.";
+      const fallback = action === "summary"
+        ? [{ label: "Core concept", detail: noContentMessage }]
+        : action === "highlights"
+        ? [{ term: "—", category: "concept", explanation: noContentMessage, example: "" }]
+        : [{ question: noContentMessage, options: ["A. —", "B. —", "C. —", "D. —"], answer: "A", explanation: noContentMessage, difficulty: "easy" }];
+      return res.json({ data: fallback, noContent: true });
+    }
 
     let systemPrompt = "";
     let userPrompt = "";

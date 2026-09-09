@@ -1,10 +1,20 @@
 const ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1";
-// "Rachel" — ElevenLabs' original default premade voice, stable across accounts.
-const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
-// Flash prioritizes time-to-first-audio, which is the right default for a live
-// teaching conversation. A demo can still select a quality-first model (such
-// as eleven_multilingual_v2) with ELEVENLABS_TTS_MODEL_ID.
-const DEFAULT_TTS_MODEL_ID = "eleven_flash_v2_5";
+// "Sara Kim — Warm Korean Narrator" from ElevenLabs' shared voice library — a
+// real native Korean voice (not an English voice speaking Korean as a second
+// language), picked after comparing several candidates for Nova Teacher's
+// persona. Confirmed working directly by voice_id (no separate "add to
+// library" step needed). Falls back to "Rachel" (the old default, an English
+// premade voice) only if this ID is ever removed from the library.
+const DEFAULT_VOICE_ID = "xyE2KXhy5mfTGV7xRXpD";
+const FALLBACK_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
+// eleven_turbo_v2_5 over Flash: Flash prioritizes time-to-first-audio at the
+// cost of sounding noticeably flatter/more robotic, which matters a lot for a
+// teaching voice. Turbo sounds close to the quality-first eleven_multilingual_v2
+// but live-measured ~2x faster than Flash for this app's typical reply length
+// (Flash 5.3s vs Turbo 0.5s vs multilingual_v2 1.2s on the same Korean
+// sentence, same voice/settings) — no real speed/quality trade-off to make
+// here. Override with ELEVENLABS_TTS_MODEL_ID if that ever needs to change.
+const DEFAULT_TTS_MODEL_ID = "eleven_turbo_v2_5";
 
 function assertConfigured() {
   if (process.env.ELEVENLABS_API_KEY) return;
@@ -27,7 +37,12 @@ async function textToSpeech(text, voiceId) {
     body: JSON.stringify({
       text,
       model_id: modelId,
-      voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+      // Lower stability than the 0.5 default trades a little consistency for
+      // more natural pitch/pace variation — 0.5+ reads as flat/robotic,
+      // especially for a voice speaking a language it wasn't recorded in.
+      // A touch of style plus speaker_boost pushes expressiveness back
+      // toward how the source voice actually sounds, rather than an average.
+      voice_settings: { stability: 0.35, similarity_boost: 0.8, style: 0.35, use_speaker_boost: true },
     }),
     signal: AbortSignal.timeout(20000),
   });

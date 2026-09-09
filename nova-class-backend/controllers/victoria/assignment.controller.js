@@ -313,17 +313,19 @@ exports.aiCheck = async (req, res) => {
     if (access.error) return res.status(access.status).json({ error: access.error });
 
     const { answer, hasFile, fileName, lang } = req.body;
-    const isEn = lang === "en";
+    const aiCheckLangNames = { my: "Burmese (Myanmar language)", ko: "Korean", vi: "Vietnamese", en: "English" };
+    const feedbackLang = aiCheckLangNames[lang] || "English";
 
-    const submissionDesc = isEn ? [
+    const submissionDesc = [
       answer?.trim() ? `Written answer: "${answer.trim()}"` : "Written answer: none",
       hasFile ? `Attached file: ${fileName || "a file"}` : "File: not attached",
-    ].join("\n") : [
-      answer?.trim() ? `စာဖြင့်ဖြေဆိုချက်: "${answer.trim()}"` : "စာဖြင့်ဖြေဆိုချက်: မရှိ",
-      hasFile ? `တင်သွင်းထားသောဖိုင်: ${fileName || "ဖိုင်တစ်ခု"}` : "ဖိုင်: မပူး",
     ].join("\n");
 
-    const prompt = isEn ? `You are a homework checker AI. Check whether the student's submission meets the teacher's requirements.
+    // Prompt itself is authored in English (instructions to the model, never
+    // shown to the student) — only the "feedback" field's language depends on
+    // the student's app language, matching the pattern used across the rest
+    // of the AI-facing prompts in classroom.controller.js.
+    const prompt = `You are a homework checker AI. Check whether the student's submission meets the teacher's requirements.
 
 Assignment: ${assignment.title}
 Teacher instructions: ${assignment.instructions || "No specific instructions provided"}
@@ -336,26 +338,14 @@ Check:
 2. If a written answer is required, check if it is relevant
 3. Identify any missing parts
 
+Write the "missing" items and "feedback" in ${feedbackLang} — the student reads ${feedbackLang}, not necessarily English.
+
 Respond with JSON only:
 {
   "isComplete": true or false,
   "score": 0 to 100,
   "missing": ["item 1", "item 2"],
   "feedback": "2-3 sentences about what is good, what is missing, and what to improve"
-}` : `သင်သည် ကျောင်းစနစ်တစ်ခုအတွက် အိမ်စာစစ်ဆေးသူ AI ဖြစ်သည်။
-
-အိမ်စာ: ${assignment.title}
-ဆရာမ၏ လမ်းညွှန်ချက်: ${assignment.instructions || "သီးခြားလမ်းညွှန်ချက် မပေးထားပါ"}
-
-ကျောင်းသား၏ တင်သွင်းမှု:
-${submissionDesc}
-
-JSON format ဖြင့်သာ ဖြေဆိုပါ:
-{
-  "isComplete": true,
-  "score": 80,
-  "missing": ["missing item"],
-  "feedback": "feedback in Burmese here"
 }`;
 
     const completion = await completeText({

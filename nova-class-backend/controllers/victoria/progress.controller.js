@@ -69,6 +69,8 @@ async function createTodayPlans(studentCandidates, teacherCandidates, language =
   try {
     const languageInstruction =
       language === "my" ? "Rewrite in Burmese (မြန်မာ)." :
+      language === "ko" ? "Rewrite in Korean (한국어)." :
+      language === "vi" ? "Rewrite in Vietnamese (Tiếng Việt)." :
       language === "en" ? "Rewrite in English." :
       "Rewrite in the user's language.";
 

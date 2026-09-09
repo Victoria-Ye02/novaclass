@@ -1,24 +1,29 @@
 const pool = require("../../config/db");
 const { completeText } = require("../../services/ai/groqText");
 
+const KMATE_AI_URL = process.env.KMATE_AI_URL || "http://localhost:8082";
+
 // POST /api/kmate/ask  { question }
+// Proxies to nova-class-ai (Thine's Python FastAPI service: Gemini + ChromaDB
+// RAG over the official TOPIK II exam papers) instead of the plain Groq
+// completion this used to call directly — the RAG service grounds answers in
+// the actual exam material instead of the model's own unaided knowledge.
 exports.ask = async (req, res) => {
   const { question } = req.body;
   if (!question) return res.status(400).json({ error: "question is required" });
 
   try {
-    const completion = await completeText({
-      maxTokens: 1024,
-      messages: [
-        { role: "system", content: `You are K.MATE, an expert Korean language tutor specializing in TOPIK (Test of Proficiency in Korean).
-Help students understand Korean grammar, vocabulary, reading, and writing.
-Give clear explanations with examples. Support Korean, English, and Burmese explanations.
-When explaining grammar, use the format: pattern → meaning → example.` },
-        { role: "user", content: question },
-      ],
+    const upstream = await fetch(`${KMATE_AI_URL}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+      signal: AbortSignal.timeout(30000),
     });
-
-    const answer = completion.choices[0].message.content;
+    if (!upstream.ok) {
+      const detail = await upstream.text().catch(() => "");
+      throw new Error(`K.MATE AI service request failed: ${upstream.status} ${detail}`.slice(0, 300));
+    }
+    const { answer } = await upstream.json();
 
     // Save to history
     await pool.query(
@@ -28,7 +33,7 @@ When explaining grammar, use the format: pattern → meaning → example.` },
 
     res.json({ answer });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(502).json({ error: err.message });
   }
 };
 
